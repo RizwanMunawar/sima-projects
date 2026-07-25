@@ -216,3 +216,22 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ── SiMa Neat SDK project ─────────────────────────────────────────────────────
+# sima-cli virtual environment (recreate with: python3 -m venv sima)
+sima/
+
+# Local-only working data, never committed
+backup/
+videos/
+
+# Model archives and media are large binaries, fetch them with sima-cli instead
+*.tar.gz
+*.mp4
+*.mkv
+*.avi
+assets/models/
+assets/video/
+
+# Application output
+sandbox/

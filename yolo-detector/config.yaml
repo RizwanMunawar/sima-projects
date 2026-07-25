@@ -1,0 +1,157 @@
+# SiMa Neat YOLO object detector — 2.1.2_Palette_SDK
+#
+# Every key below maps to a concrete pyneat option. See README.md for the
+# header/source that each block is derived from.
+
+model:
+  # Path to the compiled model archive (MPK .tar.gz) on the DevKit.
+  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
+  labels: src/coco_labels.txt
+
+  # Detection head family -> pyneat.BoxDecodeType. Supported tokens:
+  #   yolo, yolov5, yolov6, yolov7, yolov8, yolov9, yolov10, yolo11, yolo26, yolox
+  #   yolov5-seg, yolov7-seg, yolov8-seg, yolov9-seg, yolov10-seg, yolo26-seg
+  #   yolov8-pose, yolo26-pose
+  #
+  # NOTE: YOLO11 has no BoxDecodeType of its own. Ultralytics YOLO11 exports the
+  # same decoupled DFL detect head as YOLOv8, so `yolo11` maps to BoxDecodeType.YoloV8.
+  family: yolo26
+
+  # Advanced: head packing override. Leave `auto` for SiMa-compiled model packs.
+  # One of: auto, packed_per_head, interleaved_by_head, grouped_by_role,
+  #         split3_interleaved, split3_grouped, interleaved_by_head_probability,
+  #         interleaved_by_head_logit, grouped_by_role_probability, grouped_by_role_logit
+  decode_type_option: auto
+
+  # Only set for detection packs whose class-head depth cannot be inferred
+  # (e.g. single-class YOLO split heads). 0 = use the model archive metadata.
+  num_classes: 0
+
+source:
+  # video | rtsp | usb
+  type: video
+
+  # type: video  -> filesystem path to an H.264 .mp4/.mkv
+  # type: rtsp   -> rtsp://<ip>:<port>/<stream>
+  # type: usb    -> camera device/name, or "" to use the DevKit default
+  # Path AS SEEN ON THE DEVKIT, relative to where you launch main.py (~/yolo-detector).
+  # Windows paths (C:\... or D:\...) do NOT work — the app runs on Linux.
+  uri: assets/video/video-4.mp4
+
+  # 0 = probe from the stream. Required (>0) for MJPEG RTSP.
+  fps: 0
+  # Explicit stream geometry. 0 = probe.
+  width: 0
+  height: 0
+
+  rtsp:
+    codec: h264        # h264 | mjpeg
+    tcp: true          # TCP transport for RTSP
+    latency_ms: 100    # jitter-buffer latency
+
+  usb:
+    # Leave empty for the platform default camera.
+    camera_name: ""
+    format: NV12
+
+# ---------------------------------------------------------------------------
+# PRE-PROCESSING — pyneat.ModelOptions.preprocess (PreprocessOptions)
+#
+# This is the "intent" layer. The route planner resolves it against the model
+# archive's MPK contract to produce the actual compiled Preproc graph.
+# `auto` on any tri-state knob means "planner decides".
+# ---------------------------------------------------------------------------
+preprocess:
+  # image  -> decoded pixels (what every source below produces)
+  # tensor -> already-shaped tensor, preprocess is a pass-through
+  # auto   -> infer from caps
+  kind: image
+
+  # Master switch: on | off | auto
+  enable: on
+
+  # Source pixel format handed to Preproc.
+  #   video/rtsp-h264 -> NV12  (hardware decoder output)
+  #   usb camera      -> NV12  (or whatever source.usb.format produces)
+  #   cv2.imread      -> BGR
+  # auto lets the planner read it from caps.
+  input_format: NV12
+
+  # Model input colour space. auto = take it from the model contract.
+  # YOLO packs are normally RGB.
+  output_format: auto
+
+  # Input capacity for the Preproc node. 0 = default 1920x1080.
+  # Set these to the real stream size so buffers are sized correctly.
+  input_max_width: 0     # 0 -> filled in from the probed source width
+  input_max_height: 0    # 0 -> filled in from the probed source height
+
+  resize:
+    enable: on
+    # 0 = infer the target from the model input contract (640x640 for most YOLO).
+    width: 0
+    height: 0
+    # stretch   -> anisotropic scale, aspect ratio NOT preserved
+    # letterbox -> preserve aspect, pad the remainder with pad_value  <-- YOLO default
+    # crop      -> center-crop after isotropic scale
+    mode: letterbox
+    pad_value: 114
+    # BILINEAR | NEAREST_NEIGHBOUR | BICUBIC | INTERAREA | NO_SCALING
+    scaling_type: BILINEAR
+
+  normalize:
+    enable: on
+    # none | imagenet | coco_yolo
+    #   coco_yolo -> YOLO-family COCO stats (use this for every YOLO detector)
+    #   none      -> use the explicit mean/stddev below
+    preset: coco_yolo
+    # Only read when preset is `none`. Must match the model's training preprocessing.
+    mean: [0.0, 0.0, 0.0]
+    stddev: [1.0, 1.0, 1.0]
+
+  # Leave both on `auto` unless you are overriding the model's calibration.
+  # The planner picks the Preproc/Quant/Tess/QuantTess graph family from the
+  # model pack's dtype contract — a `-mla_tess-` pack already implies tessellation.
+  quantize:
+    enable: auto
+    zero_point: 0
+    scale: 0.0          # 0.0 = use the model's calibration
+  tessellate:
+    enable: auto
+    slice_shape: []     # empty = use the contract geometry
+
+decode:
+  score_threshold: 0.30   # 0.0 keeps the model archive's packaged threshold
+  nms_iou: 0.60           # 0.0 keeps the packaged NMS IoU
+  max_detections: 50      # 0 keeps the packaged top-K
+
+runtime:
+  frames: 0               # 0 = run until interrupted
+  pull_timeout_ms: 20000
+  queue_depth: 3
+  # realtime | balanced | throughput
+  preset: realtime
+  # keep_latest | block
+  overflow_policy: keep_latest
+  profile: false
+  profile_interval: 100
+
+output:
+  # --- Annotated frames to disk ---
+  save:
+    enable: true
+    dir: sandbox/yolo-detector
+    every: 10             # write every Nth published frame; 0 disables
+    overlay: true         # draw boxes + labels before writing
+    format: jpg           # jpg | png
+
+  # --- Neat Insight (H.264 RTP/UDP video + JSON metadata over UDP) ---
+  insight:
+    enable: true
+    # Address of the Insight receiver AS THE DEVKIT SEES IT.
+    # 127.0.0.1 means "the DevKit itself" — the stream would go nowhere.
+    host: 192.168.137.1
+    channel: 0            # video port = video_port_base + channel
+    video_port_base: 9000
+    metadata_port_base: 9100
+    bitrate_kbps: 2000
