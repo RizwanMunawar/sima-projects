@@ -50,7 +50,7 @@ git clone https://github.com/RizwanMunawar/sima-projects.git
 cd sima-projects
 ```
 
-Already have a DevKit set up? Jump to [Deploy and run](#9️⃣-deploy-and-run). Starting
+Already have a DevKit set up? Jump to [Deploy and run](#step-9). Starting
 from a bare machine? Work through the steps in order.
 
 > [!TIP]
@@ -60,28 +60,79 @@ from a bare machine? Work through the steps in order.
 
 ---
 
-## 🚀 Setup
+## 🚀 Complete workflow
 
-```mermaid
-flowchart LR
-    A["1️⃣ Cable up"] --> B["2️⃣ WSL2"]
-    B --> C["3️⃣ Networking"]
-    C --> D["4️⃣ Firewall"]
-    D --> E["5️⃣ sima-cli"]
-    E --> F["6️⃣ Docker"]
-    F --> G["7️⃣ Neat SDK"]
-    G --> H["8️⃣ Model"]
-    H --> I["9️⃣ Run"]
+Who does what, and in which order. **Click any step to jump to it.**
 
-    style C fill:#E63946,stroke:#A4161A,color:#fff
-    style D fill:#E63946,stroke:#A4161A,color:#fff
-    style I fill:#2A9D8F,stroke:#1B6E63,color:#fff
+```
+      🪟 WINDOWS PC              🐧 WSL2 · UBUNTU            🔴 MODALIX DEVKIT
+   ═══════════════════        ═══════════════════════      ═══════════════════
+
+   ┌───────────────────────────── ONE-TIME SETUP ─────────────────────────────┐
+
+    ① cable up  ═══════════════════════════════════════════►  DHCP → .123
+         USB + Ethernet                                        board powers on
+
+    ② wsl --install ──────────►  Ubuntu ready
+
+    ③ .wslconfig  ────────────►  WSL takes .137.1  ◄════════►  now reachable
+         mirrored networking        same subnet                 both directions
+
+    ④ firewall rules ─────────►  UDP 9000/9100 open
+         Hyper-V inbound            ready to receive
+
+                                 ⑤ git clone + sima-cli
+                                      repo + venv
+
+                                 ⑥ docker + nfs
+                                      SDK needs a container
+
+                                 ⑦ sima-cli sdk setup ═════►  pyneat + runtime
+                                      12.6 GB image             installed on board
+
+                                 ⑧ download model
+                                      yolo26m .tar.gz
+
+   └──────────────────────────────────────────────────────────────────────────┘
+
+   ┌────────────────────────── EVERY RUN, REPEAT ─────────────────────────────┐
+
+    ⑨ scp -r object-detection/ ══════════════════════════►  ~/object-detection
+         edit → copy → run                                   python3 src/app.py
+                                                                    │
+                                                                    ▼
+                                                             MLA inference
+                                                             ┌──────────────┐
+    ⑩ browser  ◄──── Insight ◄──── UDP 9000 + 9100 ◄════════╡ VideoSender  │
+         localhost:9900   live overlay                       │ MetadataSend │
+                                                             ├──────────────┤
+                                        detections.mp4  ◄════╡ VideoWriter  │
+                                        frames/*.jpg         └──────────────┘
+                                          on the board
+
+   └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Red steps are load-bearing.** Doing them late is the usual way to lose an afternoon.
+| # | Step | Runs on | Time | |
+|:--|:--|:--|:--|:--|
+| ① | [Cable up the DevKit](#step-1) | 🪟 PowerShell | 15 min | |
+| ② | [Install WSL2](#step-2) | 🪟 PowerShell | 10 min | |
+| ③ | [Mirrored networking](#step-3) | 🪟 PowerShell | 5 min | 🔴 |
+| ④ | [Firewall](#step-4) | 🪟 PowerShell | 2 min | 🔴 |
+| ⑤ | [Get the code and install sima-cli](#step-5) | 🐧 WSL | 5 min | |
+| ⑥ | [Docker Engine + NFS](#step-6) | 🐧 WSL | 10 min | |
+| ⑦ | [Install the Neat SDK](#step-7) | 🐧 WSL | 30 to 60 min | |
+| ⑧ | [Download a model](#step-8) | 🐳 Container | 5 min | |
+| ⑨ | [Deploy and run](#step-9) | 🔴 DevKit | 2 min | ♻️ |
+| ⑩ | [Watch it](#step-10) | 🌐 Browser | 2 min | ♻️ |
+
+🔴 **Load-bearing.** Doing these late is the usual way to lose an afternoon, because
+step ⑦ installs onto the board over the network and fails silently without it.
+♻️ Repeats on every code change.
 
 <br>
 
+<a id="step-1"></a>
 ### 1️⃣ Cable up the DevKit
 
 USB cable (serial console) + Ethernet straight to your PC. Open the
@@ -96,6 +147,7 @@ ping 192.168.137.123
 
 <br>
 
+<a id="step-2"></a>
 ### 2️⃣ Install WSL2
 
 ```powershell
@@ -105,6 +157,7 @@ wsl -l -v                    # want: Ubuntu · Running · 2
 
 <br>
 
+<a id="step-3"></a>
 ### 3️⃣ Mirrored networking ![critical](https://img.shields.io/badge/-CRITICAL-E63946?style=flat-square)
 
 WSL sits behind NAT by default and **cannot see your DevKit**. Later, pairing installs
@@ -133,6 +186,7 @@ wsl -- ping -c 2 192.168.137.123    # must reply
 
 <br>
 
+<a id="step-4"></a>
 ### 4️⃣ Firewall ![critical](https://img.shields.io/badge/-CRITICAL-E63946?style=flat-square)
 
 Mirrored mode puts WSL behind the Hyper-V firewall, which blocks inbound by default.
@@ -154,6 +208,7 @@ New-NetFirewallHyperVRule -Name "NeatMeta" -DisplayName "Neat Insight metadata" 
 
 <br>
 
+<a id="step-5"></a>
 ### 5️⃣ Get the code and install sima-cli
 
 ```bash
@@ -187,6 +242,7 @@ This gives you the detector app in [`object-detection/`](object-detection/) and 
 
 <br>
 
+<a id="step-6"></a>
 ### 6️⃣ Docker Engine + NFS
 
 The Neat SDK **is** a Docker container. No Docker, no SDK.
@@ -235,6 +291,7 @@ sudo docker run hello-world
 
 <br>
 
+<a id="step-7"></a>
 ### 7️⃣ Install the Neat SDK ![size](https://img.shields.io/badge/-12.6_GB_·_30--60_min-DC3545?style=flat-square)
 
 ```bash
@@ -262,7 +319,7 @@ ssh sima@192.168.137.123 "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat._
 ```
 
 > ✅ Prints a version → done.
-> ❌ `No such file or directory` → see [Recovery](#-recovery).
+> ❌ `No such file or directory` → see [Recovery](#recovery).
 
 > [!NOTE]
 > **`mount.nfs: Connection timed out` is fine.** Setup falls back to rsync and carries
@@ -271,6 +328,7 @@ ssh sima@192.168.137.123 "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat._
 
 <br>
 
+<a id="step-8"></a>
 ### 8️⃣ Download a model
 
 ```bash
@@ -292,6 +350,7 @@ sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yol
 
 <br>
 
+<a id="step-9"></a>
 ### 9️⃣ Deploy and run
 
 The app lives in [`object-detection/`](object-detection/):
@@ -359,6 +418,7 @@ running. press Ctrl-C to stop.
 
 <br>
 
+<a id="step-10"></a>
 ### 🔟 Watch it
 
 <div align="center">
@@ -472,7 +532,7 @@ output:
 ### Video must be raw H.264
 
 The DevKit decodes H.264 in hardware, and `.mp4` containers hit a
-[known bug](#-known-issues). Convert once, losslessly:
+[known bug](#known-issues). Convert once, losslessly:
 
 ```powershell
 ffmpeg -i video-4.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 video-4.h264
@@ -576,6 +636,8 @@ changed, that is expected: `ssh-keygen -R <ip>`.
 
 <details>
 <summary><b>pyneat missing on the DevKit</b></summary>
+
+<a id="recovery"></a>
 
 <br>
 
@@ -787,6 +849,8 @@ masks and keypoints need `decode_segmentation` or `decode_pose` in the frame han
 
 <details>
 <summary><b><code>groups.video_input</code> cannot play <code>.mp4</code> · Neat 0.3.0</b></summary>
+
+<a id="known-issues"></a>
 
 <br>
 
