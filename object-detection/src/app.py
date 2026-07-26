@@ -112,6 +112,48 @@ class PreprocessConfig:
 
 
 @dataclass(frozen=True)
+class DrawConfig:
+    """Overlay appearance, straight from the ``visualization`` config section.
+
+    Every pixel size here is expressed for a 1080p frame. When ``auto_scale``
+    is on they are multiplied by ``min(frame_height, frame_width) /
+    reference_height``, so 4K does not get hairlines and 480p does not get
+    slabs. Turn ``auto_scale`` off to use the numbers literally.
+
+    Attributes:
+        box_thickness: Detection rectangle outline weight, in pixels.
+        text_scale: OpenCV font scale for captions.
+        text_thickness: Caption stroke weight, in pixels.
+        text_padding: Gap between caption text and the edge of its band.
+        centre_dot: Whether to mark the centre of each box.
+        centre_dot_radius: Radius of that marker, in pixels.
+        show_labels: Whether the caption carries the class name.
+        show_scores: Whether the caption carries the confidence.
+        score_decimals: Decimal places for the confidence, so 2 gives ``0.57``.
+        text_color: Caption text colour, BGR.
+        hud_text_color: Frame-rate badge text colour, BGR.
+        hud_bg_color: Frame-rate badge fill colour, BGR.
+        auto_scale: Whether sizes scale with frame height.
+        reference_height: The frame height the sizes above are tuned for.
+    """
+
+    box_thickness: int = 3
+    text_scale: float = 1.0
+    text_thickness: int = 2
+    text_padding: int = 10
+    centre_dot: bool = True
+    centre_dot_radius: int = 7
+    show_labels: bool = True
+    show_scores: bool = True
+    score_decimals: int = 2
+    text_color: tuple[int, int, int] = (255, 255, 255)
+    hud_text_color: tuple[int, int, int] = (255, 255, 255)
+    hud_bg_color: tuple[int, int, int] = (0, 0, 0)
+    auto_scale: bool = True
+    reference_height: float = 1080.0
+
+
+@dataclass(frozen=True)
 class AppConfig:
     """Fully resolved application configuration.
 
@@ -217,6 +259,8 @@ class AppConfig:
     metadata_port_base: int
     bitrate_kbps: int
 
+    draw: DrawConfig
+
 
 def _section(raw: dict, key: str) -> dict:
     value = raw.get(key) or {}
@@ -276,6 +320,54 @@ def _flag(raw: dict, key: str, default: str) -> str:
     if token not in AUTO_FLAGS:
         raise ValueError(f"config key `{key}` must be auto, on or off (got {value!r})")
     return token
+
+
+def _color(raw: dict, key: str, default: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Read a ``[B, G, R]`` colour. OpenCV is BGR, so the order is not a typo."""
+    value = raw.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        raise ValueError(f"config key `{key}` must be a list of three numbers, [B, G, R]")
+    channels = []
+    for channel in value:
+        if isinstance(channel, bool) or not isinstance(channel, (int, float)):
+            raise ValueError(f"config key `{key}` must contain numbers")
+        if not 0 <= channel <= 255:
+            raise ValueError(f"config key `{key}` channels must be between 0 and 255")
+        channels.append(int(channel))
+    return (channels[0], channels[1], channels[2])
+
+
+def load_draw_config(raw: dict) -> DrawConfig:
+    """Build a :class:`DrawConfig` from the ``visualization`` config section.
+
+    Args:
+        raw: The whole parsed config document.
+
+    Returns:
+        A populated :class:`DrawConfig`. Every key is optional and falls back to
+        the dataclass default, so an absent section is valid.
+    """
+    section = _section(raw, "visualization")
+    hud = _section(section, "hud")
+    default = DrawConfig()
+    return DrawConfig(
+        box_thickness=_int(section, "box_thickness", default.box_thickness),
+        text_scale=_float(section, "text_scale", default.text_scale),
+        text_thickness=_int(section, "text_thickness", default.text_thickness),
+        text_padding=_int(section, "text_padding", default.text_padding),
+        centre_dot=_flag(section, "centre_dot", "on") == "on",
+        centre_dot_radius=_int(section, "centre_dot_radius", default.centre_dot_radius),
+        show_labels=_flag(section, "show_labels", "on") == "on",
+        show_scores=_flag(section, "show_scores", "on") == "on",
+        score_decimals=_int(section, "score_decimals", default.score_decimals),
+        text_color=_color(section, "text_color", default.text_color),
+        hud_text_color=_color(hud, "text_color", default.hud_text_color),
+        hud_bg_color=_color(hud, "bg_color", default.hud_bg_color),
+        auto_scale=_flag(section, "auto_scale", "on") == "on",
+        reference_height=_float(section, "reference_height", default.reference_height),
+    )
 
 
 def _triple(raw: dict, key: str, default: tuple[float, float, float]) -> tuple[float, float, float]:
@@ -381,6 +473,7 @@ def load_app_config(path: Path) -> AppConfig:
         video_port_base=_int(insight, "video_port_base", 9000),
         metadata_port_base=_int(insight, "metadata_port_base", 9100),
         bitrate_kbps=_int(insight, "bitrate_kbps", 2000),
+        draw=load_draw_config(raw),
     )
     validate_config(cfg)
     return cfg
@@ -1328,14 +1421,23 @@ def load_labels(path: Path) -> list[str]:
 def resolve_flow_control(cfg: AppConfig) -> tuple[str, str]:
     """Resolve ``auto`` flow-control settings to concrete tokens.
 
-    ``auto`` means realtime plus keep_latest for every source type.
+    A file and a live camera want opposite things, so ``auto`` splits on source
+    type:
 
-    Do not switch a file source to ``block`` hoping to capture every frame. It
-    deadlocks: the branch, combine and appsink stages all apply backpressure, so
-    with nothing allowed to drop the graph never reaches steady state and the
-    first pull times out having produced zero frames. Full-length output comes
-    from never blocking the run loop, which is why the Insight preview push is
-    non-blocking, not from forbidding drops.
+    * **File** -> ``reliable`` + ``block``. A file has no deadline. Every frame
+      matters, and the source can be made to wait.
+    * **RTSP or USB** -> ``realtime`` + ``keep_latest``. A camera has no pause
+      button, so blocking only buys unbounded latency. Staying current is worth
+      more than completeness.
+
+    Getting this wrong on a file is what shortens the recording. ``keep_latest``
+    makes the runtime discard buffers whenever inference falls behind the
+    decoder, and inference is much slower than decode. Only the survivors reach
+    the writer, which then stamps them at the source rate, so the output plays
+    fast and ends early: a 15 second clip processed at a quarter of realtime
+    becomes a 4 second video. ``block`` instead lets backpressure reach
+    ``filesrc``, so decoding slows to the speed of inference and every frame
+    survives. The run takes longer than the clip. That is correct, not a stall.
 
     Args:
         cfg: Application configuration.
@@ -1343,12 +1445,13 @@ def resolve_flow_control(cfg: AppConfig) -> tuple[str, str]:
     Returns:
         A ``(preset, overflow_policy)`` pair of config tokens.
     """
+    live = cfg.source_type in {"rtsp", "usb"}
     preset = cfg.run_preset
     policy = cfg.overflow_policy
     if preset == "auto":
-        preset = "realtime"
+        preset = "realtime" if live else "reliable"
     if policy == "auto":
-        policy = "keep_latest"
+        policy = "keep_latest" if live else "block"
     return preset, policy
 
 
@@ -1368,7 +1471,15 @@ def make_run_options(cfg: AppConfig):
     run_options.overflow_policy = enum_value(
         pyneat.OverflowPolicy, policy, OVERFLOW_POLICIES, "runtime.overflow_policy"
     )
-    run_options.output_memory = pyneat.OutputMemory.ZeroCopy
+    # Block is not honoured unconditionally. The runtime quietly rewrites it to
+    # KeepLatest when the public output is zero-copy and carries no explicit
+    # OutputOptions, so asking for every frame while also asking for zero-copy
+    # gets you neither. Auto lets the preset choose, and `reliable` chooses
+    # owned buffers, which keeps Block meaning Block. Live sources drop by
+    # design, so they keep zero-copy and its lower latency.
+    run_options.output_memory = (
+        pyneat.OutputMemory.Auto if policy == "block" else pyneat.OutputMemory.ZeroCopy
+    )
     return run_options
 
 
@@ -1660,15 +1771,52 @@ BOX_COLORS = [
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX if cv2 is not None else 0
 
-# Drawing parameters, tuned for 1080p and scaled from there.
-BOX_THICKNESS = 3
-TEXT_SCALE = 1.0
-TEXT_THICKNESS = 2
-TEXT_PADDING = 10
-CIRCLE_RADIUS = 7
-TEXT_COLOR = (255, 255, 255)
-FPS_BG_COLOR = (0, 0, 0)
-REFERENCE_HEIGHT = 1080.0
+# All digits share one vertical extent in this font, so folding them to a single
+# digit keeps the cache to one entry per distinct caption rather than one per
+# confidence value.
+DIGIT_FOLD = str.maketrans("123456789", "000000000")
+
+_ink_cache: dict[tuple[str, int, int], tuple[int, int]] = {}
+
+
+def text_ink_extent(text: str, text_scale: float, text_thickness: int) -> tuple[int, int]:
+    """Measure how far this string's ink reaches above and below the baseline.
+
+    ``cv2.getTextSize`` reports a height that includes internal leading and a
+    baseline drop sized for descenders, so a band sized from it holds the glyphs
+    visibly off centre in whichever direction the string happens to lack. The
+    correction has to be per string: ``FPS: 24.7`` has no descender, ``person``
+    does. Rendering once and reading back the occupied rows measures exactly
+    what will be drawn.
+
+    Args:
+        text: The string that will be drawn.
+        text_scale: OpenCV font scale.
+        text_thickness: Stroke weight in pixels.
+
+    Returns:
+        An ``(above, below)`` pair of pixel counts relative to the baseline.
+    """
+    key = (text.translate(DIGIT_FOLD), int(round(text_scale * 1000)), int(text_thickness))
+    cached = _ink_cache.get(key)
+    if cached is not None:
+        return cached
+
+    (width, height), baseline = cv2.getTextSize(text, FONT, text_scale, text_thickness)
+    margin = max(4, text_thickness * 3)
+    canvas = np.zeros((height + baseline + margin * 2, width + margin * 2), np.uint8)
+    origin_y = margin + height
+    cv2.putText(
+        canvas, text, (margin, origin_y), FONT, text_scale, 255,
+        text_thickness, cv2.LINE_AA,
+    )
+    rows = np.where(canvas.max(axis=1) > 0)[0]
+    if rows.size == 0:                          # blank or degenerate, fall back
+        extent = (height, baseline)
+    else:
+        extent = (origin_y - int(rows.min()), max(0, int(rows.max()) - origin_y + 1))
+    _ink_cache[key] = extent
+    return extent
 
 
 def class_color(class_id: int) -> tuple[int, int, int]:
@@ -1683,19 +1831,43 @@ def class_color(class_id: int) -> tuple[int, int, int]:
     return BOX_COLORS[class_id % len(BOX_COLORS)]
 
 
-def draw_scale(frame) -> float:
+def draw_scale(frame, draw: DrawConfig) -> float:
     """Scale factor that keeps strokes and text proportional to the frame.
 
     Args:
         frame: The image being annotated.
+        draw: Visualization settings.
 
     Returns:
-        A multiplier, 1.0 at 1080p, floored so small frames stay readable.
+        A multiplier, 1.0 at the reference height, floored so small frames stay
+        readable. Always 1.0 when ``auto_scale`` is off.
     """
-    return max(0.4, min(frame.shape[:2]) / REFERENCE_HEIGHT)
+    if not draw.auto_scale or draw.reference_height <= 0:
+        return 1.0
+    return max(0.4, min(frame.shape[:2]) / draw.reference_height)
 
 
-def draw_boxes(frame, boxes: list[dict], labels: list[str]) -> None:
+def caption_text(box: dict, labels: list[str], draw: DrawConfig) -> str:
+    """Build the caption for one detection.
+
+    Args:
+        box: A single detection.
+        labels: Class names indexed by class id.
+        draw: Visualization settings.
+
+    Returns:
+        The caption, which is empty when both the label and the score are off.
+    """
+    class_id = int(box["class_id"])
+    parts = []
+    if draw.show_labels:
+        parts.append(labels[class_id] if 0 <= class_id < len(labels) else str(class_id))
+    if draw.show_scores:
+        parts.append(f"{box['score']:.{max(0, draw.score_decimals)}f}")
+    return " ".join(parts)
+
+
+def draw_boxes(frame, boxes: list[dict], labels: list[str], draw: DrawConfig) -> None:
     """Draw detection boxes, centre markers and labelled captions in place.
 
     Each box is a plain rectangle in the class colour, with a centre dot and a
@@ -1707,14 +1879,15 @@ def draw_boxes(frame, boxes: list[dict], labels: list[str]) -> None:
         boxes: Detections with ``x1``, ``y1``, ``x2``, ``y2``, ``score`` and
             ``class_id`` keys, in original-image pixels.
         labels: Class names indexed by class id.
+        draw: Visualization settings, from the ``visualization`` config section.
     """
     h, w = frame.shape[:2]
-    scale = draw_scale(frame)
-    thickness = max(1, int(round(BOX_THICKNESS * scale)))
-    text_scale = TEXT_SCALE * scale
-    text_thickness = max(1, int(round(TEXT_THICKNESS * scale)))
-    pad = max(2, int(round(TEXT_PADDING * scale)))
-    radius = max(2, int(round(CIRCLE_RADIUS * scale)))
+    scale = draw_scale(frame, draw)
+    thickness = max(1, int(round(draw.box_thickness * scale)))
+    text_scale = draw.text_scale * scale
+    text_thickness = max(1, int(round(draw.text_thickness * scale)))
+    pad = max(2, int(round(draw.text_padding * scale)))
+    radius = max(2, int(round(draw.centre_dot_radius * scale)))
 
     # Paint larger boxes first, so small foreground objects stay legible.
     ordered = sorted(
@@ -1728,53 +1901,68 @@ def draw_boxes(frame, boxes: list[dict], labels: list[str]) -> None:
         if x2 <= x1 or y2 <= y1:
             continue
 
-        class_id = int(box["class_id"])
-        color = class_color(class_id)
-        name = labels[class_id] if 0 <= class_id < len(labels) else str(class_id)
+        color = class_color(int(box["class_id"]))
 
-        cv2.circle(frame, ((x1 + x2) // 2, (y1 + y2) // 2), radius, color, -1)
+        if draw.centre_dot:
+            cv2.circle(frame, ((x1 + x2) // 2, (y1 + y2) // 2), radius, color, -1)
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
 
-        label = f"{name} {box['score'] * 100:.0f}%"
-        (text_w, text_h), _ = cv2.getTextSize(label, FONT, text_scale, text_thickness)
-        band_h = text_h + pad * 2
+        label = caption_text(box, labels, draw)
+        if not label:
+            continue
+
+        (text_w, _), _ = cv2.getTextSize(label, FONT, text_scale, text_thickness)
+        above, below = text_ink_extent(label, text_scale, text_thickness)
+        band_w = text_w + pad * 2
+        band_h = above + below + pad * 2
 
         top = y1 - band_h
         if top < 0:                      # would clip off the top, so sit inside
             top = y1
-        left = max(0, min(x1, w - (text_w + pad * 2)))
+        left = max(0, min(x1, w - band_w))
 
-        cv2.rectangle(
-            frame, (left, top), (left + text_w + pad * 2, top + band_h), color, -1
-        )
+        cv2.rectangle(frame, (left, top), (left + band_w, top + band_h), color, -1)
         cv2.putText(
-            frame, label, (left + pad, top + band_h - pad), FONT, text_scale,
-            TEXT_COLOR, text_thickness, cv2.LINE_AA,
+            frame, label, (left + pad, top + pad + above), FONT, text_scale,
+            draw.text_color, text_thickness, cv2.LINE_AA,
         )
 
 
-def draw_fps(frame, fps: float) -> None:
-    """Draw the frame rate in a filled badge at the top left.
+def draw_fps(frame, fps: float, draw: DrawConfig) -> None:
+    """Draw the frame rate centred in a filled badge at the top left.
 
     Args:
         frame: BGR image, modified in place.
         fps: Frames per second to display.
+        draw: Visualization settings.
     """
-    scale = draw_scale(frame)
-    text_scale = TEXT_SCALE * scale
-    text_thickness = max(1, int(round(TEXT_THICKNESS * scale)))
-    pad = max(2, int(round(TEXT_PADDING * scale)))
+    scale = draw_scale(frame, draw)
+    text_scale = draw.text_scale * scale
+    text_thickness = max(1, int(round(draw.text_thickness * scale)))
+    pad = max(2, int(round(draw.text_padding * scale)))
 
     text = f"FPS: {fps:.1f}"
-    (text_w, text_h), _ = cv2.getTextSize(text, FONT, text_scale, text_thickness)
+    (text_w, _), _ = cv2.getTextSize(text, FONT, text_scale, text_thickness)
+    above, below = text_ink_extent(text, text_scale, text_thickness)
+
+    # Size the badge from measured ink, then place the baseline so the ink sits
+    # exactly `pad` from every edge. Both axes are centred the same way.
+    box_w = text_w + pad * 2
+    box_h = above + below + pad * 2
+    left, top = pad, pad
 
     cv2.rectangle(
-        frame, (pad, pad), (pad + text_w + pad * 2, pad + text_h + pad * 2),
-        FPS_BG_COLOR, -1,
+        frame, (left, top), (left + box_w, top + box_h), draw.hud_bg_color, -1
     )
     cv2.putText(
-        frame, text, (pad * 2, pad + text_h + pad // 2), FONT, text_scale,
-        TEXT_COLOR, text_thickness, cv2.LINE_AA,
+        frame,
+        text,
+        (left + (box_w - text_w) // 2, top + pad + above),
+        FONT,
+        text_scale,
+        draw.hud_text_color,
+        text_thickness,
+        cv2.LINE_AA,
     )
 
 
@@ -1858,8 +2046,8 @@ def render_annotated(cfg: AppConfig, pipeline: Pipeline, frame, boxes: list[dict
     annotated = frame.copy()
     # FPS first, so a detection in the top-left corner is never hidden by it.
     if cfg.video_hud:
-        draw_fps(annotated, fps)
-    draw_boxes(annotated, boxes, pipeline.labels)
+        draw_fps(annotated, fps, cfg.draw)
+    draw_boxes(annotated, boxes, pipeline.labels, cfg.draw)
     return annotated
 
 

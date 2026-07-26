@@ -84,16 +84,46 @@ runtime:
   frames: 0                  # 0 = run until interrupted
   pull_timeout_ms: 20000     # how long to wait for a frame before giving up
   queue_depth: 3
-  # auto = realtime + keep_latest. Do NOT set block: every stage applies
-  # backpressure, so forbidding drops deadlocks the graph at zero frames.
-  # Full-length output comes from the non-blocking Insight push, not from this.
+  # auto splits on source type, because a file and a camera want opposites:
+  #   file        -> reliable + block       every frame is kept, no deadline
+  #   rtsp / usb  -> realtime + keep_latest stay current, a camera cannot pause
+  # Forcing keep_latest on a file is what makes the recording short and fast:
+  # inference is slower than decoding, the surplus frames are discarded, and the
+  # survivors are still written at the source rate.
   preset: auto               # auto | realtime | balanced | reliable
   overflow_policy: auto      # auto | block | keep_latest | drop_incoming
   profile: false             # per-stage timings
   profile_interval: 100
 
+# How the overlay looks. Sizes are in pixels for a 1080p frame; with
+# auto_scale on they are multiplied by (frame height / reference_height), so 4K
+# does not get hairlines and 480p does not get slabs. Colours are [B, G, R]
+# because OpenCV is BGR, so [0, 0, 255] is red.
+visualization:
+  box_thickness: 3           # detection rectangle outline weight
+  text_scale: 1.0            # caption font size multiplier
+  text_thickness: 2          # caption stroke weight
+  text_padding: 10           # gap between caption text and the edge of its band
+
+  centre_dot: on             # filled dot at the centre of each box
+  centre_dot_radius: 7
+
+  show_labels: on            # class name in the caption
+  show_scores: on            # confidence in the caption
+  score_decimals: 2          # 2 gives "person 0.57", 0 gives "person 1"
+
+  text_color: [255, 255, 255]   # caption text, white
+
+  auto_scale: on             # scale every size above with the frame height
+  reference_height: 1080     # the height those sizes are tuned for
+
+  # The FPS badge in the corner, drawn when output.video.hud is true.
+  hud:
+    text_color: [255, 255, 255]
+    bg_color: [0, 0, 0]
+
 output:
-  
+
   # Annotated video written on the DevKit, one entry per processed frame.
   # Survives the run, unlike the UDP feed.
   video:
