@@ -1332,23 +1332,64 @@ cd ~/yolo-detector
 python3 src/probe_source.py assets/video/video-4.mp4
 ```
 
-**Work around it** by using an RTSP source instead. That path goes through
-`groups.rtsp_decoded_input`, which is the code path SiMa's own reference example
-exercises:
+### Root cause
+
+`VideoTrackSelect::backend_fragment()` emits both names from the same variable, so the
+fragment it produces is internally consistent:
+
+```cpp
+const std::string base = "n" + std::to_string(node_index) + "_demux";
+ss << "qtdemux name=" << base << " " << base << ".video_" << idx_;
+```
+
+The graph then appends an instance suffix, but the renamer only rewrites `name=<x>`
+declarations. `element_names()` reports just `{"n1_demux"}`, so it never learns to
+rewrite the pad reference. **Any non-empty suffix breaks it**, which is why reordering
+graph construction does not help.
+
+### Fix: drop the container
+
+No demuxer means no bug. `main.py` detects a raw H.264 elementary stream by extension
+and builds the source chain by hand, skipping `VideoTrackSelect` entirely:
+
+```
+FileInput → H264Parse → Queue → SimaDecode → CapsRaw
+```
+
+Convert once, on any machine with ffmpeg:
+
+```bash
+ffmpeg -i video-4.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 video-4.h264
+```
+
+`-c:v copy` remuxes without re-encoding, so it is fast and lossless. Then point the
+config at it and set the geometry explicitly, since a raw stream carries no container
+metadata:
 
 ```yaml
 source:
-  type: rtsp
-  uri: rtsp://<host>:8554/<stream>
+  type: video
+  uri: assets/video/video-4.h264
+  fps: 25
+  width: 1920
+  height: 1080
 ```
+
+Recognised extensions: `.h264`, `.264`, `.bin`, `.avc`. Anything else still uses
+`groups.video_input`, and `main.py` prints a warning with the conversion command.
+
+### Alternative: RTSP
+
+`groups.rtsp_decoded_input` builds no demuxer either, and is the path SiMa's own
+reference example exercises:
 
 ```bash
 python3 src/probe_source.py rtsp://<host>:8554/<stream>
 ```
 
-Everything upstream of this works: the model archive loads, the graph builds, the MLA
-firmware activates and passes its dispatch probe. The failure is confined to the file
-source fragment.
+Everything upstream of the source works: the model archive loads, the graph builds, the
+MLA firmware activates and passes its dispatch probe. The failure was confined to this
+one fragment.
 
 ---
 

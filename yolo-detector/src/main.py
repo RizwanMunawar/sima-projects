@@ -637,10 +637,19 @@ def probe_ffprobe(uri: str) -> tuple[int, int, int]:
 
 
 def probe_opencv(uri: str) -> tuple[int, int, int]:
-    cap = cv2.VideoCapture(uri)
+    """Best-effort probe. Returns zeros rather than raising.
+
+    Raw H.264 elementary streams frequently cannot be opened by OpenCV, and that is
+    not a fatal condition: the caller falls back to the configured geometry and
+    produces a clearer message than "failed to open source".
+    """
+    try:
+        cap = cv2.VideoCapture(uri)
+    except Exception:
+        return 0, 0, 0
     if not cap.isOpened():
         cap.release()
-        raise RuntimeError(f"failed to open source for probing: {uri}")
+        return 0, 0, 0
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
     fps = int(round(cap.get(cv2.CAP_PROP_FPS) or 0))
@@ -669,12 +678,20 @@ def resolve_source_geometry(cfg: AppConfig) -> tuple[int, int, int]:
         height = height if height > 0 else cv_h
         fps = fps if fps > 0 else cv_fps
 
-    if width <= 0 or height <= 0:
-        raise RuntimeError(
-            "could not resolve source frame size; set source.width and source.height"
-        )
-    if fps <= 0:
-        raise RuntimeError("could not resolve source frame rate; set source.fps")
+    if width <= 0 or height <= 0 or fps <= 0:
+        hint = ""
+        if cfg.source_type == "video" and is_elementary_h264(cfg.source_uri):
+            hint = (
+                "\nRaw H.264 elementary streams carry no container metadata, so "
+                "geometry usually\ncannot be probed. Set them explicitly in config.yaml:\n"
+                "  source:\n    width: 1920\n    height: 1080\n    fps: 25"
+            )
+        missing = []
+        if width <= 0 or height <= 0:
+            missing.append("source.width and source.height")
+        if fps <= 0:
+            missing.append("source.fps")
+        raise RuntimeError(f"could not resolve {', '.join(missing)}{hint}")
     return width, height, fps
 
 
@@ -689,9 +706,69 @@ def set_output_caps(caps, fps: int, width: int, height: int) -> None:
     caps.memory = pyneat.CapsMemory.Any
 
 
+ELEMENTARY_H264_SUFFIXES = {".h264", ".264", ".bin", ".avc"}
+
+
+def is_elementary_h264(path: str) -> bool:
+    return Path(path).suffix.lower() in ELEMENTARY_H264_SUFFIXES
+
+
+def make_elementary_h264_source(cfg: AppConfig, width: int, height: int, fps: int):
+    """VideoInputGroup rebuilt by hand, minus the demuxer.
+
+    Works around a Neat 0.3.0 bug. `VideoTrackSelect` emits its fragment as
+    `qtdemux name=<base> <base>.video_0`, which is internally consistent, but the
+    graph then appends an instance suffix to element *names* only. The declaration
+    becomes `name=n1_demux_8` while the pad reference stays `n1_demux.video_0`, so
+    gst_parse_launch fails with:
+
+        No src-element named "n1_demux" - omitting link
+
+    `element_names()` reports just the one name, so the renamer never learns to
+    rewrite the pad reference, and any non-empty suffix breaks it. Reordering graph
+    construction does not help.
+
+    Dropping the container removes the demuxer, and with it the bug. Convert once:
+
+        ffmpeg -i input.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 output.h264
+    """
+    graph = pyneat.Graph("file_source")
+    graph.add(pyneat.nodes.file_input(cfg.source_uri))
+    graph.add(pyneat.nodes.h264_parse(config_interval=1))
+    graph.add(pyneat.nodes.queue())
+
+    dec = pyneat.SimaDecodeOptions()
+    dec.type = pyneat.SimaDecodeType.H264
+    dec.sima_allocator_type = 2
+    dec.out_format = pyneat.Format.NV12
+    dec.raw_output = False
+    graph.add(pyneat.nodes.sima_decode(dec))
+
+    if width > 0 and height > 0 and fps > 0:
+        graph.add(
+            pyneat.nodes.caps_raw(
+                pyneat.Format.NV12, width, height, fps, pyneat.CapsMemory.Any
+            )
+        )
+    return graph
+
+
 def make_source_graph(cfg: AppConfig, width: int, height: int, fps: int):
     """File / RTSP / camera head of the Graph. All three produce NV12 frames."""
     if cfg.source_type == "video":
+        if is_elementary_h264(cfg.source_uri):
+            print("source: raw H.264 elementary stream, demuxer bypassed")
+            return make_elementary_h264_source(cfg, width, height, fps)
+
+        print(
+            "[warn] container input uses groups.video_input, which hits a demuxer\n"
+            "       naming bug in Neat 0.3.0. If the pipeline fails to start with\n"
+            "       'No src-element named \"nN_demux\"', convert to a raw stream:\n"
+            f"         ffmpeg -i {cfg.source_uri} -c:v copy -bsf:v h264_mp4toannexb \\\n"
+            f"           -f h264 {Path(cfg.source_uri).with_suffix('.h264')}\n"
+            "       then point source.uri at the .h264 file.",
+            file=sys.stderr,
+        )
         opt = pyneat.VideoInputGroupOptions()
         opt.path = cfg.source_uri
         opt.insert_queue = True
