@@ -21,8 +21,6 @@
 
 </div>
 
----
-
 ## What this is
 
 A **setup guide** and a **working detector app**, both written while actually bringing
@@ -121,8 +119,6 @@ Who does what, and in which order. **Click any step to jump to it.**
 Steps 3 and 4 are load-bearing. Step 7 installs onto the board over the network and
 fails silently if they are not done first, which is the usual way to lose an afternoon.
 
-<br>
-
 <a id="step-1"></a>
 ### 1. Cable up the DevKit
 
@@ -143,8 +139,6 @@ ping <devkit-ip>
 > `192.168.137.123` and `192.168.137.193`. Your PC keeps `192.168.137.1`, which is why
 > that one is written out in full.
 
-<br>
-
 <a id="step-2"></a>
 ### 2. Install WSL2
 
@@ -152,8 +146,6 @@ ping <devkit-ip>
 wsl --install -d Ubuntu      # PowerShell as Administrator
 wsl -l -v                    # want: Ubuntu · Running · 2
 ```
-
-<br>
 
 <a id="step-3"></a>
 ### 3. Mirrored networking
@@ -182,8 +174,6 @@ wsl -- ping -c 2 <devkit-ip>        # must reply
 >
 > **Note.** Made the file in Notepad? Check it is not secretly `.wslconfig.txt`.
 
-<br>
-
 <a id="step-4"></a>
 ### 4. Firewall
 
@@ -203,8 +193,6 @@ New-NetFirewallHyperVRule -Name "NeatMeta" -DisplayName "Neat Insight metadata" 
 ```
 
 > **Note.** These live in Windows, not the distro, so they survive `wsl --unregister`.
-
-<br>
 
 <a id="step-5"></a>
 ### 5. Get the code and install sima-cli
@@ -229,8 +217,6 @@ sima-cli login                  # needs a community.sima.ai account
 
 You now have the app in [`object-detection/`](object-detection/) and the `sima` venv
 beside it. **Every command below runs from this directory.**
-
-<br>
 
 <a id="step-6"></a>
 ### 6. Docker Engine + NFS
@@ -279,8 +265,6 @@ sudo docker run hello-world
 
 > ✅ Must print **"Hello from Docker!"**
 
-<br>
-
 <a id="step-7"></a>
 ### 7. Install the Neat SDK
 
@@ -316,8 +300,6 @@ ssh sima@<devkit-ip> "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat.__ver
 > on. Also: **the DevKit IP changes between reboots** (DHCP). If things hang, check with
 > `arp -a | Select-String "192.168.137"`.
 
-<br>
-
 <a id="step-8"></a>
 ### 8. Download a model
 
@@ -331,8 +313,6 @@ sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yol
 ```
 
 Swap `yolo26m` for `n`, `s`, `l` or `x` to trade speed against accuracy.
-
-<br>
 
 <a id="step-9"></a>
 ### 9. Deploy and run
@@ -401,8 +381,6 @@ running. press Ctrl-C to stop.
 > running invisibly holding the MLA and your next run fails.
 > Rescue: `ssh sima@<devkit-ip> pkill -f src/app.py`
 
-<br>
-
 <a id="step-10"></a>
 ### 10. The result
 
@@ -426,13 +404,8 @@ It looks like this:
 
 https://github.com/user-attachments/assets/REPLACE-WITH-YOUR-VIDEO
 
-<br>
 
 </div>
-
-<br>
-
----
 
 <div align="center">
 
@@ -443,8 +416,6 @@ https://github.com/user-attachments/assets/REPLACE-WITH-YOUR-VIDEO
 **select channel 0**
 
 </div>
-
-<br>
 
 > [!IMPORTANT]
 > **Open Insight and select the channel _before_ you start the app.** Video and
@@ -520,8 +491,6 @@ scp -r sima@<devkit-ip>:~/object-detection/sandbox/frames .
 | `output.save.every` | Write every Nth frame as a JPEG. `0` disables |
 | `output.insight.annotated` | `true` sends our overlay to Insight, `false` sends the raw frame |
 
----
-
 ## Configuration
 
 Everything lives in `object-detection/config.yaml`. These settings matter:
@@ -590,8 +559,6 @@ output:
 100 frames, annotated JPEGs to disk, timings, exits by itself, **zero networking**.
 Boxes look right? Model and config are correct, so anything later is transport.
 
----
-
 ## Daily loop
 
 Start the SDK:
@@ -628,14 +595,10 @@ ssh-keygen -t ed25519 -C "devkit"
 ssh-copy-id sima@<devkit-ip>
 ```
 
----
-
 ## Recovery
 
 <details>
 <summary><b>DevKit firmware version mismatch</b></summary>
-
-<br>
 
 ```
 ERROR: DevKit/SDK version mismatch. DevKit 2.0.0, SDK 2.1.2
@@ -669,8 +632,6 @@ changed, that is expected: `ssh-keygen -R <ip>`.
 
 <a id="recovery"></a>
 
-<br>
-
 Means pairing never installed it, almost always because networking was not fixed first.
 Re-run pairing from **WSL** now that it works:
 
@@ -698,8 +659,6 @@ sima-cli neat install core@v0.3.0
 <details open>
 <summary><b>Setup</b></summary>
 
-<br>
-
 | Symptom | Fix |
 |:--|:--|
 | `sima-cli: command not found` | Venv not active: `sudo su -`, `cd`, `source sima/bin/activate` |
@@ -715,8 +674,6 @@ sima-cli neat install core@v0.3.0
 <details>
 <summary><b>Copying and paths</b></summary>
 
-<br>
-
 | Symptom | Fix |
 |:--|:--|
 | `ssh: Could not resolve hostname d:` | Windows path used in Linux. `scp` read `D:` as a hostname |
@@ -730,8 +687,6 @@ sima-cli neat install core@v0.3.0
 <details>
 <summary><b>Running</b></summary>
 
-<br>
-
 | Symptom | Fix |
 |:--|:--|
 | `pyneat requires numpy<2` | `pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"` |
@@ -744,8 +699,6 @@ sima-cli neat install core@v0.3.0
 
 <details>
 <summary><b>Detections and display</b></summary>
-
-<br>
 
 | Symptom | Fix |
 |:--|:--|
@@ -766,8 +719,6 @@ sima-cli neat install core@v0.3.0
 
 <details>
 <summary><b>Pipeline shape, preprocessing and decode types</b></summary>
-
-<br>
 
 Built by following the `neat-application-builder` playbook. Every pyneat call was
 verified against the packaged core source in the SDK container, not written from
@@ -870,15 +821,12 @@ masks and keypoints need `decode_segmentation` or `decode_pose` in the frame han
 
 </details>
 
-
 ## Known issues
 
 <details>
 <summary><b><code>groups.video_input</code> cannot play <code>.mp4</code> · Neat 0.3.0</b></summary>
 
 <a id="known-issues"></a>
-
-<br>
 
 ```
 gst_parse_launch failed: No src-element named "n1_demux" - omitting link
@@ -906,8 +854,6 @@ Selected automatically by extension: `.h264`, `.264`, `.bin`, `.avc`. A containe
 still uses `groups.video_input` and prints the conversion command.
 
 </details>
-
----
 
 ## Reference
 
@@ -956,14 +902,10 @@ still uses `groups.video_input` and prints the conversion command.
 | 5 | Raw `.h264`, never `.mp4` | Containers hit a demuxer bug in Neat 0.3.0 |
 | 6 | Always `ssh -tt` | Ctrl-C needs a pty to reach the app and release the MLA |
 
----
-
 <div align="center">
 
 Built with the `neat-application-builder` playbook <br>
 API details verified against `/neat-resources/core-src`, not from memory
-
-<br>
 
 ![SiMa](https://img.shields.io/badge/SiMa.ai-E63946?style=flat-square)
 ![Modalix](https://img.shields.io/badge/Modalix-457B9D?style=flat-square)
