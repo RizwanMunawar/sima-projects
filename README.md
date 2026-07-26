@@ -365,9 +365,10 @@ cd ~/object-detection && python3 src/app.py --config config.yaml
 Healthy output:
 
 ```
-source: type=video uri=assets/video/video-4.h264 stream=1920x1080@25
+source: type=video uri=assets/video/video-4.h264 stream=1920x1080@24
 preprocess: ... resize=letterbox pad=114 normalize=coco_yolo
 model: ... family=yolo26 decode_type=YoloV26 labels=80
+runtime: preset=reliable overflow=block queue_depth=3
 graph built
 insight: host=192.168.137.1 video=9000 metadata=9100 channel=0
 running. press Ctrl-C to stop.
@@ -704,13 +705,13 @@ sima-cli neat install core@v0.3.0
 | Insight blank but `sent=N failures=0` | The stream already ended. UDP buffers nothing, so open the viewer **first** and use a looped source |
 | Insight loads, no video | **Firewall.** Step 4 skipped. Most common failure by far |
 | Insight blank, no errors | `insight.host` is `127.0.0.1`. Use `192.168.137.1` |
-| Output video far shorter than the input | The run stalled on backpressure. Keep `overflow_policy: auto`, and set `output.insight.enable: false` to rule out the preview feed |
-| `processed=0` and a 20 s timeout | You set `overflow_policy: block`. Every stage applies backpressure, so forbidding drops deadlocks the graph. Use `auto` |
+| Output video shorter than the input, and plays fast | Frames are being dropped. Set `runtime.overflow_policy: auto`, which picks `block` for a file so every frame is kept. Expect the run to take longer than the clip |
+| `processed=0` and a 20 s timeout | The source caps filter is not negotiating. Leave `source.width`, `source.height` and `source.fps` at 0 so the app reads them from the stream |
 | `192.168.137.1:9900` will not load | Expected. Use `https://localhost:9900` |
 | No detections at all | `model.family` mismatch, then lower `decode.score_threshold` |
 | Boxes in the wrong place | `resize.mode: letterbox`, `pad_value: 114`. Do not add your own maths |
 | Scores all near zero | Head mismatch. YOLOX, v6 and v26 use raw-logit heads |
-| Dropped frames | Raise `runtime.queue_depth`, keep `overflow_policy: keep_latest` |
+| Dropped frames on a live source | Raise `runtime.queue_depth`, keep `overflow_policy: auto` |
 
 </details>
 

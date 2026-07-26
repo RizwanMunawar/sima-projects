@@ -91,14 +91,15 @@ A healthy startup prints each stage. Read it, because it confirms several things
 once:
 
 ```
-source: type=video uri=assets/video/video-loop.h264 stream=1920x1080@25
+source: type=video uri=assets/video/video-loop.h264 stream=1920x1080@24
 preprocess: kind=image enable=on in=NV12 out=AUTO ... resize=letterbox ... pad=114
 loading model (first load unpacks the archive, this can take a minute)...
 model: ...tar.gz family=yolo26 decode_type=YoloV26 labels=80
-runtime: preset=realtime overflow=keep_latest queue_depth=3
+runtime: preset=reliable overflow=block queue_depth=3
+       block keeps every frame, so the run takes longer than the clip.
 graph built
 insight: host=192.168.137.1 video=9000 metadata=9100 channel=0
-video: detections.mp4 codec=mp4v fps=25 hud=True
+video: detections.mp4 codec=mp4v fps=24 hud=True
 running. press Ctrl-C to stop.
 [50] 24.8 fps, 6.2 detections/frame avg
 ```

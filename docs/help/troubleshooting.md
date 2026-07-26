@@ -55,8 +55,8 @@
 | `pyneat requires numpy<2` | `pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"` |
 | `No src-element named "nN_demux"` | `.mp4` demuxer bug. Convert to `.h264`. [Known issues](known-issues.md) |
 | Stuck after `loading model` | First load unpacks the archive. Give it a minute |
-| `processed=0` and a 20 s timeout | You set `overflow_policy: block`. Every stage applies backpressure, so forbidding drops deadlocks the graph. Use `auto` |
-| Output video far shorter than the input | The run stalled on backpressure. Keep `overflow_policy: auto`, and set `output.insight.enable: false` to rule out the preview feed |
+| `processed=0` and a 20 s timeout | The source caps filter is not negotiating. Leave `source.width`, `source.height` and `source.fps` at 0 so the app reads them from the stream |
+| Output video shorter than the input, and plays fast | Frames are being dropped. Set `runtime.overflow_policy: auto`, which picks `block` for a file so every frame is kept. Expect the run to take longer than the clip |
 
 ## Detections and display
 

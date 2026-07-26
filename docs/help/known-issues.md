@@ -74,14 +74,11 @@ end-of-stream that never happened.
 `app.py` creates the preview `appsrc` with `block=False`, so a push is refused rather
 than waiting, and counts the refusal as a dropped preview frame instead of raising.
 
-!!! danger "Do not try to fix this with `overflow_policy: block`"
+!!! note "This is separate from `overflow_policy`"
 
-    It makes things worse. Every stage in the graph applies backpressure, so with
-    nothing allowed to drop the run never reaches steady state and the first pull times
-    out having produced **zero** frames.
-
-    Full-length output comes from never blocking the run loop, not from forbidding
-    drops.
+    `overflow_policy` governs the detector graph. The preview `appsrc` is a different
+    stage on a different graph, and it is non-blocking regardless, so a stalled viewer
+    can never hold up the recording.
 
 ---
 

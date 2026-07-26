@@ -148,10 +148,16 @@ and keypoints need `decode_segmentation` or `decode_pose` in the frame handler.
 
 ## Flow control
 
-| Setting | Resolves to | Why |
-| :-- | :-- | :-- |
-| `preset: auto` | `realtime` | |
-| `overflow_policy: auto` | `keep_latest` | Dropping is the only safe option here |
+`auto` splits on source type, because a file and a camera want opposite things.
+
+| Source | `preset: auto` | `overflow_policy: auto` | Why |
+| :-- | :-- | :-- | :-- |
+| Video file | `reliable` | `block` | No deadline. Backpressure reaches `filesrc`, so decoding slows to the speed of inference and every frame survives |
+| RTSP, USB | `realtime` | `keep_latest` | A camera cannot be paused, so blocking only buys unbounded latency |
+
+Dropping is what shortens a recording. Inference is several times slower than
+decoding, so `keep_latest` on a file discards most frames, and the survivors are still
+written at the source rate: the video plays fast and ends early.
 
 The Insight preview `appsrc` is created with `block=False`. That matters more than it
 sounds: the default is `block=true`, and once the H.264 encoder or UDP egress falls
@@ -160,10 +166,13 @@ detector appsinks fill, and the whole graph stalls part-way through the clip.
 
 A refused preview push is counted as a drop and reported at exit. It never ends a run.
 
-!!! danger "`overflow_policy: block` deadlocks the graph"
+!!! note "`block` needs owned output buffers to mean anything"
 
-    Every stage applies backpressure. With nothing allowed to drop, the run never
-    reaches steady state and the first pull times out having produced **zero** frames.
+    The runtime rewrites `Block` to `KeepLatest` whenever the public output is
+    zero-copy and carries no explicit `OutputOptions`, so asking for every frame *and*
+    zero-copy silently gets you neither. The file path therefore requests
+    `OutputMemory.Auto`, which the `reliable` preset resolves to owned buffers. Live
+    sources drop by design, so they keep zero-copy and its lower latency.
 
 ---
 

@@ -1571,9 +1571,13 @@ def build_pipeline(cfg: AppConfig) -> Pipeline:
     step(f"runtime: preset={preset} overflow={policy} queue_depth={cfg.queue_depth}")
     if policy == "block":
         step(
-            "[warn] overflow_policy: block deadlocks this graph. Every stage applies\n"
-            "       backpressure, so with nothing allowed to drop the run produces\n"
-            "       zero frames. Use auto."
+            "       block keeps every frame, so the run takes longer than the clip.\n"
+            "       Output length matches the input. This is the right mode for a file."
+        )
+    elif cfg.source_type == "video":
+        step(
+            "[warn] overflow_policy drops frames, so the recording will be shorter\n"
+            "       than the input and will play fast. Use auto for a file source."
         )
 
     step("building graph...")

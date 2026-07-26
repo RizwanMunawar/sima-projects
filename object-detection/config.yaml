@@ -119,8 +119,8 @@ visualization:
 
   # The FPS badge in the corner, drawn when output.video.hud is true.
   hud:
-    text_color: [255, 255, 255]
-    bg_color: [0, 0, 0]
+    text_color: [104, 31, 17]
+    bg_color: [255, 255, 255]
 
 output:
 

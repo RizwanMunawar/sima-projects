@@ -99,15 +99,22 @@ in [How it works](internals.md#preprocessing).
 | `frames` | `0` runs until interrupted |
 | `pull_timeout_ms` | How long to wait for a frame before giving up |
 | `queue_depth` | Runtime queue depth |
-| `preset` | `auto` resolves to `realtime` |
-| `overflow_policy` | `auto` resolves to `keep_latest` |
+| `preset` | `auto` picks `reliable` for a file, `realtime` for a camera |
+| `overflow_policy` | `auto` picks `block` for a file, `keep_latest` for a camera |
 | `profile` | Per-stage timings |
 
-!!! danger "Do not set `overflow_policy: block`"
+!!! important "Leave both on `auto`. A file and a camera want opposites"
 
-    Every stage in the graph applies backpressure. Forbidding drops deadlocks it, and
-    the run produces **zero** frames before the first pull times out. Full-length output
-    comes from the non-blocking Insight push, not from refusing to drop.
+    A **file** has no deadline, so `auto` gives it `block`. Backpressure reaches
+    `filesrc`, decoding slows to the speed of inference, and every frame survives. The
+    run takes longer than the clip, which is correct rather than a stall.
+
+    A **camera** cannot be paused, so `auto` gives it `keep_latest`. Blocking a live
+    source only buys unbounded latency.
+
+    Forcing `keep_latest` on a file is what produces a short recording that plays fast.
+    Inference is several times slower than decoding, so most frames are discarded, and
+    the survivors are still written at the source rate.
 
 ### `output`
 
