@@ -255,9 +255,9 @@ def _bool(raw: dict, key: str, default: bool) -> bool:
 
 
 def _flag(raw: dict, key: str, default: str) -> str:
-    """Read a tri-state auto/on/off knob.
-
-    YAML 1.1 resolves bare `on`/`off`/`yes`/`no` to booleans, so `enable: on`
+    """
+    Read a tri-state auto/on/off knob. YAML 1.1 resolves 
+    bare `on`/`off`/`yes`/`no` to booleans, so `enable: on`
     reaches us as True. Fold those back onto the token vocabulary.
     """
     value = raw.get(key, default)
@@ -445,17 +445,12 @@ def validate_config(cfg: AppConfig) -> None:
         )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Config token -> pyneat enum mapping
-#
-# Kept as string tokens so the tables can be validated before pyneat is
-# imported (the wheel is aarch64-only and does not load in the SDK container).
-# ─────────────────────────────────────────────────────────────────────────────
-
-# model.family -> BoxDecodeType attribute name.
-#
-# `yolo11` intentionally maps to YoloV8: BoxDecodeType has no YOLO11 member, and
-# Ultralytics YOLO11 exports the same decoupled DFL detect head as YOLOv8.
+# Config token -> pyneat enum mapping, Kept as string tokens so the tables 
+# can be validated before pyneat is imported (the wheel is aarch64-only 
+# and does not load in the SDK container). model.family -> BoxDecodeType 
+# attribute name. `yolo11` intentionally maps to YoloV8: BoxDecodeType has 
+# no YOLO11 member, and Ultralytics YOLO11 exports the same decoupled DFL detect 
+# head as YOLOv8.
 FAMILY_DECODE_TOKENS: dict[str, str] = {
     "yolo": "Yolo",
     "yolov5": "YoloV5",
@@ -544,11 +539,6 @@ def enum_value(enum_cls, token: str, table: dict[str, str], what: str):
         ) from exc
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Runtime deps
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def load_runtime_dependencies() -> None:
     global cv2, np, pyneat
     if pyneat is not None:
@@ -567,13 +557,9 @@ def time_ms() -> float:
     return time.perf_counter() * 1000.0
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Pre-processing: the intent layer handed to the route planner
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 def apply_preprocess_options(opt, pre: PreprocessConfig, frame_w: int, frame_h: int) -> None:
-    """Translate the config's preprocess block onto pyneat ModelOptions.
+    """
+    Translate the config's preprocess block onto pyneat ModelOptions.
 
     ``Model`` resolves this against the archive's MPK contract and builds the
     matching Preproc, Quant, Tess or QuantTess graph family. Anything left on

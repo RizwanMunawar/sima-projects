@@ -45,6 +45,14 @@ up a DevKit. Every warning marks somewhere real time was lost.
 Your app runs **on the DevKit**. It sends H.264 video and JSON detections over UDP,
 and Insight recombines them in your browser.
 
+```bash
+git clone https://github.com/RizwanMunawar/sima-projects.git
+cd sima-projects
+```
+
+Already have a DevKit set up? Jump to [Deploy and run](#9️⃣-deploy-and-run). Starting
+from a bare machine? Work through the steps in order.
+
 > [!TIP]
 > **Most problems are a command typed in the wrong box.** Check your prompt:
 > `PS C:\>` is Windows · `root@neat-sdk:/workspace#` is the container ·
@@ -146,24 +154,36 @@ New-NetFirewallHyperVRule -Name "NeatMeta" -DisplayName "Neat Insight metadata" 
 
 <br>
 
-### 5️⃣ Install sima-cli
+### 5️⃣ Get the code and install sima-cli
 
 ```bash
 # WSL
 sudo su -                              # become root FIRST
-cd /mnt/d/work/sima-projects           # then cd
-apt update && apt install -y python3-venv python3-pip
+apt update && apt install -y git python3-venv python3-pip
+
+cd /mnt/d/work                         # or wherever you keep projects
+git clone https://github.com/RizwanMunawar/sima-projects.git
+cd sima-projects
+
 python3 -m venv sima
 source sima/bin/activate
 pip install sima-cli
 sima-cli login                         # needs a community.sima.ai account
 ```
 
+This gives you the detector app in [`object-detection/`](object-detection/) and the
+`sima` venv beside it. Everything below assumes you are in the repo root.
+
 > [!CAUTION]
 > **`cd` after `sudo su -`, never before.** The `-` makes it a login shell that drops
 > you in `/root`. Reverse them and your venv is silently built at `/root/sima`.
 
-> 💡 Every new session needs all three lines again: `sudo su -`, `cd`, `source`.
+> 💡 Every new session needs three lines again: `sudo su -`, `cd` to the repo, and
+> `source sima/bin/activate`.
+
+> 💡 Cloning into `/mnt/d/...` keeps the repo on your Windows drive, so you can edit it
+> in VS Code on Windows and run it from WSL. If the repo is private, use
+> `gh repo clone RizwanMunawar/sima-projects` or an SSH remote.
 
 <br>
 
