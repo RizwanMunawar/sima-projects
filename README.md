@@ -1117,12 +1117,42 @@ insight: host=192.168.137.1 video=9000 metadata=9100 channel=0
 
 </div>
 
-Accept the certificate warning, it is the SDK's own certificate. Then select
-**channel 0**.
+Accept the certificate warning, it is the SDK's own certificate, and it covers
+`localhost` and `127.0.0.1` explicitly. Then select **channel 0**.
 
-> [!NOTE]
-> Use `localhost`. `192.168.137.1:9900` does **not** serve the Insight page, even though
-> that is the address the board streams to.
+> [!WARNING]
+> **Ignore the address `neat` prints.** It reports
+> `Insight Web UI  https://192.168.137.1:9900`, and that address does **not** work from
+> Windows. Connecting to the mirrored interface counts as inbound traffic to the WSL
+> VM, so the Hyper-V firewall drops it. Only the two UDP ranges from section 4 are
+> allowed through. `localhost` takes a different path that the firewall does not gate.
+>
+> This does not affect the DevKit's video feed, which is UDP and already permitted.
+>
+> The same substitution applies to the VS Code browser URL setup prints. Keep the
+> token, swap the host:
+> ```
+> https://localhost:10000/?tkn=<your-token>&folder=/workspace
+> ```
+
+<details>
+<summary><b>📌 Want the LAN address to work as well?</b></summary>
+
+<br>
+
+Useful for viewing from a phone or another machine on the subnet. In an
+**Administrator** PowerShell:
+
+```powershell
+New-NetFirewallHyperVRule -Name "NeatInsightWebUI" -DisplayName "Neat Insight web UI TCP" `
+  -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' `
+  -Protocol TCP -LocalPorts 9900,8081,9999,10000,8022,8554 -Action Allow
+```
+
+Covers the web UI, video UI, both Code UI ports, web SSH and RTSP. It widens what is
+reachable on your network, so add it deliberately rather than by default.
+
+</details>
 
 ---
 
@@ -1254,6 +1284,7 @@ If Docker did not autostart, run `sudo service docker start` first.
 | `model archive not found: assets/models/…` | The `.tar.gz` is not where the config points. `find assets -type f` on the board. |
 | `failed to open source for probing: assets/video/…` | Same, for the video. Also check you launched from `~/yolo-detector`. |
 | `pyneat 0.3.0 requires numpy<2` | pip upgraded numpy. `pip install "numpy>=1.24,<2"`. |
+| `192.168.137.1:9900` will not load | Expected under mirrored networking. Use `https://localhost:9900`. The address `neat` prints is blocked by the Hyper-V firewall. |
 | Insight loads, no video | Firewall. Section 4 skipped. By far the most common failure. |
 | Insight blank, no errors anywhere | `output.insight.host` is `127.0.0.1`. Use `192.168.137.1`. |
 | No detections at all | `model.family` does not match the model. Then lower `decode.score_threshold`. |
