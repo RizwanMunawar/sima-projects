@@ -65,7 +65,7 @@ Who does what, and in which order. **Click any step to jump to it.**
 
    ┌───────────────────────────── ONE-TIME SETUP ─────────────────────────────┐
 
-    1  cable up  ══════════════════════════════════════════►  DHCP → .123
+    1  cable up  ══════════════════════════════════════════►  DHCP address
          USB + Ethernet                                       board powers on
 
     2  wsl --install ─────────►  Ubuntu ready
@@ -99,11 +99,10 @@ Who does what, and in which order. **Click any step to jump to it.**
                                                             MLA inference
                                                             ┌───────────────┐
    10  browser  ◄──── Insight ◄──── UDP 9000 + 9100 ◄═══════╡ VideoSender   │
-         localhost:9900   live overlay                      │ MetadataSender│
+         localhost:9900   live, while it runs               │ MetadataSender│
                                                             ├───────────────┤
-                                       detections.mp4  ◄════╡ VideoWriter   │
-                                       frames/*.jpg         └───────────────┘
-                                         on the board
+   10  scp ◄──────────────── detections.mp4 ◄═══════════════╡ VideoWriter   │
+         keeps a copy         every frame, on the board     └───────────────┘
 
    └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -119,7 +118,7 @@ Who does what, and in which order. **Click any step to jump to it.**
 | [7. Install the Neat SDK](#step-7) | WSL | 30 to 60 min | 12.6 GB download |
 | [8. Download a model](#step-8) | SDK container | 5 min | |
 | [9. Deploy and run](#step-9) | DevKit | 2 min | Repeats every change |
-| [10. Watch it](#step-10) | Browser | 2 min | Repeats every change |
+| [10. The result](#step-10) | DevKit + Browser | 2 min | Repeats every change |
 
 Steps 3 and 4 are load-bearing. Step 7 installs onto the board over the network and
 fails silently if they are not done first, which is the usual way to lose an afternoon.
@@ -134,10 +133,17 @@ USB cable (serial console) + Ethernet straight to your PC. Open the
 **DHCP**.
 
 ```powershell
-ping 192.168.137.123
+arp -a | Select-String "192.168.137"     # find the board
+ping <devkit-ip>
 ```
 
 > ✅ Must reply. Nothing else works until it does.
+
+> [!IMPORTANT]
+> **`<devkit-ip>` appears throughout this guide. Substitute your own.** The board gets
+> its address by DHCP, so it changes between reboots: mine has been both
+> `192.168.137.123` and `192.168.137.193`. Your PC keeps `192.168.137.1`, which is why
+> that one is written out in full.
 
 <br>
 
@@ -171,7 +177,7 @@ Wait 10 seconds, open a WSL terminal, then verify:
 
 ```powershell
 wsl -- hostname -I                  # must list 192.168.137.1
-wsl -- ping -c 2 192.168.137.123    # must reply
+wsl -- ping -c 2 <devkit-ip>        # must reply
 ```
 
 > ✅ **Both must pass.** Be stubborn here.
@@ -301,7 +307,7 @@ sudo su -
 cd sima-projects
 source sima/bin/activate
 sima-cli install ghcr:sima-neat/sdk
-sima-cli sdk setup --devkit 192.168.137.123
+sima-cli sdk setup --devkit <devkit-ip>
 ```
 
 **Answer every prompt.** The ones that matter:
@@ -317,7 +323,7 @@ sima-cli sdk setup --devkit 192.168.137.123
 Then confirm the **board half** actually happened, because it is what fails quietly:
 
 ```bash
-ssh sima@192.168.137.123 "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat.__version__)'"
+ssh sima@<devkit-ip> "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat.__version__)'"
 ```
 
 > ✅ Prints a version → done.
@@ -342,13 +348,7 @@ mkdir -p /workspace/assets/models && cd /workspace/assets/models
 sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
 ```
 
-| Variant | Speed | Accuracy | |
-|:--|:--|:--|:--|
-| `yolo26n` | fastest | lowest | |
-| `yolo26s` | fast | good | |
-| **`yolo26m`** | balanced | better | **recommended starting point** |
-| `yolo26l` | slower | high | |
-| `yolo26x` | slowest | highest | |
+Swap `yolo26m` for `n`, `s`, `l` or `x` to trade speed against accuracy.
 
 <br>
 
@@ -387,7 +387,7 @@ pip install -r ~/object-detection/src/requirements.txt
 change:
 
 ```bash
-scp -r object-detection/ sima@192.168.137.193:~
+scp -r object-detection/ sima@<devkit-ip>:~
 ```
 
 > [!IMPORTANT]
@@ -397,7 +397,7 @@ scp -r object-detection/ sima@192.168.137.193:~
 Then on the DevKit:
 
 ```bash
-ssh -tt sima@192.168.137.193                     # two t's, see below
+ssh -tt sima@<devkit-ip>                     # two t's, see below
 source ~/pyneat/bin/activate
 cd ~/object-detection && python3 src/app.py --config config.yaml
 ```
@@ -417,20 +417,52 @@ running. press Ctrl-C to stop.
 > [!CAUTION]
 > **Use `ssh -tt`, two t's.** Without a pty, Ctrl-C never reaches the app. It keeps
 > running invisibly holding the MLA and your next run fails.
-> Rescue: `ssh sima@192.168.137.193 pkill -f src/app.py`
+> Rescue: `ssh sima@<devkit-ip> pkill -f src/app.py`
 
 <br>
 
 <a id="step-10"></a>
-### 10. Watch it
+### 10. The result
+
+Every run writes an annotated video on the board at
+`~/object-detection/detections.mp4`, one entry per processed frame. Pull it across and
+play it:
+
+```bash
+scp sima@<devkit-ip>:~/object-detection/detections.mp4 .
+```
+
+It looks like this:
 
 <div align="center">
 
-## [https://localhost:9900](https://localhost:9900)
+<!-- ─────────────────────────────────────────────────────────────────────────
+     Embed the demo video here.
+     GitHub accepts a drag-and-dropped .mp4 directly in the README editor,
+     or paste the user-images.githubusercontent.com URL it generates.
+     ───────────────────────────────────────────────────────────────────── -->
+
+https://github.com/user-attachments/assets/REPLACE-WITH-YOUR-VIDEO
+
+<br>
+
+</div>
+
+<br>
+
+---
+
+<div align="center">
+
+### Or watch it live
+
+<h2><a href="https://localhost:9900">https://localhost:9900</a></h2>
 
 **select channel 0**
 
 </div>
+
+<br>
 
 > [!IMPORTANT]
 > **Open Insight and select the channel _before_ you start the app.** Video and
@@ -493,8 +525,8 @@ instead and let Insight draw its own overlay from the metadata stream.
 Pull the results back to your PC:
 
 ```powershell
-scp sima@192.168.137.193:~/object-detection/sandbox/detections.mp4 .
-scp -r sima@192.168.137.193:~/object-detection/sandbox/frames .
+scp sima@<devkit-ip>:~/object-detection/sandbox/detections.mp4 .
+scp -r sima@<devkit-ip>:~/object-detection/sandbox/frames .
 ```
 
 | Setting | Meaning |
@@ -592,7 +624,7 @@ sima-cli sdk neat
 Then **edit, copy, run, watch**, and repeat. From the repo root in WSL:
 
 ```bash
-scp -r object-detection/ sima@192.168.137.193:~
+scp -r object-detection/ sima@<devkit-ip>:~
 ```
 
 <details>
@@ -602,11 +634,11 @@ scp -r object-detection/ sima@192.168.137.193:~
 
 ```powershell
 # pull annotated frames back
-scp -r sima@192.168.137.193:~/object-detection/sandbox .
+scp -r sima@<devkit-ip>:~/object-detection/sandbox .
 
 # stop typing your password
 ssh-keygen -t ed25519 -C "devkit"
-type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh sima@192.168.137.193 "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
+type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh sima@<devkit-ip> "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
 ```
 
 ```bash
@@ -636,7 +668,7 @@ New boards often ship older firmware. **eLxr cannot be updated remotely**, so th
 Ethernet cable.
 
 ```bash
-ssh sima@192.168.137.123
+ssh sima@<devkit-ip>
 sima-cli login
 sima-cli update            # menu → "Update all packages to the latest"
 ```
@@ -665,7 +697,7 @@ Means pairing never installed it, almost always because networking was not fixed
 Re-run pairing from **WSL** now that it works:
 
 ```bash
-sima-cli sdk setup --devkit 192.168.137.123
+sima-cli sdk setup --devkit <devkit-ip>
 ```
 
 Still missing? Install by hand on the board. Match the version from `neat` in the
@@ -908,7 +940,7 @@ still uses `groups.video_input` and prints the conversion command.
 
 | | |
 |:--|:--|
-| **DevKit** | `192.168.137.123` (DHCP, changes), user `sima` |
+| **DevKit** | `<devkit-ip>` (DHCP, changes), user `sima` |
 | **Your PC, as the board sees it** | `192.168.137.1` |
 | **Insight** | `https://localhost:9900` |
 | **Workspace** | `/workspace` = `/root/workspace` = `\\wsl$\Ubuntu\root\workspace` |
