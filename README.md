@@ -46,8 +46,6 @@ git clone https://github.com/RizwanMunawar/sima-projects.git
 cd sima-projects
 ```
 
-[![Docs](https://img.shields.io/badge/docs-searchable_site-2A9D8F?style=for-the-badge&logo=materialformkdocs&logoColor=white)](https://rizwanmunawar.github.io/sima-projects/)
-
 Already have a DevKit set up? Jump to [Deploy and run](#step-9). Starting
 from a bare machine? Work through the steps in order.
 

@@ -247,6 +247,3 @@ sandbox/
 # Terminal captures
 logs.txt
 *.log
-
-# MkDocs build output
-site/
