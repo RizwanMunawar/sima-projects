@@ -232,22 +232,6 @@ sima-cli login                  # needs a community.sima.ai account
 You now have the app in [`object-detection/`](object-detection/) and the `sima` venv
 beside it. **Every command below runs from this directory.**
 
-> [!CAUTION]
-> **Clone after `sudo su -`, never before.** If you clone as your normal user and then
-> become root, `cd sima-projects` looks in `/root` and fails, and a venv created before
-> switching ends up somewhere else entirely.
-
-> **Note.** **Each new terminal needs three lines** to get back to a working state:
-> ```bash
-> sudo su -
-> cd sima-projects
-> source sima/bin/activate
-> ```
-
-> **Note.** To edit in VS Code on Windows, open `\\wsl$\Ubuntu\root\sima-projects`. If the
-> repo is private, clone with `gh repo clone RizwanMunawar/sima-projects` or an SSH
-> remote.
-
 <br>
 
 <a id="step-6"></a>
@@ -943,6 +927,7 @@ still uses `groups.video_input` and prints the conversion command.
 | **DevKit** | `<devkit-ip>` (DHCP, changes), user `sima` |
 | **Your PC, as the board sees it** | `192.168.137.1` |
 | **Insight** | `https://localhost:9900` |
+| **Repo** | `/root/sima-projects` in WSL = `\\wsl$\Ubuntu\root\sima-projects` from Windows |
 | **Workspace** | `/workspace` = `/root/workspace` = `\\wsl$\Ubuntu\root\workspace` |
 | **Container** | `ghcr.io-sima-neat-sdk-latest` |
 | **Board venv** | `~/pyneat` |
