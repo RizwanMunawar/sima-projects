@@ -1,7 +1,5 @@
 <div align="center">
 
-<br>
-
 # SiMa Neat SDK
 
 ### Live YOLO object detection on a Modalix DevKit
@@ -611,28 +609,24 @@ Then **edit, copy, run, watch**, and repeat. From the repo root in WSL:
 scp -r object-detection/ sima@<devkit-ip>:~
 ```
 
-<details>
-<summary><b>Handy extras</b></summary>
+| Task | Command | Run in |
+|:--|:--|:--|
+| Start the SDK container | `sima-cli sdk neat` | WSL |
+| Push the app to the board | `scp -r object-detection/ sima@<devkit-ip>:~` | WSL |
+| Pull the video back | `scp sima@<devkit-ip>:~/object-detection/detections.mp4 .` | WSL |
+| Pull the stills back | `scp -r sima@<devkit-ip>:~/object-detection/sandbox .` | WSL |
+| SSH to the board | `dk shell` | SDK container |
+| Check the sync method | `dk status` | SDK container |
+| Component versions and ports | `neat` | SDK container |
+| Run the app | `python3 src/app.py --config config.yaml` | DevKit |
+| Kill an orphaned run | `pkill -f src/app.py` | DevKit |
 
-<br>
-
-```powershell
-# pull annotated frames back
-scp -r sima@<devkit-ip>:~/object-detection/sandbox .
-
-# stop typing your password
-ssh-keygen -t ed25519 -C "devkit"
-type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh sima@<devkit-ip> "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
-```
+Tired of typing the password? Install a key once:
 
 ```bash
-# from inside the SDK container
-dk shell      # SSH to the DevKit
-dk status     # sync method and remote path
-neat          # component versions and ports
+ssh-keygen -t ed25519 -C "devkit"
+ssh-copy-id sima@<devkit-ip>
 ```
-
-</details>
 
 ---
 
@@ -698,8 +692,6 @@ sima-cli neat install core@v0.3.0
 > `-t pyneat` fetches only the wheel, which is not enough to run an app.
 
 </details>
-
----
 
 ## Troubleshooting
 
@@ -769,8 +761,6 @@ sima-cli neat install core@v0.3.0
 | Dropped frames | Raise `runtime.queue_depth`, keep `overflow_policy: keep_latest` |
 
 </details>
-
----
 
 ## How the app works
 
@@ -880,7 +870,6 @@ masks and keypoints need `decode_segmentation` or `decode_pose` in the frame han
 
 </details>
 
----
 
 ## Known issues
 
@@ -922,38 +911,54 @@ still uses `groups.video_input` and prints the conversion command.
 
 ## Reference
 
-| | |
-|:--|:--|
-| **DevKit** | `<devkit-ip>` (DHCP, changes), user `sima` |
-| **Your PC, as the board sees it** | `192.168.137.1` |
-| **Insight** | `https://localhost:9900` |
-| **Repo** | `/root/sima-projects` in WSL = `\\wsl$\Ubuntu\root\sima-projects` from Windows |
-| **Workspace** | `/workspace` = `/root/workspace` = `\\wsl$\Ubuntu\root\workspace` |
-| **Container** | `ghcr.io-sima-neat-sdk-latest` |
-| **Board venv** | `~/pyneat` |
-| **Playbooks** | `/neat-resources/apps-src/skills/` |
-| **Neat source** | `/neat-resources/core-src/` |
+### Addresses
 
-| Port | | |
+| What | Value | Notes |
 |:--|:--|:--|
-| `9000-9079` | UDP | Video to Insight |
-| `9100-9179` | UDP | Detection metadata |
+| DevKit | `<devkit-ip>`, user `sima` | DHCP, changes between reboots |
+| Your PC, as the board sees it | `192.168.137.1` | Fixed by ICS, use this for `insight.host` |
+| Insight web view | `https://localhost:9900` | Not `192.168.137.1:9900` |
+
+### Ports
+
+| Port | Protocol | Purpose |
+|:--|:--|:--|
+| `9000-9079` | UDP | Video to Insight, `9000 + channel` |
+| `9100-9179` | UDP | Detection metadata, `9100 + channel` |
 | `9900` | TCP | Insight web UI |
+| `8081` | TCP | Insight video UI |
 | `8554` | TCP | RTSP |
 | `8022` | TCP | Web SSH |
+
+### Paths
+
+| What | Where | Machine |
+|:--|:--|:--|
+| Repo | `/root/sima-projects` | WSL |
+| Repo, from Windows | `\\wsl$\Ubuntu\root\sima-projects` | Windows |
+| Shared workspace | `/workspace` | SDK container |
+| Shared workspace | `/root/workspace` | WSL |
+| SDK container name | `ghcr.io-sima-neat-sdk-latest` | WSL |
+| PyNeat venv | `~/pyneat` | DevKit |
+| App | `~/object-detection` | DevKit |
+| Output video | `~/object-detection/detections.mp4` | DevKit |
+| Playbooks | `/neat-resources/apps-src/skills/` | SDK container |
+| Neat source | `/neat-resources/core-src/` | SDK container |
+
+### Six rules that prevent most problems
+
+| # | Rule | Because |
+|:--|:--|:--|
+| 1 | Networking before pairing | Pairing installs over the network. No route means a silent no-op |
+| 2 | Docker before the SDK | The SDK **is** a container |
+| 3 | `cd` after `sudo su -` | `-` is a login shell, so it drops you in `/root` |
+| 4 | `insight.host = 192.168.137.1` | `127.0.0.1` means the board itself |
+| 5 | Raw `.h264`, never `.mp4` | Containers hit a demuxer bug in Neat 0.3.0 |
+| 6 | Always `ssh -tt` | Ctrl-C needs a pty to reach the app and release the MLA |
 
 ---
 
 <div align="center">
-
-## Six rules
-
-**1.** Networking before pairing · **2.** Docker before the SDK ·
-**3.** `cd` after `sudo su -` <br>
-**4.** `insight.host = 192.168.137.1` · **5.** Raw `.h264`, not `.mp4` ·
-**6.** Always `ssh -tt`
-
-<br>
 
 Built with the `neat-application-builder` playbook <br>
 API details verified against `/neat-resources/core-src`, not from memory

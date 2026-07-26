@@ -20,7 +20,7 @@ source:
   type: video                          # video | rtsp | usb
   uri: assets/videos/video-3.h264    # .h264 only, see note below
 
-  fps: 30                              # 0 = probe (raw .h264 cannot be probed)
+  fps: 25                              # 0 = probe (raw .h264 cannot be probed)
   width: 1920
   height: 1080
 
