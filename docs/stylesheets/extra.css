@@ -86,6 +86,38 @@
 }
 
 /* --------------------------------------------------------------------------
+   Layout width.
+
+   Material defaults to 61rem, about 976px, which leaves a lot of empty screen
+   on a wide monitor and squeezes the tables. 1440px is what Ultralytics use and
+   it suits a doc that is mostly two-column symptom-and-fix tables.
+   -------------------------------------------------------------------------- */
+
+.md-grid {
+  max-width: 1440px;
+}
+
+/* Anchors have to clear the sticky header, or a deep link lands with the
+   heading hidden behind it. */
+:root {
+  --anchor-offset: 120px;
+}
+
+html {
+  scroll-padding-top: var(--anchor-offset);
+}
+
+.md-typeset :is(h1, h2, h3, h4, h5, h6)[id] {
+  scroll-margin-top: var(--anchor-offset);
+}
+
+@media (max-width: 768px) {
+  :root {
+    --anchor-offset: 96px;
+  }
+}
+
+/* --------------------------------------------------------------------------
    Chrome: header, sidebar, footer. Flat, hairline separated, no shadows.
    -------------------------------------------------------------------------- */
 
@@ -124,37 +156,96 @@
   color: var(--gs-4);
 }
 
+/* --------------------------------------------------------------------------
+   Sidebar. Spacing does the work here: room to breathe between items, clear
+   separation between sections, and a hover pill so the target is obvious.
+   -------------------------------------------------------------------------- */
+
+.md-sidebar {
+  padding-top: 1.6rem;
+  width: 13rem;
+}
+
+.md-sidebar__inner {
+  padding-right: 1rem;
+}
+
 .md-nav {
-  font-size: 0.72rem;
+  font-size: 0.7rem;
+  line-height: 1.5;
 }
 
 .md-nav__title {
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--gs-fg);
+  color: var(--gs-4);
   box-shadow: none;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  padding: 0 0.8rem 0.6rem;
+  text-transform: uppercase;
 }
 
+.md-nav__list {
+  padding: 0;
+}
+
+.md-nav__item {
+  padding: 0;
+}
+
+/* Generous vertical rhythm, and a rounded hover target rather than bare text. */
 .md-nav__link {
+  border-radius: var(--gs-radius);
   color: var(--gs-5);
-  transition: color 100ms;
+  margin: 0.12rem 0;
+  padding: 0.42rem 0.7rem;
+  transition: background 90ms, color 90ms;
 }
 
 .md-nav__link:hover,
 .md-nav__link:focus {
+  background: var(--gs-1);
   color: var(--gs-fg);
 }
 
 .md-nav__link--active,
 .md-nav__link[aria-current="page"] {
+  background: var(--gs-1);
   color: var(--gs-fg);
   font-weight: 600;
 }
 
-/* Left rule on the sidebar, the way Vercel docs separate nav from content. */
-.md-sidebar--primary .md-nav--primary > .md-nav__list {
+/* Top-level groups get real air above them, which is what makes a long nav
+   readable at a glance. */
+.md-nav--primary .md-nav__item--section {
+  margin: 1.8rem 0 0.5rem;
+}
+
+.md-nav--primary .md-nav__item--section > .md-nav__link {
+  color: var(--gs-fg);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.3rem;
+  padding-left: 0.7rem;
+  pointer-events: none;
+  text-transform: uppercase;
+}
+
+.md-nav--primary .md-nav__item--section > .md-nav {
   border-left: var(--gs-border);
-  padding-left: 0.6rem;
+  margin-left: 0.7rem;
+  padding-left: 0.35rem;
+}
+
+/* Table of contents on the right, same treatment, lighter weight. */
+.md-sidebar--secondary .md-nav__title {
+  padding-bottom: 0.8rem;
+}
+
+.md-sidebar--secondary .md-nav__link {
+  margin: 0.06rem 0;
+  padding: 0.3rem 0.7rem;
 }
 
 .md-footer {
@@ -268,11 +359,79 @@
   border: var(--gs-border);
   border-radius: var(--gs-radius);
   box-shadow: none;
+  margin: 1.2em 0;
   overflow: hidden;
+}
+
+/* Cap tall blocks and scroll instead, so one long listing cannot push the rest
+   of the page out of reach. */
+.md-typeset div.highlight {
+  max-height: 26rem;
+  overflow-y: auto;
 }
 
 .md-typeset .highlight > pre {
   background: transparent;
+  margin: 0;
+}
+
+.md-typeset .highlight > pre > code {
+  padding: 0.9rem 1rem;
+}
+
+/* Slim scrollbars, so a scrolling block does not sprout a chunky OS bar. */
+.md-typeset div.highlight::-webkit-scrollbar,
+.md-typeset pre::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+
+.md-typeset div.highlight::-webkit-scrollbar-thumb,
+.md-typeset pre::-webkit-scrollbar-thumb {
+  background: var(--gs-2);
+  border-radius: 4px;
+}
+
+.md-typeset div.highlight::-webkit-scrollbar-thumb:hover,
+.md-typeset pre::-webkit-scrollbar-thumb:hover {
+  background: var(--gs-3);
+}
+
+/* Tabbed blocks, for anywhere a Python and a shell form sit side by side. */
+.md-typeset .tabbed-set {
+  border: var(--gs-border);
+  border-radius: var(--gs-radius);
+  margin: 1.2em 0;
+  overflow: hidden;
+}
+
+.md-typeset .tabbed-labels {
+  background: var(--gs-1);
+  border-bottom: var(--gs-border);
+  box-shadow: none;
+  padding: 0 0.4rem;
+}
+
+.md-typeset .tabbed-labels > label {
+  color: var(--gs-4);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  padding: 0.6rem 0.8rem;
+}
+
+.md-typeset .tabbed-labels > label:hover {
+  color: var(--gs-fg);
+}
+
+.md-typeset .tabbed-set > input:checked + label {
+  color: var(--gs-fg);
+  font-weight: 600;
+}
+
+.md-typeset .tabbed-content .highlight {
+  border: none;
+  border-radius: 0;
   margin: 0;
 }
 
