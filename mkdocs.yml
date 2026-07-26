@@ -35,14 +35,24 @@ theme:
         icon: material/weather-sunny
         name: Light mode
   features:
-    - navigation.instant
-    - navigation.tracking
+    # Top-level sections become a bar under the header, so the sidebar only ever
+    # shows the section you are in. This is what gives the nav its shape.
+    - navigation.tabs
+    - navigation.tabs.sticky
+    # Render only the visible part of the tree, so the sidebar stays short.
+    - navigation.prune
     - navigation.sections
-    - navigation.top
     - navigation.indexes
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.footer
+    - navigation.top
     - toc.follow
     - content.code.copy
     - content.code.annotate
+    - content.tabs.link
+    - content.tooltips
     - content.action.edit
     - search.suggest
     - search.highlight

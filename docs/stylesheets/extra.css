@@ -135,9 +135,76 @@ html {
   letter-spacing: -0.02em;
 }
 
+/* Section tabs under the header. Understated until hovered or current, which
+   is what keeps a nav bar from shouting. */
 .md-tabs {
   background: transparent;
   border-bottom: var(--gs-border);
+  color: var(--gs-5);
+}
+
+.md-tabs__list {
+  padding-left: 0;
+}
+
+.md-tabs__item {
+  padding: 0 0.1rem;
+}
+
+.md-tabs__link {
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  margin-top: 0.5rem;
+  opacity: 1;
+  padding: 0.35rem 0.7rem;
+  border-radius: var(--gs-radius);
+  color: var(--gs-5);
+  transition: background 90ms, color 90ms;
+}
+
+.md-tabs__link:hover {
+  background: var(--gs-1);
+  color: var(--gs-fg);
+}
+
+.md-tabs__link--active {
+  color: var(--gs-fg);
+  font-weight: 600;
+}
+
+/* Landing page badge rows and buttons. */
+.hero-badges {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin: 1.4rem 0 2rem;
+}
+
+.hero-badges p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+}
+
+.hero-badges img {
+  vertical-align: middle;
+}
+
+.md-typeset .md-button + .md-button {
+  margin-left: 0.4rem;
+}
+
+.md-typeset .md-button--primary {
+  background: var(--gs-fg);
+  border-color: var(--gs-fg);
+  color: var(--gs-bg);
+}
+
+.md-typeset .md-button--primary:hover {
+  background: var(--gs-bg);
+  color: var(--gs-fg);
 }
 
 .md-search__form {

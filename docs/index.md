@@ -2,8 +2,28 @@
 
 **Live YOLO object detection on a Modalix DevKit.**
 
+<div class="hero-badges" markdown>
+
+[![SiMa.ai](https://img.shields.io/badge/SiMa.ai-Modalix-000000?style=for-the-badge&labelColor=000)](https://sima.ai)
+[![Palette SDK](https://img.shields.io/badge/Palette_SDK-2.1.2-333333?style=for-the-badge&labelColor=000)](https://docs.sima.ai)
+[![Neat](https://img.shields.io/badge/Neat-0.3.0-666666?style=for-the-badge&labelColor=000)](https://docs.sima.ai)
+
+![Windows](https://img.shields.io/badge/Windows_11-eaeaea?style=flat-square&logo=windows11&logoColor=000&labelColor=fafafa)
+![WSL2](https://img.shields.io/badge/WSL2-eaeaea?style=flat-square&logo=ubuntu&logoColor=000&labelColor=fafafa)
+![Docker](https://img.shields.io/badge/Docker-eaeaea?style=flat-square&logo=docker&logoColor=000&labelColor=fafafa)
+![Python](https://img.shields.io/badge/Python_3.10+-eaeaea?style=flat-square&logo=python&logoColor=000&labelColor=fafafa)
+![YOLO](https://img.shields.io/badge/YOLO_26_·_11_·_v8_·_v5-eaeaea?style=flat-square&labelColor=fafafa)
+
+![Setup](https://img.shields.io/badge/setup-~2_hours-fafafa?style=flat-square&labelColor=fafafa)
+![Download](https://img.shields.io/badge/download-12.6_GB-fafafa?style=flat-square&labelColor=fafafa)
+
+</div>
+
 A setup guide and a working detector app, both written while actually bringing up a
 DevKit. Every warning in these pages marks somewhere real time was lost.
+
+[Start the setup](setup/index.md){ .md-button .md-button--primary }
+[Deploy and run](app/deploy.md){ .md-button }
 
 ---
 
@@ -12,15 +32,15 @@ DevKit. Every warning in these pages marks somewhere real time was lost.
 Almost every problem in this stack comes from running a command in the wrong place.
 
 ```
-   ┌──────────────┐        ┌──────────────────┐        ┌───────────────┐
-   │  WINDOWS PC  │        │   WSL2 · UBUNTU  │        │    DEVKIT     │
-   ├──────────────┤        ├──────────────────┤        ├───────────────┤
-   │  Chrome      │◄──────►│  sima-cli        │◄──────►│  MLA          │
-   │  scp / ssh   │ :9900  │  Docker + SDK    │  UDP   │  your app     │
-   │              │        │  Neat Insight    │ 9000/  │               │
-   │              │        │                  │ 9100   │               │
-   └──────────────┘        └──────────────────┘        └───────────────┘
-        viewer                build + receive             inference
+┌──────────────┐        ┌──────────────────┐        ┌───────────────┐
+│  WINDOWS PC  │        │   WSL2 · UBUNTU  │        │    DEVKIT     │
+├──────────────┤        ├──────────────────┤        ├───────────────┤
+│  Chrome      │◄──────►│  sima-cli        │◄──────►│  MLA          │
+│  scp / ssh   │ :9900  │  Docker + SDK    │  UDP   │  your app     │
+│              │        │  Neat Insight    │ 9000/  │               │
+│              │        │                  │ 9100   │               │
+└──────────────┘        └──────────────────┘        └───────────────┘
+      viewer                build + receive             inference
 ```
 
 | Machine | Role |
