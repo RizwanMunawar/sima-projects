@@ -46,7 +46,7 @@ git clone https://github.com/RizwanMunawar/sima-projects.git
 cd sima-projects
 ```
 
-📖 **[Full documentation](https://rizwanmunawar.github.io/sima-projects/)** for the same guide as a searchable site.
+[![Docs](https://img.shields.io/badge/docs-searchable_site-2A9D8F?style=for-the-badge&logo=materialformkdocs&logoColor=white)](https://rizwanmunawar.github.io/sima-projects/)
 
 Already have a DevKit set up? Jump to [Deploy and run](#step-9). Starting
 from a bare machine? Work through the steps in order.
@@ -58,51 +58,47 @@ from a bare machine? Work through the steps in order.
 Who does what, and in which order. **Click any step to jump to it.**
 
 ```
-       WINDOWS PC                  WSL2 · UBUNTU              MODALIX DEVKIT
-   ═══════════════════        ═══════════════════════      ═══════════════════
+┌───────────────────────────────────────────────────────────────────────────────┐
+│      WINDOWS PC        │       WSL2 · UBUNTU        │     MODALIX DEVKIT      │
+├────────────────────────┼────────────────────────────┼─────────────────────────┤
+├─────────────────────────────── ONE-TIME SETUP ────────────────────────────────┤
+│                        │                            │                         │
+│ 1  cable up  ══════════╪════════════════════════════╪═══►  DHCP address       │
+│      USB + Ethernet    │                            │      board powers on    │
+│                        │                            │                         │
+│ 2  wsl --install ══════╪═══►  Ubuntu ready          │                         │
+│                        │                            │                         │
+│ 3  .wslconfig  ════════╪═══►  WSL takes .137.1  ════╪═══►  now reachable      │
+│      mirrored mode     │        same subnet         │      both directions    │
+│                        │                            │                         │
+│ 4  firewall rules ═════╪═══►  UDP 9000/9100 open    │                         │
+│      Hyper-V inbound   │        ready to receive    │                         │
+│                        │                            │                         │
+│                        │ 5  git clone + sima-cli    │                         │
+│                        │      repo + venv           │                         │
+│                        │                            │                         │
+│                        │ 6  docker + nfs            │                         │
+│                        │      the SDK is a container│                         │
+│                        │                            │                         │
+│                        │ 7  sima-cli sdk setup ═════╪═►  pyneat + runtime     │
+│                        │      12.6 GB image         │      installed on board │
+│                        │                            │                         │
+│                        │ 8  download model          │                         │
+│                        │      yolo26m .tar.gz       │                         │
+│                        │                            │                         │
+├────────────────────────────── EVERY RUN, REPEAT ──────────────────────────────┤
+│                        │                            │                         │
+│                        │ 9  scp object-detection/ ══╪═►  ~/object-detection   │
+│                        │      edit → copy → run     │      python3 src/app.py │
+│                        │                            │                         │
+│10  browser  ◄══════════╪════  Insight  ◄════════════╪═══╡ VideoSender         │
+│      localhost:9900    │        live, while running │      MetadataSender     │
+│                        │                            │                         │
+│10  scp  ◄══════════════╪════════════════════════════╪═══╡ VideoWriter         │
+│      keeps a copy      │        detections.mp4      │      every frame        │
+│                        │                            │                         │
+└────────────────────────┴────────────────────────────┴─────────────────────────┘
 
-   ┌───────────────────────────── ONE-TIME SETUP ─────────────────────────────┐
-
-    1  cable up  ══════════════════════════════════════════►  DHCP address
-         USB + Ethernet                                       board powers on
-
-    2  wsl --install ─────────►  Ubuntu ready
-
-    3  .wslconfig  ───────────►  WSL takes .137.1  ◄════════►  now reachable
-         mirrored networking       same subnet                 both directions
-
-    4  firewall rules ────────►  UDP 9000/9100 open
-         Hyper-V inbound           ready to receive
-
-                                 5  git clone + sima-cli
-                                      repo + venv
-
-                                 6  docker + nfs
-                                      the SDK is a container
-
-                                 7  sima-cli sdk setup ════►  pyneat + runtime
-                                      12.6 GB image            installed on board
-
-                                 8  download model
-                                      yolo26m .tar.gz
-
-   └──────────────────────────────────────────────────────────────────────────┘
-
-   ┌────────────────────────── EVERY RUN, REPEAT ─────────────────────────────┐
-
-    9  scp -r object-detection/ ═════════════════════════►  ~/object-detection
-         edit → copy → run                                  python3 src/app.py
-                                                                   │
-                                                                   ▼
-                                                            MLA inference
-                                                            ┌───────────────┐
-   10  browser  ◄──── Insight ◄──── UDP 9000 + 9100 ◄═══════╡ VideoSender   │
-         localhost:9900   live, while it runs               │ MetadataSender│
-                                                            ├───────────────┤
-   10  scp ◄──────────────── detections.mp4 ◄═══════════════╡ VideoWriter   │
-         keeps a copy         every frame, on the board     └───────────────┘
-
-   └──────────────────────────────────────────────────────────────────────────┘
 ```
 
 | Step | Runs on | Time | Notes |

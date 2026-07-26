@@ -4,31 +4,47 @@ Eight one-time steps, from a bare Windows PC to a paired DevKit with a model on 
 **Follow them in order.** Several steps fail silently if done too early.
 
 ```
-       WINDOWS PC                  WSL2 · UBUNTU              MODALIX DEVKIT
-   ═══════════════════        ═══════════════════════      ═══════════════════
+┌───────────────────────────────────────────────────────────────────────────────┐
+│      WINDOWS PC        │       WSL2 · UBUNTU        │     MODALIX DEVKIT      │
+├────────────────────────┼────────────────────────────┼─────────────────────────┤
+├─────────────────────────────── ONE-TIME SETUP ────────────────────────────────┤
+│                        │                            │                         │
+│ 1  cable up  ══════════╪════════════════════════════╪═══►  DHCP address       │
+│      USB + Ethernet    │                            │      board powers on    │
+│                        │                            │                         │
+│ 2  wsl --install ══════╪═══►  Ubuntu ready          │                         │
+│                        │                            │                         │
+│ 3  .wslconfig  ════════╪═══►  WSL takes .137.1  ════╪═══►  now reachable      │
+│      mirrored mode     │        same subnet         │      both directions    │
+│                        │                            │                         │
+│ 4  firewall rules ═════╪═══►  UDP 9000/9100 open    │                         │
+│      Hyper-V inbound   │        ready to receive    │                         │
+│                        │                            │                         │
+│                        │ 5  git clone + sima-cli    │                         │
+│                        │      repo + venv           │                         │
+│                        │                            │                         │
+│                        │ 6  docker + nfs            │                         │
+│                        │      the SDK is a container│                         │
+│                        │                            │                         │
+│                        │ 7  sima-cli sdk setup ═════╪═►  pyneat + runtime     │
+│                        │      12.6 GB image         │      installed on board │
+│                        │                            │                         │
+│                        │ 8  download model          │                         │
+│                        │      yolo26m .tar.gz       │                         │
+│                        │                            │                         │
+├────────────────────────────── EVERY RUN, REPEAT ──────────────────────────────┤
+│                        │                            │                         │
+│                        │ 9  scp object-detection/ ══╪═►  ~/object-detection   │
+│                        │      edit → copy → run     │      python3 src/app.py │
+│                        │                            │                         │
+│10  browser  ◄══════════╪════  Insight  ◄════════════╪═══╡ VideoSender         │
+│      localhost:9900    │        live, while running │      MetadataSender     │
+│                        │                            │                         │
+│10  scp  ◄══════════════╪════════════════════════════╪═══╡ VideoWriter         │
+│      keeps a copy      │        detections.mp4      │      every frame        │
+│                        │                            │                         │
+└────────────────────────┴────────────────────────────┴─────────────────────────┘
 
-    1  cable up  ══════════════════════════════════════════►  DHCP address
-         USB + Ethernet                                       board powers on
-
-    2  wsl --install ─────────►  Ubuntu ready
-
-    3  .wslconfig  ───────────►  WSL takes .137.1  ◄════════►  now reachable
-         mirrored networking       same subnet                 both directions
-
-    4  firewall rules ────────►  UDP 9000/9100 open
-         Hyper-V inbound           ready to receive
-
-                                 5  git clone + sima-cli
-                                      repo + venv
-
-                                 6  docker + nfs
-                                      the SDK is a container
-
-                                 7  sima-cli sdk setup ════►  pyneat + runtime
-                                      12.6 GB image            installed on board
-
-                                 8  download model
-                                      yolo26m .tar.gz
 ```
 
 | Step | Runs on | Time |
