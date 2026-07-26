@@ -20,9 +20,11 @@ source:
   type: video                          # video | rtsp | usb
   uri: assets/videos/video-3.h264    # .h264 only, see note below
 
-  fps: 25                              # 0 = probe (raw .h264 cannot be probed)
-  width: 1920
-  height: 1080
+  # Leave these at 0. For .h264 the app reads the real geometry out of the
+  # stream's SPS, and the stream always wins over anything set here.
+  fps: 0
+  width: 0
+  height: 0
 
   rtsp:
     codec: h264                        # h264 | mjpeg

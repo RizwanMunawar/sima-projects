@@ -764,9 +764,230 @@ def probe_opencv(uri: str) -> tuple[int, int, int]:
     return width, height, fps
 
 
+class BitReader:
+    """Minimal MSB-first bit reader with Exp-Golomb support, for SPS parsing."""
+
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+        self.pos = 0
+
+    def u(self, n: int) -> int:
+        value = 0
+        for _ in range(n):
+            byte = self.pos >> 3
+            if byte >= len(self.data):
+                raise ValueError("SPS truncated")
+            bit = (self.data[byte] >> (7 - (self.pos & 7))) & 1
+            value = (value << 1) | bit
+            self.pos += 1
+        return value
+
+    def ue(self) -> int:
+        zeros = 0
+        while self.u(1) == 0:
+            zeros += 1
+            if zeros > 32:
+                raise ValueError("SPS Exp-Golomb overrun")
+        return (1 << zeros) - 1 + (self.u(zeros) if zeros else 0)
+
+    def se(self) -> int:
+        k = self.ue()
+        return (k + 1) // 2 if k % 2 else -(k // 2)
+
+
+def unescape_rbsp(data: bytes) -> bytes:
+    """Strip H.264 emulation prevention bytes (00 00 03 -> 00 00)."""
+    out = bytearray()
+    zeros = 0
+    for byte in data:
+        if zeros >= 2 and byte == 0x03:
+            zeros = 0
+            continue
+        out.append(byte)
+        zeros = zeros + 1 if byte == 0x00 else 0
+    return bytes(out)
+
+
+# Profiles whose SPS carries the chroma_format_idc block.
+HIGH_PROFILES = {100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135}
+
+
+def skip_scaling_list(reader: BitReader, size: int) -> None:
+    last = next_scale = 8
+    for _ in range(size):
+        if next_scale:
+            next_scale = (last + reader.se() + 256) % 256
+        last = last if next_scale == 0 else next_scale
+
+
+def parse_sps(rbsp: bytes) -> tuple[int, int, int]:
+    """Decode width, height and frame rate from one SPS payload.
+
+    Args:
+        rbsp: SPS NAL payload with the header byte removed and emulation
+            prevention bytes already stripped.
+
+    Returns:
+        A ``(width, height, fps)`` triple. ``fps`` is 0 when the stream carries
+        no VUI timing information, which is common for camera captures and for
+        anything remuxed with ``-c:v copy``.
+    """
+    r = BitReader(rbsp)
+    profile_idc = r.u(8)
+    r.u(8)  # constraint flags and reserved bits
+    r.u(8)  # level_idc
+    r.ue()  # seq_parameter_set_id
+
+    chroma_format_idc = 1
+    separate_colour_plane = 0
+    if profile_idc in HIGH_PROFILES:
+        chroma_format_idc = r.ue()
+        if chroma_format_idc == 3:
+            separate_colour_plane = r.u(1)
+        r.ue()  # bit_depth_luma_minus8
+        r.ue()  # bit_depth_chroma_minus8
+        r.u(1)  # qpprime_y_zero_transform_bypass_flag
+        if r.u(1):  # seq_scaling_matrix_present_flag
+            for i in range(8 if chroma_format_idc != 3 else 12):
+                if r.u(1):
+                    skip_scaling_list(r, 16 if i < 6 else 64)
+
+    r.ue()  # log2_max_frame_num_minus4
+    pic_order_cnt_type = r.ue()
+    if pic_order_cnt_type == 0:
+        r.ue()  # log2_max_pic_order_cnt_lsb_minus4
+    elif pic_order_cnt_type == 1:
+        r.u(1)  # delta_pic_order_always_zero_flag
+        r.se()  # offset_for_non_ref_pic
+        r.se()  # offset_for_top_to_bottom_field
+        for _ in range(r.ue()):
+            r.se()  # offset_for_ref_frame[i]
+
+    r.ue()  # max_num_ref_frames
+    r.u(1)  # gaps_in_frame_num_value_allowed_flag
+    width_mbs = r.ue() + 1
+    height_map_units = r.ue() + 1
+    frame_mbs_only = r.u(1)
+    if not frame_mbs_only:
+        r.u(1)  # mb_adaptive_frame_field_flag
+    r.u(1)  # direct_8x8_inference_flag
+
+    crop_left = crop_right = crop_top = crop_bottom = 0
+    if r.u(1):  # frame_cropping_flag
+        crop_left, crop_right = r.ue(), r.ue()
+        crop_top, crop_bottom = r.ue(), r.ue()
+
+    width = width_mbs * 16
+    height = (2 - frame_mbs_only) * height_map_units * 16
+    if chroma_format_idc == 0 or separate_colour_plane:
+        unit_x, unit_y = 1, 2 - frame_mbs_only
+    else:
+        sub_w, sub_h = {1: (2, 2), 2: (2, 1), 3: (1, 1)}.get(chroma_format_idc, (2, 2))
+        unit_x, unit_y = sub_w, sub_h * (2 - frame_mbs_only)
+    width -= unit_x * (crop_left + crop_right)
+    height -= unit_y * (crop_top + crop_bottom)
+
+    fps = 0
+    if r.u(1):  # vui_parameters_present_flag
+        try:
+            fps = parse_vui_fps(r)
+        except ValueError:
+            fps = 0
+    return width, height, fps
+
+
+def parse_vui_fps(r: BitReader) -> int:
+    """Read timing_info out of a VUI block. Returns 0 when it is absent."""
+    if r.u(1):  # aspect_ratio_info_present_flag
+        if r.u(8) == 255:  # Extended_SAR
+            r.u(16)
+            r.u(16)
+    if r.u(1):  # overscan_info_present_flag
+        r.u(1)
+    if r.u(1):  # video_signal_type_present_flag
+        r.u(3)
+        r.u(1)
+        if r.u(1):  # colour_description_present_flag
+            r.u(24)
+    if r.u(1):  # chroma_loc_info_present_flag
+        r.ue()
+        r.ue()
+    if not r.u(1):  # timing_info_present_flag
+        return 0
+    num_units_in_tick = r.u(32)
+    time_scale = r.u(32)
+    if num_units_in_tick <= 0 or time_scale <= 0:
+        return 0
+    return int(round(time_scale / (2.0 * num_units_in_tick)))
+
+
+def probe_h264_sps(path: str, scan_bytes: int = 4 << 20) -> tuple[int, int, int]:
+    """Read geometry straight out of the first SPS in an Annex-B stream.
+
+    ``ffprobe`` and OpenCV both routinely fail on raw elementary streams, which
+    is what pushes people into hand-writing ``source.width`` and ``source.height``
+    in the config. A wrong value there is silent and fatal: the source caps
+    filter stops negotiating and the run reports zero frames after a pull
+    timeout. The bytes on disk are authoritative, so read them.
+
+    Args:
+        path: Path to a raw Annex-B H.264 file.
+        scan_bytes: How much of the head of the file to search.
+
+    Returns:
+        A ``(width, height, fps)`` triple, or zeros if no SPS was found.
+    """
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(scan_bytes)
+    except OSError:
+        return 0, 0, 0
+
+    pos = 0
+    while True:
+        idx = head.find(b"\x00\x00\x01", pos)
+        if idx < 0:
+            return 0, 0, 0
+        start = idx + 3
+        if start >= len(head):
+            return 0, 0, 0
+        if head[start] & 0x1F == 7:  # nal_unit_type 7 == SPS
+            end = head.find(b"\x00\x00\x01", start)
+            payload = head[start + 1 : end if end > 0 else len(head)]
+            try:
+                return parse_sps(unescape_rbsp(payload))
+            except (ValueError, IndexError):
+                return 0, 0, 0
+        pos = start
+
+
 def resolve_source_geometry(cfg: AppConfig) -> tuple[int, int, int]:
     """Return (width, height, fps). Config values win; anything left at 0 is probed."""
     width, height, fps = cfg.source_width, cfg.source_height, cfg.source_fps
+
+    if cfg.source_type == "video" and is_elementary_h264(cfg.source_uri):
+        sps_w, sps_h, sps_fps = probe_h264_sps(cfg.source_uri)
+        if sps_w > 0 and sps_h > 0:
+            if (width > 0 and width != sps_w) or (height > 0 and height != sps_h):
+                print(
+                    f"[warn] config says {width}x{height} but the stream's SPS says "
+                    f"{sps_w}x{sps_h}. Using the stream.\n"
+                    f"       Fix source.width and source.height in config.yaml, or set "
+                    f"them to 0 to always read the stream."
+                )
+            width, height = sps_w, sps_h
+        if sps_fps > 0:
+            if fps > 0 and fps != sps_fps:
+                print(
+                    f"[warn] config says {fps} fps but the stream is {sps_fps} fps. "
+                    f"Using the stream.\n"
+                    f"       Set source.fps to 0 in config.yaml to always read the stream."
+                )
+            fps = sps_fps
+        if fps <= 0:
+            fps = 25
+            print("[warn] stream carries no frame rate, assuming 25. Set source.fps to override.")
+        return width, height, fps
 
     if cfg.source_type == "usb":
         # libcamera is queried at build time, not probeable here, so fall back to
@@ -786,13 +1007,12 @@ def resolve_source_geometry(cfg: AppConfig) -> tuple[int, int, int]:
         fps = fps if fps > 0 else cv_fps
 
     if width <= 0 or height <= 0 or fps <= 0:
-        hint = ""
-        if cfg.source_type == "video" and is_elementary_h264(cfg.source_uri):
-            hint = (
-                "\nRaw H.264 elementary streams carry no container metadata, so "
-                "geometry usually\ncannot be probed. Set them explicitly in config.yaml:\n"
-                "  source:\n    width: 1920\n    height: 1080\n    fps: 25"
-            )
+        # Elementary H.264 never reaches here: that path reads the SPS and
+        # returns above.
+        hint = (
+            "\nNeither ffprobe nor OpenCV could read this source. Set the values "
+            "explicitly:\n  source:\n    width: 1920\n    height: 1080\n    fps: 25"
+        )
         missing = []
         if width <= 0 or height <= 0:
             missing.append("source.width and source.height")
@@ -838,13 +1058,13 @@ def make_elementary_h264_source(cfg: AppConfig, width: int, height: int, fps: in
 
     Args:
         cfg: Application configuration, for ``source_uri``.
-        width: Frame width for the output caps filter.
-        height: Frame height for the output caps filter.
-        fps: Frame rate for the output caps filter.
+        width: Unused. Geometry comes from the stream, see the caps note below.
+        height: Unused.
+        fps: Unused.
 
     Returns:
-        A ``pyneat.Graph`` of FileInput, H264Parse, Queue, SimaDecode and
-        optionally CapsRaw, producing NV12 frames.
+        A ``pyneat.Graph`` of FileInput, H264Parse, Queue, SimaDecode and a
+        format-only CapsRaw, producing NV12 frames.
     """
     graph = pyneat.Graph("file_source")
     graph.add(pyneat.nodes.file_input(cfg.source_uri))
@@ -858,12 +1078,19 @@ def make_elementary_h264_source(cfg: AppConfig, width: int, height: int, fps: in
     dec.raw_output = False
     graph.add(pyneat.nodes.sima_decode(dec))
 
-    if width > 0 and height > 0 and fps > 0:
-        # nodes.caps_raw takes the format as a plain string, unlike the *Options
-        # `format` properties which accept the pyneat.Format enum.
-        graph.add(
-            pyneat.nodes.caps_raw("NV12", width, height, fps, pyneat.CapsMemory.Any)
-        )
+    # Format only. CapsRawNode emits a field for every argument greater than
+    # zero, so passing width, height and fps here would add
+    # `width=W,height=H,framerate=F/1` to the capsfilter. A raw elementary
+    # stream has no container to state its frame rate, so h264parse publishes
+    # `framerate=0/1`, which cannot intersect with any fixed rate. Negotiation
+    # then fails upstream of the appsink and the run reports zero frames after
+    # a pull timeout, with nothing on the bus to explain it. The decoder already
+    # emits NV12 in system memory at the stream's own geometry, so there is
+    # nothing left to constrain.
+    #
+    # nodes.caps_raw takes the format as a plain string, unlike the *Options
+    # `format` properties which accept the pyneat.Format enum.
+    graph.add(pyneat.nodes.caps_raw("NV12", -1, -1, -1, pyneat.CapsMemory.Any))
     return graph
 
 
