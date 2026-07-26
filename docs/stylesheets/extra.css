@@ -1,0 +1,266 @@
+/* ==========================================================================
+   Per-language code blocks and table styling.
+
+   Every fenced block gets a coloured spine and a matching tint, so you can tell
+   at a glance which machine a command belongs to without reading the title:
+
+     bash        teal     WSL, the SDK container, the DevKit
+     powershell  blue     Windows
+     yaml        purple   config.yaml
+     python      amber    application code
+     cpp         red      quoted Neat Library source
+     text        grey     terminal output, diagrams
+
+   Material exposes the language as a class on the .highlight wrapper, which is
+   what these rules hook into.
+   ========================================================================== */
+
+:root {
+  --lang-bash: #2a9d8f;
+  --lang-powershell: #457b9d;
+  --lang-yaml: #8e5bd0;
+  --lang-python: #d99000;
+  --lang-cpp: #e63946;
+  --lang-text: #7a8288;
+
+  --lang-tint: 8%;
+}
+
+/* Dark mode is Dracula. Material only ships `default` and `slate` as schemes,
+   so the palette is applied by overriding its variables here.
+   https://draculatheme.com/contribute */
+[data-md-color-scheme="slate"] {
+  --dracula-bg: #282a36;
+  --dracula-current: #44475a;
+  --dracula-fg: #f8f8f2;
+  --dracula-comment: #6272a4;
+  --dracula-cyan: #8be9fd;
+  --dracula-green: #50fa7b;
+  --dracula-orange: #ffb86c;
+  --dracula-pink: #ff79c6;
+  --dracula-purple: #bd93f9;
+  --dracula-red: #ff5555;
+  --dracula-yellow: #f1fa8c;
+
+  --md-default-bg-color: var(--dracula-bg);
+  --md-default-fg-color: var(--dracula-fg);
+  --md-default-fg-color--light: #d5d6e0;
+  --md-default-fg-color--lighter: #8f93a8;
+  --md-default-fg-color--lightest: #3d4051;
+
+  --md-primary-fg-color: var(--dracula-purple);
+  --md-primary-bg-color: var(--dracula-bg);
+  --md-accent-fg-color: var(--dracula-pink);
+
+  --md-code-bg-color: #21222c;
+  --md-code-fg-color: var(--dracula-fg);
+  --md-typeset-a-color: var(--dracula-cyan);
+
+  /* Syntax colours, so highlighting matches the palette rather than Material's
+     default slate scheme. */
+  --md-code-hl-keyword-color: var(--dracula-pink);
+  --md-code-hl-function-color: var(--dracula-green);
+  --md-code-hl-string-color: var(--dracula-yellow);
+  --md-code-hl-number-color: var(--dracula-purple);
+  --md-code-hl-comment-color: var(--dracula-comment);
+  --md-code-hl-name-color: var(--dracula-fg);
+  --md-code-hl-operator-color: var(--dracula-pink);
+  --md-code-hl-punctuation-color: var(--dracula-fg);
+  --md-code-hl-constant-color: var(--dracula-purple);
+  --md-code-hl-variable-color: var(--dracula-orange);
+  --md-code-hl-special-color: var(--dracula-pink);
+
+  /* Language spines, drawn from the same palette. */
+  --lang-bash: var(--dracula-green);
+  --lang-powershell: var(--dracula-cyan);
+  --lang-yaml: var(--dracula-purple);
+  --lang-python: var(--dracula-yellow);
+  --lang-cpp: var(--dracula-red);
+  --lang-text: var(--dracula-comment);
+
+  --lang-tint: 12%;
+}
+
+/* --------------------------------------------------------------------------
+   Code blocks
+   -------------------------------------------------------------------------- */
+
+.md-typeset .highlight,
+.md-typeset .highlighttable {
+  border-left: 4px solid var(--lang-text);
+  border-radius: 0 0.25rem 0.25rem 0;
+  overflow: hidden;
+}
+
+.md-typeset .highlight > pre,
+.md-typeset .highlight > .filename {
+  border-radius: 0;
+}
+
+/* Spine colour per language. */
+.md-typeset .language-bash,
+.md-typeset .language-sh,
+.md-typeset .language-shell    { border-left-color: var(--lang-bash); }
+.md-typeset .language-powershell,
+.md-typeset .language-ps1      { border-left-color: var(--lang-powershell); }
+.md-typeset .language-yaml,
+.md-typeset .language-yml      { border-left-color: var(--lang-yaml); }
+.md-typeset .language-python,
+.md-typeset .language-py       { border-left-color: var(--lang-python); }
+.md-typeset .language-cpp,
+.md-typeset .language-c        { border-left-color: var(--lang-cpp); }
+
+/* A faint wash of the same hue, so blocks are distinguishable when several
+   sit together. color-mix keeps it readable in both schemes. */
+.md-typeset .language-bash > pre > code,
+.md-typeset .language-sh > pre > code,
+.md-typeset .language-shell > pre > code {
+  background: color-mix(in srgb, var(--lang-bash) var(--lang-tint), transparent);
+}
+.md-typeset .language-powershell > pre > code,
+.md-typeset .language-ps1 > pre > code {
+  background: color-mix(in srgb, var(--lang-powershell) var(--lang-tint), transparent);
+}
+.md-typeset .language-yaml > pre > code,
+.md-typeset .language-yml > pre > code {
+  background: color-mix(in srgb, var(--lang-yaml) var(--lang-tint), transparent);
+}
+.md-typeset .language-python > pre > code,
+.md-typeset .language-py > pre > code {
+  background: color-mix(in srgb, var(--lang-python) var(--lang-tint), transparent);
+}
+.md-typeset .language-cpp > pre > code,
+.md-typeset .language-c > pre > code {
+  background: color-mix(in srgb, var(--lang-cpp) var(--lang-tint), transparent);
+}
+
+/* The title bar from title="..." picks up the language colour, so the machine
+   label reads as part of the same object. */
+.md-typeset .highlight .filename {
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  background: color-mix(in srgb, var(--lang-text) 14%, transparent);
+  color: var(--md-default-fg-color--light);
+}
+.md-typeset .language-bash .filename,
+.md-typeset .language-sh .filename,
+.md-typeset .language-shell .filename {
+  background: color-mix(in srgb, var(--lang-bash) 18%, transparent);
+  color: var(--lang-bash);
+}
+.md-typeset .language-powershell .filename,
+.md-typeset .language-ps1 .filename {
+  background: color-mix(in srgb, var(--lang-powershell) 18%, transparent);
+  color: var(--lang-powershell);
+}
+.md-typeset .language-yaml .filename,
+.md-typeset .language-yml .filename {
+  background: color-mix(in srgb, var(--lang-yaml) 18%, transparent);
+  color: var(--lang-yaml);
+}
+.md-typeset .language-python .filename,
+.md-typeset .language-py .filename {
+  background: color-mix(in srgb, var(--lang-python) 18%, transparent);
+  color: var(--lang-python);
+}
+.md-typeset .language-cpp .filename,
+.md-typeset .language-c .filename {
+  background: color-mix(in srgb, var(--lang-cpp) 18%, transparent);
+  color: var(--lang-cpp);
+}
+
+/* Diagrams and terminal output are plain text. Drop the tint so ASCII art sits
+   on the normal code background. */
+.md-typeset .language-text > pre > code,
+.md-typeset pre > code:not([class*="language-"]) {
+  background: transparent;
+}
+
+/* Inline code, so it reads as code rather than as emphasis. */
+.md-typeset code {
+  border-radius: 0.2rem;
+  padding: 0.1em 0.35em;
+}
+
+/* --------------------------------------------------------------------------
+   Tables
+
+   Most pages here are symptom-and-fix or key-and-meaning tables, so they carry
+   as much weight as the prose and deserve to be scannable.
+   -------------------------------------------------------------------------- */
+
+.md-typeset table:not([class]) {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.25rem;
+  box-shadow: none;
+  font-size: 0.76rem;
+  overflow: hidden;
+}
+
+.md-typeset table:not([class]) th {
+  background: color-mix(in srgb, var(--md-primary-fg-color) 12%, transparent);
+  border-bottom: 2px solid
+    color-mix(in srgb, var(--md-primary-fg-color) 45%, transparent);
+  color: var(--md-default-fg-color);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.md-typeset table:not([class]) tr:nth-child(even) > td {
+  background: color-mix(in srgb, var(--md-default-fg-color) 3%, transparent);
+}
+
+.md-typeset table:not([class]) tr:hover > td {
+  background: color-mix(in srgb, var(--md-accent-fg-color) 10%, transparent);
+  transition: background 120ms;
+}
+
+.md-typeset table:not([class]) td {
+  border-top: none;
+  vertical-align: top;
+}
+
+/* The first column is almost always the key, symptom or step. Weight it. */
+.md-typeset table:not([class]) td:first-child {
+  font-weight: 600;
+}
+
+/* Inline code inside a table should not out-shout the row. */
+.md-typeset table:not([class]) code {
+  font-size: 0.9em;
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------------
+   Admonitions and small touches
+   -------------------------------------------------------------------------- */
+
+.md-typeset .admonition,
+.md-typeset details {
+  border-radius: 0.25rem;
+  border-width: 0 0 0 4px;
+  box-shadow: none;
+}
+
+.md-typeset .admonition > .admonition-title,
+.md-typeset details > summary {
+  font-weight: 700;
+}
+
+/* Keep wide ASCII diagrams scrollable rather than letting them widen the page. */
+.md-typeset pre {
+  overflow-x: auto;
+}
+
+/* Section headings get a little more air above them than Material's default. */
+.md-typeset h2 {
+  margin-top: 2.2em;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+}

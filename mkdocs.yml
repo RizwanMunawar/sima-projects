@@ -6,9 +6,27 @@ repo_name: RizwanMunawar/sima-projects
 edit_uri: edit/main/docs/
 
 theme:
+  # Must be `material`. Dracula is a colour palette rather than a theme, so it
+  # is applied by overriding Material's CSS variables in stylesheets/extra.css.
   name: material
   icon:
     repo: fontawesome/brands/github
+  palette:
+    # `scheme` only accepts `default` and `slate`. Anything else aborts the build.
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: cyan
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: cyan
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
   features:
     - navigation.instant
     - navigation.tracking
@@ -39,6 +57,9 @@ markdown_extensions:
       alternate_style: true
   - pymdownx.highlight:
       anchor_linenums: true
+      # Adds language-<lang> to the .highlight wrapper, which docs/stylesheets
+      # /extra.css uses to colour each block by language.
+      pygments_lang_class: true
   - pymdownx.inlinehilite
   - pymdownx.snippets
   - pymdownx.keys
