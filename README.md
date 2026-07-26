@@ -25,7 +25,7 @@
 
 ---
 
-## 🎯 What this is
+## What this is
 
 A **setup guide** and a **working detector app**, both written while actually bringing
 up a DevKit. Every warning marks somewhere real time was lost.
@@ -60,7 +60,7 @@ from a bare machine? Work through the steps in order.
 
 ---
 
-## 🚀 Complete workflow
+## Complete workflow
 
 Who does what, and in which order. **Click any step to jump to it.**
 
@@ -133,7 +133,7 @@ step ⑦ installs onto the board over the network and fails silently without it.
 <br>
 
 <a id="step-1"></a>
-### 1️⃣ Cable up the DevKit
+### 1. Cable up the DevKit
 
 USB cable (serial console) + Ethernet straight to your PC. Open the
 [serial tool](https://docs.sima.ai/_static/tools/serial/index.html), set the DevKit to
@@ -148,7 +148,7 @@ ping 192.168.137.123
 <br>
 
 <a id="step-2"></a>
-### 2️⃣ Install WSL2
+### 2. Install WSL2
 
 ```powershell
 wsl --install -d Ubuntu      # PowerShell as Administrator
@@ -158,7 +158,7 @@ wsl -l -v                    # want: Ubuntu · Running · 2
 <br>
 
 <a id="step-3"></a>
-### 3️⃣ Mirrored networking ![critical](https://img.shields.io/badge/-CRITICAL-E63946?style=flat-square)
+### 3. Mirrored networking ![critical](https://img.shields.io/badge/-CRITICAL-E63946?style=flat-square)
 
 WSL sits behind NAT by default and **cannot see your DevKit**. Later, pairing installs
 software onto the board over the network. With no route, the PC half succeeds and the
@@ -187,7 +187,7 @@ wsl -- ping -c 2 192.168.137.123    # must reply
 <br>
 
 <a id="step-4"></a>
-### 4️⃣ Firewall ![critical](https://img.shields.io/badge/-CRITICAL-E63946?style=flat-square)
+### 4. Firewall ![critical](https://img.shields.io/badge/-CRITICAL-E63946?style=flat-square)
 
 Mirrored mode puts WSL behind the Hyper-V firewall, which blocks inbound by default.
 Your DevKit pushing video **is** inbound. Skip this and Insight loads perfectly and
@@ -209,7 +209,7 @@ New-NetFirewallHyperVRule -Name "NeatMeta" -DisplayName "Neat Insight metadata" 
 <br>
 
 <a id="step-5"></a>
-### 5️⃣ Get the code and install sima-cli
+### 5. Get the code and install sima-cli
 
 ```bash
 # WSL
@@ -243,7 +243,7 @@ This gives you the detector app in [`object-detection/`](object-detection/) and 
 <br>
 
 <a id="step-6"></a>
-### 6️⃣ Docker Engine + NFS
+### 6. Docker Engine + NFS
 
 The Neat SDK **is** a Docker container. No Docker, no SDK.
 
@@ -292,7 +292,7 @@ sudo docker run hello-world
 <br>
 
 <a id="step-7"></a>
-### 7️⃣ Install the Neat SDK ![size](https://img.shields.io/badge/-12.6_GB_·_30--60_min-DC3545?style=flat-square)
+### 7. Install the Neat SDK ![size](https://img.shields.io/badge/-12.6_GB_·_30--60_min-DC3545?style=flat-square)
 
 ```bash
 sudo su -
@@ -329,7 +329,7 @@ ssh sima@192.168.137.123 "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat._
 <br>
 
 <a id="step-8"></a>
-### 8️⃣ Download a model
+### 8. Download a model
 
 ```bash
 sima-cli sdk neat        # WSL, starts the container and drops you inside
@@ -351,7 +351,7 @@ sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yol
 <br>
 
 <a id="step-9"></a>
-### 9️⃣ Deploy and run
+### 9. Deploy and run
 
 The app lives in [`object-detection/`](object-detection/):
 
@@ -419,7 +419,7 @@ running. press Ctrl-C to stop.
 <br>
 
 <a id="step-10"></a>
-### 🔟 Watch it
+### 10. Watch it
 
 <div align="center">
 
@@ -457,26 +457,35 @@ video: wrote 3012 frames to sandbox/detections.mp4 (48.3 MB)
 the problem is on the receiving side: the firewall (step 4), or `insight.host` pointing
 at `127.0.0.1`.
 
-### 🎬 The recording
+### The recording
 
-You do not need Insight at all to see results. The app writes an annotated video **on
-the DevKit**, so every run leaves something you can review afterwards.
+**Every processed frame** is written to an annotated video on the DevKit, so a run
+always leaves something to review even if nobody was watching Insight at the time.
 
 ```
-   ┌──────────────────────────────────────────────────────────┐
-   │  24.7 FPS  │  5 objects  │  person x2  car x1  truck x1   │  ← HUD strip
-   ├──────────────────────────────────────────────────────────┤
-   │   ┏━                          ━┓                          │
-   │   ┃   [ person 94% ]           ┃   ← corner brackets,     │
-   │                                      per-class colour     │
-   │   ┗━                          ━┛                          │
-   └──────────────────────────────────────────────────────────┘
+   ┌───────────────────────────────────────────────────────────┐
+   │ ┌──────────┐                                              │
+   │ │ FPS: 24.7│                                              │
+   │ └──────────┘   ┌────────────┐                             │
+   │                │ person 94% │                             │
+   │                ├────────────┴─────────┐                   │
+   │                │                      │                   │
+   │                │           •          │   centre marker   │
+   │                │                      │                   │
+   │                └──────────────────────┘                   │
+   └───────────────────────────────────────────────────────────┘
 ```
 
-Boxes use a 20-colour palette keyed to class id, corner brackets that stay readable
-over busy footage, captions that flip below the box rather than clipping off-frame, and
-black or white text chosen by background luminance. Strokes and text scale with the
-frame, so 4K does not get hairlines and 480p does not get slabs.
+A plain rectangle in the class colour, a centre dot, and a filled caption directly
+above carrying the class name and confidence in white. Captions flip inside the box
+rather than clipping off the top of the frame. Colours come from a 20-entry palette
+keyed to class id, so the same class is always the same colour. Line weight, text size
+and padding scale with the frame, so 4K does not get hairlines and 480p does not get
+slabs.
+
+The same annotated frame is what Insight receives, so the browser view and the
+recording look identical. Set `output.insight.annotated: false` to send the raw frame
+instead and let Insight draw its own overlay from the metadata stream.
 
 Pull the results back to your PC:
 
@@ -490,12 +499,13 @@ scp -r sima@192.168.137.193:~/object-detection/sandbox/frames .
 | `output.video.path` | Where to write, relative to the launch directory |
 | `output.video.codec` | 4-char FourCC. `mp4v` by default, auto-falls back to `MJPG`/`.avi` |
 | `output.video.fps` | `0` matches the source rate |
-| `output.video.hud` | The summary strip. Turn off for clean footage |
+| `output.video.hud` | Small FPS badge in the corner. Turn off for clean footage |
 | `output.save.every` | Write every Nth frame as a JPEG. `0` disables |
+| `output.insight.annotated` | `true` sends our overlay to Insight, `false` sends the raw frame |
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 Everything lives in `object-detection/config.yaml`. These settings matter:
 
@@ -512,7 +522,9 @@ output:
   video:
     enable: true
     path: sandbox/detections.mp4       # annotated video, written on the DevKit
-    hud: true                          # fps + object count strip
+    hud: true                          # small FPS badge
+  insight:
+    annotated: true                    # Insight shows our overlay
   save:
     enable: true
     dir: sandbox/frames                # annotated stills
@@ -563,7 +575,7 @@ Boxes look right? Model and config are correct, so anything later is transport.
 
 ---
 
-## 🔁 Daily loop
+## Daily loop
 
 ```bash
 sudo su - && cd /mnt/d/work/sima-projects && source sima/bin/activate && sima-cli sdk neat
@@ -600,7 +612,7 @@ neat          # component versions and ports
 
 ---
 
-## 🩹 Recovery
+## Recovery
 
 <details>
 <summary><b>DevKit firmware version mismatch</b></summary>
@@ -665,7 +677,7 @@ sima-cli neat install core@v0.3.0
 
 ---
 
-## 🔧 Troubleshooting
+## Troubleshooting
 
 <details open>
 <summary><b>Setup</b></summary>
@@ -735,7 +747,7 @@ sima-cli neat install core@v0.3.0
 
 ---
 
-## 🔬 How the app works
+## How the app works
 
 <details>
 <summary><b>Pipeline shape, preprocessing and decode types</b></summary>
@@ -845,7 +857,7 @@ masks and keypoints need `decode_segmentation` or `decode_pose` in the frame han
 
 ---
 
-## 🐞 Known issues
+## Known issues
 
 <details>
 <summary><b><code>groups.video_input</code> cannot play <code>.mp4</code> · Neat 0.3.0</b></summary>
@@ -883,7 +895,7 @@ still uses `groups.video_input` and prints the conversion command.
 
 ---
 
-## 📋 Reference
+## Reference
 
 | | |
 |:--|:--|
@@ -908,7 +920,7 @@ still uses `groups.video_input` and prints the conversion command.
 
 <div align="center">
 
-## ⭐ Six rules
+## Six rules
 
 **1.** Networking before pairing · **2.** Docker before the SDK ·
 **3.** `cd` after `sudo su -` <br>

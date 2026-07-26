@@ -157,6 +157,8 @@ class AppConfig:
         video_fps: Output frame rate. 0 matches the source.
         video_hud: Whether to draw the summary strip.
         insight_enable: Whether to stream to Neat Insight.
+        insight_annotated: Whether Insight receives the annotated frame. False
+            sends the raw frame and lets Insight draw its own overlay.
         insight_host: Insight address as the DevKit sees it.
         insight_channel: Channel offset added to both port bases.
         video_port_base: First UDP video port.
@@ -208,6 +210,7 @@ class AppConfig:
     video_hud: bool
 
     insight_enable: bool
+    insight_annotated: bool
     insight_host: str
     insight_channel: int
     video_port_base: int
@@ -372,6 +375,7 @@ def load_app_config(path: Path) -> AppConfig:
         video_fps=_int(video, "fps", 0),
         video_hud=_bool(video, "hud", True),
         insight_enable=_bool(insight, "enable", True),
+        insight_annotated=_bool(insight, "annotated", True),
         insight_host=_str(insight, "host", "127.0.0.1"),
         insight_channel=_int(insight, "channel", 0),
         video_port_base=_int(insight, "video_port_base", 9000),
@@ -1314,91 +1318,63 @@ BOX_COLORS = [
     (0, 151, 255), (0, 229, 178), (146, 255, 51), (255, 194, 26), (255, 92, 92),
 ]
 
-FONT = cv2.FONT_HERSHEY_DUPLEX if cv2 is not None else 0
+FONT = cv2.FONT_HERSHEY_SIMPLEX if cv2 is not None else 0
+
+# Drawing parameters, tuned for 1080p and scaled from there.
+BOX_THICKNESS = 3
+TEXT_SCALE = 1.0
+TEXT_THICKNESS = 2
+TEXT_PADDING = 10
+CIRCLE_RADIUS = 7
+TEXT_COLOR = (255, 255, 255)
+FPS_BG_COLOR = (0, 0, 0)
+REFERENCE_HEIGHT = 1080.0
 
 
 def class_color(class_id: int) -> tuple[int, int, int]:
+    """Pick a stable colour for a class.
+
+    Args:
+        class_id: Model class id.
+
+    Returns:
+        A BGR tuple, repeating every 20 classes.
+    """
     return BOX_COLORS[class_id % len(BOX_COLORS)]
 
 
-def draw_corner_box(frame, x1, y1, x2, y2, color, thickness: int) -> None:
-    """Box with weighted corner brackets. Reads clearly over busy footage."""
-    corner = max(12, int(min(x2 - x1, y2 - y1) * 0.18))
-    cv2.rectangle(frame, (x1, y1), (x2, y2), color, max(1, thickness - 1), cv2.LINE_AA)
-    heavy = thickness + 1
-    for cx, cy, dx, dy in (
-        (x1, y1, 1, 1), (x2, y1, -1, 1), (x1, y2, 1, -1), (x2, y2, -1, -1)
-    ):
-        cv2.line(frame, (cx, cy), (cx + dx * corner, cy), color, heavy, cv2.LINE_AA)
-        cv2.line(frame, (cx, cy), (cx, cy + dy * corner), color, heavy, cv2.LINE_AA)
+def draw_scale(frame) -> float:
+    """Scale factor that keeps strokes and text proportional to the frame.
 
+    Args:
+        frame: The image being annotated.
 
-def draw_label(frame, x1, y1, text, color, scale: float, thickness: int, top_margin: int = 0):
-    """Filled caption above the box, flipped inside when it would clip the top.
-
-    `top_margin` reserves the HUD strip so captions never disappear behind it.
+    Returns:
+        A multiplier, 1.0 at 1080p, floored so small frames stay readable.
     """
-    (tw, th), base = cv2.getTextSize(text, FONT, scale, thickness)
-    pad_x, pad_y = int(th * 0.5), int(th * 0.4)
-    box_h = th + base + pad_y * 2
-
-    top = y1 - box_h
-    below = top < top_margin
-    if below:
-        top = max(y1, top_margin)
-    top = max(top_margin, min(top, frame.shape[0] - box_h))
-    left = max(0, min(x1, frame.shape[1] - (tw + pad_x * 2)))
-
-    cv2.rectangle(
-        frame, (left, top), (left + tw + pad_x * 2, top + box_h), color, -1, cv2.LINE_AA
-    )
-    # Luminance decides black or white text, so light and dark colours both read.
-    b, g, r = color
-    ink = (0, 0, 0) if (0.114 * b + 0.587 * g + 0.299 * r) > 140 else (255, 255, 255)
-    cv2.putText(
-        frame, text, (left + pad_x, top + th + pad_y), FONT, scale, ink, thickness, cv2.LINE_AA
-    )
-    return below
+    return max(0.4, min(frame.shape[:2]) / REFERENCE_HEIGHT)
 
 
-def draw_hud(frame, boxes: list[dict], labels: list[str], fps: float) -> int:
-    """Translucent summary strip: frame rate, object count, top classes.
+def draw_boxes(frame, boxes: list[dict], labels: list[str]) -> None:
+    """Draw detection boxes, centre markers and labelled captions in place.
 
-    Returns its height so box captions can avoid drawing underneath it.
+    Each box is a plain rectangle in the class colour, with a centre dot and a
+    filled caption sitting directly above it. The caption flips below the box
+    when it would otherwise clip off the top of the frame.
+
+    Args:
+        frame: BGR image, modified in place.
+        boxes: Detections with ``x1``, ``y1``, ``x2``, ``y2``, ``score`` and
+            ``class_id`` keys, in original-image pixels.
+        labels: Class names indexed by class id.
     """
     h, w = frame.shape[:2]
-    scale = max(0.5, min(w, h) / 1400.0)
-    pad = int(14 * scale * 2)
-    bar_h = int(46 * scale * 2)
-
-    overlay = frame[0:bar_h, 0:w].copy()
-    cv2.rectangle(frame, (0, 0), (w, bar_h), (24, 24, 24), -1)
-    cv2.addWeighted(frame[0:bar_h, 0:w], 0.55, overlay, 0.45, 0, frame[0:bar_h, 0:w])
-    cv2.line(frame, (0, bar_h), (w, bar_h), (0, 229, 178), max(1, int(2 * scale * 2)))
-
-    counts: dict[str, int] = {}
-    for box in boxes:
-        cid = int(box["class_id"])
-        name = labels[cid] if 0 <= cid < len(labels) else str(cid)
-        counts[name] = counts.get(name, 0) + 1
-    top = sorted(counts.items(), key=lambda kv: -kv[1])[:4]
-    summary = "  ".join(f"{n} x{c}" for n, c in top) if top else "no detections"
-
-    text = f"{fps:5.1f} FPS   |   {len(boxes)} objects   |   {summary}"
-    cv2.putText(
-        frame, text, (pad, int(bar_h * 0.66)), FONT,
-        0.6 * scale * 2, (240, 240, 240), max(1, int(scale * 2)), cv2.LINE_AA,
-    )
-    return bar_h
-
-
-def draw_boxes(frame, boxes: list[dict], labels: list[str], top_margin: int = 0) -> None:
-    h, w = frame.shape[:2]
-    # Scale strokes and text to the frame, so 4K does not get hairlines and
-    # 480p does not get slabs.
-    scale = max(0.45, min(w, h) / 1400.0)
-    thickness = max(2, int(round(2.4 * scale)))
-    font_scale = 0.62 * scale
+    scale = draw_scale(frame)
+    thickness = max(1, int(round(BOX_THICKNESS * scale)))
+    text_scale = TEXT_SCALE * scale
+    text_thickness = max(1, int(round(TEXT_THICKNESS * scale)))
+    pad = max(2, int(round(TEXT_PADDING * scale)))
+    radius = max(2, int(round(CIRCLE_RADIUS * scale)))
 
     # Paint larger boxes first, so small foreground objects stay legible.
     ordered = sorted(
@@ -1411,14 +1387,55 @@ def draw_boxes(frame, boxes: list[dict], labels: list[str], top_margin: int = 0)
         y2 = min(h - 1, int(round(box["y2"])))
         if x2 <= x1 or y2 <= y1:
             continue
+
         class_id = int(box["class_id"])
         color = class_color(class_id)
         name = labels[class_id] if 0 <= class_id < len(labels) else str(class_id)
-        draw_corner_box(frame, x1, y1, x2, y2, color, thickness)
-        draw_label(
-            frame, x1, y1, f"{name}  {box['score'] * 100:.0f}%", color, font_scale, 1,
-            top_margin,
+
+        cv2.circle(frame, ((x1 + x2) // 2, (y1 + y2) // 2), radius, color, -1)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+
+        label = f"{name} {box['score'] * 100:.0f}%"
+        (text_w, text_h), _ = cv2.getTextSize(label, FONT, text_scale, text_thickness)
+        band_h = text_h + pad * 2
+
+        top = y1 - band_h
+        if top < 0:                      # would clip off the top, so sit inside
+            top = y1
+        left = max(0, min(x1, w - (text_w + pad * 2)))
+
+        cv2.rectangle(
+            frame, (left, top), (left + text_w + pad * 2, top + band_h), color, -1
         )
+        cv2.putText(
+            frame, label, (left + pad, top + band_h - pad), FONT, text_scale,
+            TEXT_COLOR, text_thickness, cv2.LINE_AA,
+        )
+
+
+def draw_fps(frame, fps: float) -> None:
+    """Draw the frame rate in a filled badge at the top left.
+
+    Args:
+        frame: BGR image, modified in place.
+        fps: Frames per second to display.
+    """
+    scale = draw_scale(frame)
+    text_scale = TEXT_SCALE * scale
+    text_thickness = max(1, int(round(TEXT_THICKNESS * scale)))
+    pad = max(2, int(round(TEXT_PADDING * scale)))
+
+    text = f"FPS: {fps:.1f}"
+    (text_w, text_h), _ = cv2.getTextSize(text, FONT, text_scale, text_thickness)
+
+    cv2.rectangle(
+        frame, (pad, pad), (pad + text_w + pad * 2, pad + text_h + pad * 2),
+        FPS_BG_COLOR, -1,
+    )
+    cv2.putText(
+        frame, text, (pad * 2, pad + text_h + pad // 2), FONT, text_scale,
+        TEXT_COLOR, text_thickness, cv2.LINE_AA,
+    )
 
 
 def metadata_objects(boxes: list[dict], labels: list[str], w: int, h: int) -> list[dict]:
@@ -1485,9 +1502,10 @@ def wants_jpeg(cfg: AppConfig, index: int) -> bool:
 def render_annotated(cfg: AppConfig, pipeline: Pipeline, frame, boxes: list[dict], fps: float):
     """Draw once per frame and share the result between the video and JPEG sinks."""
     annotated = frame.copy()
-    # HUD first, so box captions can reserve its height and stay visible.
-    top_margin = draw_hud(annotated, boxes, pipeline.labels, fps) if cfg.video_hud else 0
-    draw_boxes(annotated, boxes, pipeline.labels, top_margin)
+    # FPS first, so a detection in the top-left corner is never hidden by it.
+    if cfg.video_hud:
+        draw_fps(annotated, fps)
+    draw_boxes(annotated, boxes, pipeline.labels)
     return annotated
 
 
@@ -1624,22 +1642,34 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
         frame = frame_to_bgr(first_tensor(joined_field(sample, "frame", 0)))
         decode_end = time_ms()
 
-        # Insight receives the raw frame and draws its own overlay from the
-        # metadata stream, so annotate only for the local sinks.
-        push_video(pipeline, sample, frame)
-        send_metadata(pipeline, sample, boxes)
         processed += 1
-
         need_jpeg = wants_jpeg(cfg, processed)
-        if pipeline.writer is not None or (need_jpeg and cfg.save_overlay):
-            annotated = render_annotated(cfg, pipeline, frame, boxes, live_fps)
-            if pipeline.writer is not None:
-                pipeline.writer.write(annotated)
-                pipeline.writer_frames += 1
-            if need_jpeg:
-                save_frame(cfg, processed, annotated)
-        elif need_jpeg:
-            save_frame(cfg, processed, frame)
+        need_annotated = (
+            pipeline.writer is not None
+            or (cfg.insight_enable and cfg.insight_annotated)
+            or (need_jpeg and cfg.save_overlay)
+        )
+
+        # Render once, then share the result across every sink that wants it.
+        annotated = (
+            render_annotated(cfg, pipeline, frame, boxes, live_fps)
+            if need_annotated
+            else None
+        )
+
+        # With insight_annotated the viewer shows our overlay. Without it,
+        # Insight receives the raw frame and draws its own from the metadata.
+        push_video(
+            pipeline, sample,
+            annotated if (cfg.insight_annotated and annotated is not None) else frame,
+        )
+        send_metadata(pipeline, sample, boxes)
+
+        if pipeline.writer is not None:
+            pipeline.writer.write(annotated)
+            pipeline.writer_frames += 1
+        if need_jpeg:
+            save_frame(cfg, processed, annotated if cfg.save_overlay else frame)
         sink_end = time_ms()
 
         profile.add(
