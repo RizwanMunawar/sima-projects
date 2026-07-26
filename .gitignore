@@ -225,13 +225,21 @@ sima/
 backup/
 videos/
 
-# Model archives and media are large binaries, fetch them with sima-cli instead
+# Model archives and media are large binaries. Fetch models with sima-cli and
+# generate the .h264 streams locally with ffmpeg.
+#
+# NOTE: a pattern containing a slash is anchored to this file's directory, so
+# `assets/video/` would only match <repo-root>/assets/video and would miss
+# yolo-detector/assets/video. Use `**/` to match at any depth.
 *.tar.gz
 *.mp4
 *.mkv
 *.avi
-assets/models/
-assets/video/
+*.h264
+*.264
+*.avc
+**/assets/models/
+**/assets/video/
 
 # Application output
 sandbox/
