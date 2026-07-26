@@ -745,10 +745,10 @@ def make_elementary_h264_source(cfg: AppConfig, width: int, height: int, fps: in
     graph.add(pyneat.nodes.sima_decode(dec))
 
     if width > 0 and height > 0 and fps > 0:
+        # nodes.caps_raw takes the format as a plain string, unlike the *Options
+        # `format` properties which accept the pyneat.Format enum.
         graph.add(
-            pyneat.nodes.caps_raw(
-                pyneat.Format.NV12, width, height, fps, pyneat.CapsMemory.Any
-            )
+            pyneat.nodes.caps_raw("NV12", width, height, fps, pyneat.CapsMemory.Any)
         )
     return graph
 
