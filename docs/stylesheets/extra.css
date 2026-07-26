@@ -264,3 +264,120 @@
   padding-bottom: 0.3rem;
   border-bottom: 1px solid var(--md-default-fg-color--lightest);
 }
+
+/* Belt and braces on the pilcrow. toc.permalink is false, but this also covers
+   any anchor Material injects itself. */
+.md-typeset .headerlink {
+  display: none;
+}
+
+/* --------------------------------------------------------------------------
+   Python syntax
+
+   Pygments emits token classes rather than language ones, so scoping to
+   .language-python lets Python read differently from the shell blocks it sits
+   next to. Tuned for contrast on both schemes: keywords and control flow lead,
+   strings recede, comments recede further.
+   -------------------------------------------------------------------------- */
+
+.md-typeset .language-python .k,      /* keyword            def class if for  */
+.md-typeset .language-python .kn,     /* keyword.namespace  import from        */
+.md-typeset .language-python .kc,     /* keyword.constant   True False None    */
+.md-typeset .language-python .ow {    /* operator.word      and or not in      */
+  color: #c0288f;
+  font-weight: 600;
+}
+
+.md-typeset .language-python .nf,     /* function name                          */
+.md-typeset .language-python .fm {    /* magic method                           */
+  color: #0b7285;
+  font-weight: 600;
+}
+
+.md-typeset .language-python .nc {    /* class name                             */
+  color: #1864ab;
+  font-weight: 700;
+}
+
+.md-typeset .language-python .nd {    /* decorator                              */
+  color: #b8860b;
+  font-style: italic;
+}
+
+.md-typeset .language-python .nb {    /* builtin  len range print               */
+  color: #7048e8;
+}
+
+.md-typeset .language-python .s,
+.md-typeset .language-python .s1,
+.md-typeset .language-python .s2,
+.md-typeset .language-python .sd,     /* docstring                              */
+.md-typeset .language-python .se {    /* escape sequence                        */
+  color: #2b8a3e;
+}
+
+.md-typeset .language-python .mi,     /* integer                                */
+.md-typeset .language-python .mf {    /* float                                  */
+  color: #e8590c;
+}
+
+.md-typeset .language-python .c,
+.md-typeset .language-python .c1,     /* # comment                              */
+.md-typeset .language-python .cm {
+  color: #868e96;
+  font-style: italic;
+}
+
+.md-typeset .language-python .bp {    /* self, cls                              */
+  color: #a61e4d;
+  font-style: italic;
+}
+
+/* Dracula equivalents for dark mode. */
+[data-md-color-scheme="slate"] .md-typeset .language-python .k,
+[data-md-color-scheme="slate"] .md-typeset .language-python .kn,
+[data-md-color-scheme="slate"] .md-typeset .language-python .kc,
+[data-md-color-scheme="slate"] .md-typeset .language-python .ow {
+  color: var(--dracula-pink);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .language-python .nf,
+[data-md-color-scheme="slate"] .md-typeset .language-python .fm {
+  color: var(--dracula-green);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .language-python .nc {
+  color: var(--dracula-cyan);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .language-python .nd {
+  color: var(--dracula-orange);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .language-python .nb {
+  color: var(--dracula-purple);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .language-python .s,
+[data-md-color-scheme="slate"] .md-typeset .language-python .s1,
+[data-md-color-scheme="slate"] .md-typeset .language-python .s2,
+[data-md-color-scheme="slate"] .md-typeset .language-python .sd,
+[data-md-color-scheme="slate"] .md-typeset .language-python .se {
+  color: var(--dracula-yellow);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .language-python .mi,
+[data-md-color-scheme="slate"] .md-typeset .language-python .mf {
+  color: var(--dracula-orange);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .language-python .c,
+[data-md-color-scheme="slate"] .md-typeset .language-python .c1,
+[data-md-color-scheme="slate"] .md-typeset .language-python .cm {
+  color: var(--dracula-comment);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .language-python .bp {
+  color: var(--dracula-orange);
+  font-style: italic;
+}

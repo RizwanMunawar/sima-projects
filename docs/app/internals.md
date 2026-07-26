@@ -34,8 +34,45 @@ there are multiple stages, named public endpoints and a branch with a fan-in:
 frame fans out to the video writer, the still writer, the `MetadataSender`, and a second
 small graph (`Input -> VideoSender`) that encodes for Insight.
 
+```python title="app.py, abbreviated"
+def build_detector_graph(cfg, model, width, height, fps):
+    """source -> branch -> {frame, model -> detections} -> combine."""
+    source = make_source_graph(cfg, width, height, fps)
+    branch = pyneat.graphs.branch("source", ["frame", "model"])
+
+    frame_graph = pyneat.Graph("frame")
+    frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
+
+    model_graph = pyneat.Graph("model")
+    model_graph.connect(pyneat.nodes.input("model"), model)
+
+    joined = pyneat.graphs.combine(
+        ["frame", "detections"], "detector_output", pyneat.CombinePolicy.ByFrame
+    )
+
+    graph = pyneat.Graph("object_detection")
+    graph.connect(source, branch)
+    graph.connect(branch, frame_graph)
+    graph.connect(branch, model_graph)
+    graph.connect(frame_graph, joined)
+    return graph
+```
+
 The annotated frame is rendered **once** per iteration and shared across every sink that
 wants it, so three outputs cost one draw.
+
+```python title="app.py, the run loop"
+annotated = render_annotated(cfg, pipeline, frame, boxes, live_fps) if need_annotated else None
+
+push_video(pipeline, sample, annotated if cfg.insight_annotated else frame)
+send_metadata(pipeline, sample, boxes)
+
+if pipeline.writer is not None:
+    pipeline.writer.write(annotated)      # every processed frame
+    pipeline.writer_frames += 1
+if need_jpeg:
+    save_frame(cfg, processed, annotated if cfg.save_overlay else frame)
+```
 
 ---
 

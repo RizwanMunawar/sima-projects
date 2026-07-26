@@ -46,7 +46,10 @@ markdown_extensions:
   - md_in_html
   - tables
   - toc:
-      permalink: true
+      # No pilcrow after headings. Heading ids are still generated, so deep
+      # links such as page/#section keep working, you just cannot click a ¶ to
+      # copy one.
+      permalink: false
   - pymdownx.details
   - pymdownx.superfences:
       custom_fences:
