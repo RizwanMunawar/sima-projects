@@ -2,7 +2,7 @@
 
 <br>
 
-# ⚡ SiMa Neat SDK
+# SiMa Neat SDK
 
 ### Live YOLO object detection on a Modalix DevKit
 
@@ -53,11 +53,6 @@ cd sima-projects
 Already have a DevKit set up? Jump to [Deploy and run](#step-9). Starting
 from a bare machine? Work through the steps in order.
 
-> [!TIP]
-> **Most problems are a command typed in the wrong box.** Check your prompt:
-> `PS C:\>` is Windows · `root@neat-sdk:/workspace#` is the container ·
-> `sima@modalix:~$` is the DevKit. **Windows paths only work in PowerShell.**
-
 ---
 
 ## Complete workflow
@@ -65,70 +60,69 @@ from a bare machine? Work through the steps in order.
 Who does what, and in which order. **Click any step to jump to it.**
 
 ```
-      🪟 WINDOWS PC              🐧 WSL2 · UBUNTU            🔴 MODALIX DEVKIT
+       WINDOWS PC                  WSL2 · UBUNTU              MODALIX DEVKIT
    ═══════════════════        ═══════════════════════      ═══════════════════
 
    ┌───────────────────────────── ONE-TIME SETUP ─────────────────────────────┐
 
-    ① cable up  ═══════════════════════════════════════════►  DHCP → .123
-         USB + Ethernet                                        board powers on
+    1  cable up  ══════════════════════════════════════════►  DHCP → .123
+         USB + Ethernet                                       board powers on
 
-    ② wsl --install ──────────►  Ubuntu ready
+    2  wsl --install ─────────►  Ubuntu ready
 
-    ③ .wslconfig  ────────────►  WSL takes .137.1  ◄════════►  now reachable
-         mirrored networking        same subnet                 both directions
+    3  .wslconfig  ───────────►  WSL takes .137.1  ◄════════►  now reachable
+         mirrored networking       same subnet                 both directions
 
-    ④ firewall rules ─────────►  UDP 9000/9100 open
-         Hyper-V inbound            ready to receive
+    4  firewall rules ────────►  UDP 9000/9100 open
+         Hyper-V inbound           ready to receive
 
-                                 ⑤ git clone + sima-cli
+                                 5  git clone + sima-cli
                                       repo + venv
 
-                                 ⑥ docker + nfs
-                                      SDK needs a container
+                                 6  docker + nfs
+                                      the SDK is a container
 
-                                 ⑦ sima-cli sdk setup ═════►  pyneat + runtime
-                                      12.6 GB image             installed on board
+                                 7  sima-cli sdk setup ════►  pyneat + runtime
+                                      12.6 GB image            installed on board
 
-                                 ⑧ download model
+                                 8  download model
                                       yolo26m .tar.gz
 
    └──────────────────────────────────────────────────────────────────────────┘
 
    ┌────────────────────────── EVERY RUN, REPEAT ─────────────────────────────┐
 
-    ⑨ scp -r object-detection/ ══════════════════════════►  ~/object-detection
-         edit → copy → run                                   python3 src/app.py
-                                                                    │
-                                                                    ▼
-                                                             MLA inference
-                                                             ┌──────────────┐
-    ⑩ browser  ◄──── Insight ◄──── UDP 9000 + 9100 ◄════════╡ VideoSender  │
-         localhost:9900   live overlay                       │ MetadataSend │
-                                                             ├──────────────┤
-                                        detections.mp4  ◄════╡ VideoWriter  │
-                                        frames/*.jpg         └──────────────┘
-                                          on the board
+    9  scp -r object-detection/ ═════════════════════════►  ~/object-detection
+         edit → copy → run                                  python3 src/app.py
+                                                                   │
+                                                                   ▼
+                                                            MLA inference
+                                                            ┌───────────────┐
+   10  browser  ◄──── Insight ◄──── UDP 9000 + 9100 ◄═══════╡ VideoSender   │
+         localhost:9900   live overlay                      │ MetadataSender│
+                                                            ├───────────────┤
+                                       detections.mp4  ◄════╡ VideoWriter   │
+                                       frames/*.jpg         └───────────────┘
+                                         on the board
 
    └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-| # | Step | Runs on | Time | |
-|:--|:--|:--|:--|:--|
-| ① | [Cable up the DevKit](#step-1) | 🪟 PowerShell | 15 min | |
-| ② | [Install WSL2](#step-2) | 🪟 PowerShell | 10 min | |
-| ③ | [Mirrored networking](#step-3) | 🪟 PowerShell | 5 min | 🔴 |
-| ④ | [Firewall](#step-4) | 🪟 PowerShell | 2 min | 🔴 |
-| ⑤ | [Get the code and install sima-cli](#step-5) | 🐧 WSL | 5 min | |
-| ⑥ | [Docker Engine + NFS](#step-6) | 🐧 WSL | 10 min | |
-| ⑦ | [Install the Neat SDK](#step-7) | 🐧 WSL | 30 to 60 min | |
-| ⑧ | [Download a model](#step-8) | 🐳 Container | 5 min | |
-| ⑨ | [Deploy and run](#step-9) | 🔴 DevKit | 2 min | ♻️ |
-| ⑩ | [Watch it](#step-10) | 🌐 Browser | 2 min | ♻️ |
+| Step | Runs on | Time | Notes |
+|:--|:--|:--|:--|
+| [1. Cable up the DevKit](#step-1) | PowerShell | 15 min | |
+| [2. Install WSL2](#step-2) | PowerShell | 10 min | |
+| [3. Mirrored networking](#step-3) | PowerShell | 5 min | **Do not do this late** |
+| [4. Firewall](#step-4) | PowerShell | 2 min | **Do not do this late** |
+| [5. Get the code and install sima-cli](#step-5) | WSL | 5 min | |
+| [6. Docker Engine + NFS](#step-6) | WSL | 10 min | |
+| [7. Install the Neat SDK](#step-7) | WSL | 30 to 60 min | 12.6 GB download |
+| [8. Download a model](#step-8) | SDK container | 5 min | |
+| [9. Deploy and run](#step-9) | DevKit | 2 min | Repeats every change |
+| [10. Watch it](#step-10) | Browser | 2 min | Repeats every change |
 
-🔴 **Load-bearing.** Doing these late is the usual way to lose an afternoon, because
-step ⑦ installs onto the board over the network and fails silently without it.
-♻️ Repeats on every code change.
+Steps 3 and 4 are load-bearing. Step 7 installs onto the board over the network and
+fails silently if they are not done first, which is the usual way to lose an afternoon.
 
 <br>
 
@@ -158,7 +152,7 @@ wsl -l -v                    # want: Ubuntu · Running · 2
 <br>
 
 <a id="step-3"></a>
-### 3. Mirrored networking ![critical](https://img.shields.io/badge/-CRITICAL-E63946?style=flat-square)
+### 3. Mirrored networking
 
 WSL sits behind NAT by default and **cannot see your DevKit**. Later, pairing installs
 software onto the board over the network. With no route, the PC half succeeds and the
@@ -182,12 +176,12 @@ wsl -- ping -c 2 192.168.137.123    # must reply
 
 > ✅ **Both must pass.** Be stubborn here.
 >
-> 💡 Made the file in Notepad? Check it is not secretly `.wslconfig.txt`.
+> **Note.** Made the file in Notepad? Check it is not secretly `.wslconfig.txt`.
 
 <br>
 
 <a id="step-4"></a>
-### 4. Firewall ![critical](https://img.shields.io/badge/-CRITICAL-E63946?style=flat-square)
+### 4. Firewall
 
 Mirrored mode puts WSL behind the Hyper-V firewall, which blocks inbound by default.
 Your DevKit pushing video **is** inbound. Skip this and Insight loads perfectly and
@@ -204,41 +198,49 @@ New-NetFirewallHyperVRule -Name "NeatMeta" -DisplayName "Neat Insight metadata" 
   -Protocol UDP -LocalPorts 9100-9179 -Action Allow
 ```
 
-> 💡 These live in Windows, not the distro, so they survive `wsl --unregister`.
+> **Note.** These live in Windows, not the distro, so they survive `wsl --unregister`.
 
 <br>
 
 <a id="step-5"></a>
 ### 5. Get the code and install sima-cli
 
+Become root **first**. `sudo su -` is a login shell, so it drops you in `/root`.
+Cloning after that puts the repo at `/root/sima-projects`, which is why every later
+step can just say `cd sima-projects`.
+
 ```bash
 # WSL
-sudo su -                              # become root FIRST
+sudo su -
 apt update && apt install -y git python3-venv python3-pip
 
-cd /mnt/d/work                         # or wherever you keep projects
 git clone https://github.com/RizwanMunawar/sima-projects.git
 cd sima-projects
 
 python3 -m venv sima
 source sima/bin/activate
 pip install sima-cli
-sima-cli login                         # needs a community.sima.ai account
+sima-cli login                  # needs a community.sima.ai account
 ```
 
-This gives you the detector app in [`object-detection/`](object-detection/) and the
-`sima` venv beside it. Everything below assumes you are in the repo root.
+You now have the app in [`object-detection/`](object-detection/) and the `sima` venv
+beside it. **Every command below runs from this directory.**
 
 > [!CAUTION]
-> **`cd` after `sudo su -`, never before.** The `-` makes it a login shell that drops
-> you in `/root`. Reverse them and your venv is silently built at `/root/sima`.
+> **Clone after `sudo su -`, never before.** If you clone as your normal user and then
+> become root, `cd sima-projects` looks in `/root` and fails, and a venv created before
+> switching ends up somewhere else entirely.
 
-> 💡 Every new session needs three lines again: `sudo su -`, `cd` to the repo, and
-> `source sima/bin/activate`.
+> **Note.** **Each new terminal needs three lines** to get back to a working state:
+> ```bash
+> sudo su -
+> cd sima-projects
+> source sima/bin/activate
+> ```
 
-> 💡 Cloning into `/mnt/d/...` keeps the repo on your Windows drive, so you can edit it
-> in VS Code on Windows and run it from WSL. If the repo is private, use
-> `gh repo clone RizwanMunawar/sima-projects` or an SSH remote.
+> **Note.** To edit in VS Code on Windows, open `\\wsl$\Ubuntu\root\sima-projects`. If the
+> repo is private, clone with `gh repo clone RizwanMunawar/sima-projects` or an SSH
+> remote.
 
 <br>
 
@@ -292,11 +294,11 @@ sudo docker run hello-world
 <br>
 
 <a id="step-7"></a>
-### 7. Install the Neat SDK ![size](https://img.shields.io/badge/-12.6_GB_·_30--60_min-DC3545?style=flat-square)
+### 7. Install the Neat SDK
 
 ```bash
 sudo su -
-cd /mnt/d/work/sima-projects
+cd sima-projects
 source sima/bin/activate
 sima-cli install ghcr:sima-neat/sdk
 sima-cli sdk setup --devkit 192.168.137.123
@@ -340,13 +342,13 @@ mkdir -p /workspace/assets/models && cd /workspace/assets/models
 sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
 ```
 
-| Variant | Speed | Accuracy |
-|:--|:--:|:--:|
-| `yolo26n` | ⚡⚡⚡⚡⚡ | ★★☆☆☆ |
-| `yolo26s` | ⚡⚡⚡⚡ | ★★★☆☆ |
-| **`yolo26m`** | ⚡⚡⚡ | ★★★★☆ ⭐ |
-| `yolo26l` | ⚡⚡ | ★★★★☆ |
-| `yolo26x` | ⚡ | ★★★★★ |
+| Variant | Speed | Accuracy | |
+|:--|:--|:--|:--|
+| `yolo26n` | fastest | lowest | |
+| `yolo26s` | fast | good | |
+| **`yolo26m`** | balanced | better | **recommended starting point** |
+| `yolo26l` | slower | high | |
+| `yolo26x` | slowest | highest | |
 
 <br>
 
@@ -381,15 +383,16 @@ pip install -r ~/object-detection/src/requirements.txt
 > `numpy<2`. The pins in `requirements.txt` handle it. If you already broke it:
 > `pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"`
 
-**One command copies everything.** Do this after every change:
+**One command copies everything.** Run it from the repo root in WSL, after every
+change:
 
-```powershell
+```bash
 scp -r object-detection/ sima@192.168.137.193:~
 ```
 
 > [!IMPORTANT]
-> Run it from `d:\work\sima-projects`, and mind the **IP**, yours may differ.
-> This overwrites the board copy, so keep your originals on the PC.
+> Mind the **IP**, yours may differ. This overwrites the copy on the board, so the
+> repo in WSL stays the original.
 
 Then on the DevKit:
 
@@ -423,7 +426,7 @@ running. press Ctrl-C to stop.
 
 <div align="center">
 
-## 🔗 [https://localhost:9900](https://localhost:9900)
+## [https://localhost:9900](https://localhost:9900)
 
 **select channel 0**
 
@@ -577,18 +580,23 @@ Boxes look right? Model and config are correct, so anything later is transport.
 
 ## Daily loop
 
+Start the SDK:
+
 ```bash
-sudo su - && cd /mnt/d/work/sima-projects && source sima/bin/activate && sima-cli sdk neat
+sudo su -
+cd sima-projects
+source sima/bin/activate
+sima-cli sdk neat
 ```
 
-Then: **edit → copy → run → watch**, repeat.
+Then **edit, copy, run, watch**, and repeat. From the repo root in WSL:
 
-```powershell
+```bash
 scp -r object-detection/ sima@192.168.137.193:~
 ```
 
 <details>
-<summary><b>📌 Handy extras</b></summary>
+<summary><b>Handy extras</b></summary>
 
 <br>
 
