@@ -321,11 +321,32 @@ running. press Ctrl-C to stop.
 
 </div>
 
+> [!IMPORTANT]
+> **Open Insight and select the channel _before_ you start the app.** Video and
+> detections go out over UDP, which buffers nothing. A viewer opened after the stream
+> ends sees an empty page, even though everything worked.
+>
+> Short clips make this worse. A 12-second video is over before you can switch windows.
+> Loop it into something you can actually watch:
+> ```powershell
+> ffmpeg -stream_loop 9 -i clip.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 video-loop.h264
+> ```
+
 > [!WARNING]
 > **Ignore the address `neat` prints.** It says `https://192.168.137.1:9900`, which
 > Windows cannot reach: that counts as inbound to the WSL VM and the firewall drops it.
 > `localhost` takes a different path. Same for the VS Code URL, keep the token and swap
 > the host.
+
+**How to tell it is actually streaming.** The app prints these on the way out:
+
+```
+metadata: sent=102 failures=0 would_block=0
+```
+
+`failures=0` means every datagram left the board. If Insight is still blank after that,
+the problem is on the receiving side: the firewall (step 4), or `insight.host` pointing
+at `127.0.0.1`.
 
 ---
 
@@ -545,8 +566,10 @@ sima-cli neat install core@v0.3.0
 
 | Symptom | Fix |
 |:--|:--|
+| Insight blank but `sent=N failures=0` | The stream already ended. UDP buffers nothing, so open the viewer **first** and use a looped source |
 | Insight loads, no video | **Firewall.** Step 4 skipped. Most common failure by far |
 | Insight blank, no errors | `insight.host` is `127.0.0.1`. Use `192.168.137.1` |
+| Stops early with `timed out waiting for detections` | Source stalled. Raise `runtime.pull_timeout_ms`, or re-run: partial playback still proves the pipeline |
 | `192.168.137.1:9900` will not load | Expected. Use `https://localhost:9900` |
 | No detections at all | `model.family` mismatch, then lower `decode.score_threshold` |
 | Boxes in the wrong place | `resize.mode: letterbox`, `pad_value: 114`. Do not add your own maths |

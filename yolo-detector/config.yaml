@@ -42,7 +42,11 @@ source:
   # fail at pipeline start with: No src-element named "nN_demux".
   # Convert once, on any machine with ffmpeg:
   #   ffmpeg -i video-4.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 video-4.h264
-  uri: assets/video/video-4.h264
+  # video-loop.h264 is the same clip repeated 10x (~2 minutes), so there is time
+  # to open Insight and watch. UDP is fire-and-forget: nothing is buffered, so a
+  # viewer opened after the stream ends sees nothing at all.
+  #   ffmpeg -stream_loop 9 -i clip.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 out.h264
+  uri: assets/video/video-loop.h264
 
   # Raw elementary streams carry no container metadata, so set these explicitly.
   # For .mp4 sources 0 means "probe it".
