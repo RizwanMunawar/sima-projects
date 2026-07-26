@@ -124,9 +124,9 @@ visualization:
   hud:
     text_color: [104, 31, 17]
     bg_color: [255, 255, 255]
-    text_scale: 0            # 0 = follow text_scale above
-    text_thickness: 0        # 0 = follow text_thickness above
-    padding: 0               # 0 = follow text_padding above
+    text_scale: 2.0          # 0 = follow text_scale above
+    text_thickness: 5        # 0 = follow text_thickness above
+    padding: 15              # 0 = follow text_padding above
     min_width: 0             # 0 = fit the text
     min_height: 0            # 0 = fit the text
 
