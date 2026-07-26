@@ -18,7 +18,7 @@ model:
 
 source:
   type: video                          # video | rtsp | usb
-  uri: assets/videos/video-3.h264    # .h264 only, see note below
+  uri: assets/videos/video-1.h264    # .h264 only, see note below
 
   # Leave these at 0. For .h264 the app reads the real geometry out of the
   # stream's SPS, and the stream always wins over anything set here.
@@ -118,9 +118,17 @@ visualization:
   reference_height: 1080     # the height those sizes are tuned for
 
   # The FPS badge in the corner, drawn when output.video.hud is true.
+  # text_scale, text_thickness and padding follow the caption settings above
+  # when left at 0. Padding is what sets the badge size; the two minimums can
+  # only make it bigger, and the text stays centred either way.
   hud:
     text_color: [104, 31, 17]
     bg_color: [255, 255, 255]
+    text_scale: 0            # 0 = follow text_scale above
+    text_thickness: 0        # 0 = follow text_thickness above
+    padding: 0               # 0 = follow text_padding above
+    min_width: 0             # 0 = fit the text
+    min_height: 0            # 0 = fit the text
 
 output:
 
@@ -136,7 +144,7 @@ output:
   # Annotated stills.
   save:
     enable: true
-    dir: sandbox/frames
+    dir: frames
     every: 1                 # write every Nth frame, 0 disables
     overlay: true
     format: jpg              # jpg | png

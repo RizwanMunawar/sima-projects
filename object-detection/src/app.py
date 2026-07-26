@@ -133,6 +133,13 @@ class DrawConfig:
         text_color: Caption text colour, BGR.
         hud_text_color: Frame-rate badge text colour, BGR.
         hud_bg_color: Frame-rate badge fill colour, BGR.
+        hud_text_scale: Badge font scale. 0 follows ``text_scale``.
+        hud_text_thickness: Badge stroke weight. 0 follows ``text_thickness``.
+        hud_padding: Gap between badge text and badge edge. 0 follows
+            ``text_padding``. This is what sets the badge size when no minimum
+            is given.
+        hud_min_width: Floor on badge width in pixels. 0 fits the text.
+        hud_min_height: Floor on badge height in pixels. 0 fits the text.
         auto_scale: Whether sizes scale with frame height.
         reference_height: The frame height the sizes above are tuned for.
     """
@@ -149,6 +156,11 @@ class DrawConfig:
     text_color: tuple[int, int, int] = (255, 255, 255)
     hud_text_color: tuple[int, int, int] = (255, 255, 255)
     hud_bg_color: tuple[int, int, int] = (0, 0, 0)
+    hud_text_scale: float = 0.0
+    hud_text_thickness: int = 0
+    hud_padding: int = 0
+    hud_min_width: int = 0
+    hud_min_height: int = 0
     auto_scale: bool = True
     reference_height: float = 1080.0
 
@@ -365,6 +377,11 @@ def load_draw_config(raw: dict) -> DrawConfig:
         text_color=_color(section, "text_color", default.text_color),
         hud_text_color=_color(hud, "text_color", default.hud_text_color),
         hud_bg_color=_color(hud, "bg_color", default.hud_bg_color),
+        hud_text_scale=_float(hud, "text_scale", default.hud_text_scale),
+        hud_text_thickness=_int(hud, "text_thickness", default.hud_text_thickness),
+        hud_padding=_int(hud, "padding", default.hud_padding),
+        hud_min_width=_int(hud, "min_width", default.hud_min_width),
+        hud_min_height=_int(hud, "min_height", default.hud_min_height),
         auto_scale=_flag(section, "auto_scale", "on") == "on",
         reference_height=_float(section, "reference_height", default.reference_height),
     )
@@ -1935,25 +1952,30 @@ def draw_boxes(frame, boxes: list[dict], labels: list[str], draw: DrawConfig) ->
 def draw_fps(frame, fps: float, draw: DrawConfig) -> None:
     """Draw the frame rate centred in a filled badge at the top left.
 
+    Font size, stroke weight and padding fall back to the shared caption
+    settings when their ``hud`` counterparts are 0, so the badge matches the
+    captions unless it is deliberately given its own look.
+
     Args:
         frame: BGR image, modified in place.
         fps: Frames per second to display.
         draw: Visualization settings.
     """
     scale = draw_scale(frame, draw)
-    text_scale = draw.text_scale * scale
-    text_thickness = max(1, int(round(draw.text_thickness * scale)))
-    pad = max(2, int(round(draw.text_padding * scale)))
+    text_scale = (draw.hud_text_scale or draw.text_scale) * scale
+    raw_thickness = draw.hud_text_thickness or draw.text_thickness
+    text_thickness = max(1, int(round(raw_thickness * scale)))
+    pad = max(0, int(round((draw.hud_padding or draw.text_padding) * scale)))
 
     text = f"FPS: {fps:.1f}"
     (text_w, _), _ = cv2.getTextSize(text, FONT, text_scale, text_thickness)
     above, below = text_ink_extent(text, text_scale, text_thickness)
 
-    # Size the badge from measured ink, then place the baseline so the ink sits
-    # exactly `pad` from every edge. Both axes are centred the same way.
-    box_w = text_w + pad * 2
-    box_h = above + below + pad * 2
-    left, top = pad, pad
+    # Padding sets the badge size; a minimum can only grow it. The text is then
+    # centred in whatever box results, so a forced size never pushes it off.
+    box_w = max(text_w + pad * 2, int(round(draw.hud_min_width * scale)))
+    box_h = max(above + below + pad * 2, int(round(draw.hud_min_height * scale)))
+    left, top = pad or 1, pad or 1
 
     cv2.rectangle(
         frame, (left, top), (left + box_w, top + box_h), draw.hud_bg_color, -1
@@ -1961,7 +1983,10 @@ def draw_fps(frame, fps: float, draw: DrawConfig) -> None:
     cv2.putText(
         frame,
         text,
-        (left + (box_w - text_w) // 2, top + pad + above),
+        (
+            left + (box_w - text_w) // 2,
+            top + (box_h - (above + below)) // 2 + above,
+        ),
         FONT,
         text_scale,
         draw.hud_text_color,

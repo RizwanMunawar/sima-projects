@@ -116,6 +116,57 @@ in [How it works](internals.md#preprocessing).
     Inference is several times slower than decoding, so most frames are discarded, and
     the survivors are still written at the source rate.
 
+### `visualization`
+
+How the overlay looks. Colours are `[B, G, R]`, because OpenCV is BGR, so
+`[0, 0, 255]` is red rather than blue.
+
+| Key | Meaning |
+| :-- | :-- |
+| `box_thickness` | Detection rectangle outline weight |
+| `text_scale` | Caption font size multiplier |
+| `text_thickness` | Caption stroke weight |
+| `text_padding` | Gap between caption text and the edge of its band |
+| `centre_dot` | Filled dot at the centre of each box |
+| `centre_dot_radius` | Radius of that dot |
+| `show_labels` | Class name in the caption |
+| `show_scores` | Confidence in the caption |
+| `score_decimals` | `2` gives `person 0.57`, `0` gives `person 1` |
+| `text_color` | Caption text colour |
+| `auto_scale` | Scale every size above with the frame height |
+| `reference_height` | The height those sizes are tuned for |
+
+Sizes are written for a 1080p frame. With `auto_scale` on they are multiplied by
+`frame height / reference_height`, so 4K does not get hairlines and 480p does not get
+slabs. Turn it off to use the numbers literally.
+
+#### `visualization.hud`
+
+The frame-rate badge, drawn when `output.video.hud` is true.
+
+| Key | Meaning |
+| :-- | :-- |
+| `text_color` | Badge text colour |
+| `bg_color` | Badge fill colour |
+| `text_scale` | Badge font size. `0` follows `text_scale` above |
+| `text_thickness` | Badge stroke weight. `0` follows `text_thickness` above |
+| `padding` | Gap between badge text and badge edge. `0` follows `text_padding` above |
+| `min_width` | Floor on badge width. `0` fits the text |
+| `min_height` | Floor on badge height. `0` fits the text |
+
+`padding` is what sets the badge size. The two minimums can only make it bigger, never
+smaller, and the text stays centred on both axes whichever way it is sized.
+
+```yaml title="A larger badge, dark text on white"
+visualization:
+  hud:
+    text_color: [104, 31, 17]
+    bg_color: [255, 255, 255]
+    text_scale: 1.6
+    padding: 18
+    min_width: 460
+```
+
 ### `output`
 
 | Key | Meaning |
