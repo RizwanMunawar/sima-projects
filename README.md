@@ -46,6 +46,8 @@ git clone https://github.com/RizwanMunawar/sima-projects.git
 cd sima-projects
 ```
 
+📖 **[Full documentation](https://rizwanmunawar.github.io/sima-projects/)** for the same guide as a searchable site.
+
 Already have a DevKit set up? Jump to [Deploy and run](#step-9). Starting
 from a bare machine? Work through the steps in order.
 
