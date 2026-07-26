@@ -115,6 +115,12 @@ class AppConfig:
     save_overlay: bool
     save_format: str
 
+    video_enable: bool
+    video_path: str
+    video_codec: str
+    video_fps: int
+    video_hud: bool
+
     insight_enable: bool
     insight_host: str
     insight_channel: int
@@ -237,6 +243,7 @@ def load_app_config(path: Path) -> AppConfig:
     runtime = _section(raw, "runtime")
     output = _section(raw, "output")
     save = _section(output, "save")
+    video = _section(output, "video")
     insight = _section(output, "insight")
 
     default_labels = Path(__file__).resolve().parent / "coco_labels.txt"
@@ -269,10 +276,15 @@ def load_app_config(path: Path) -> AppConfig:
         profile=_bool(runtime, "profile", False),
         profile_interval=_int(runtime, "profile_interval", 100),
         save_enable=_bool(save, "enable", True),
-        save_dir=_str(save, "dir", "sandbox/yolo-detector"),
+        save_dir=_str(save, "dir", "sandbox/object-detection"),
         save_every=_int(save, "every", 10),
         save_overlay=_bool(save, "overlay", True),
         save_format=_str(save, "format", "jpg").lower().lstrip("."),
+        video_enable=_bool(video, "enable", True),
+        video_path=_str(video, "path", "sandbox/detections.mp4"),
+        video_codec=_str(video, "codec", "mp4v"),
+        video_fps=_int(video, "fps", 0),
+        video_hud=_bool(video, "hud", True),
         insight_enable=_bool(insight, "enable", True),
         insight_host=_str(insight, "host", "127.0.0.1"),
         insight_channel=_int(insight, "channel", 0),
@@ -330,10 +342,21 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("output.save.every must be >= 0")
     if cfg.save_format not in {"jpg", "jpeg", "png"}:
         raise ValueError("output.save.format must be jpg or png")
+    if cfg.video_enable and not cfg.video_path:
+        raise ValueError("output.video.path must be set when video output is enabled")
+    if len(cfg.video_codec) != 4:
+        raise ValueError(
+            f"output.video.codec must be a 4-character FourCC such as mp4v or MJPG, "
+            f"got {cfg.video_codec!r}"
+        )
+    if cfg.video_fps < 0:
+        raise ValueError("output.video.fps must be >= 0")
     if cfg.insight_enable and not cfg.insight_host:
         raise ValueError("output.insight.host must be set when insight is enabled")
-    if not cfg.save_enable and not cfg.insight_enable:
-        raise ValueError("enable at least one of output.save or output.insight")
+    if not (cfg.save_enable or cfg.insight_enable or cfg.video_enable):
+        raise ValueError(
+            "enable at least one of output.save, output.video or output.insight"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -833,8 +856,23 @@ class Pipeline:
     frame_h: int = 0
     fps: int = 0
     video_port: int = 0
+    writer: object = None
+    writer_path: str = ""
+    writer_frames: int = 0
 
     def close(self) -> None:
+        if self.writer is not None:
+            try:
+                self.writer.release()
+                size = Path(self.writer_path).stat().st_size / 1e6
+                print(
+                    f"video: wrote {self.writer_frames} frames to {self.writer_path} "
+                    f"({size:.1f} MB)",
+                    flush=True,
+                )
+            except Exception as exc:
+                print(f"[warn] closing video writer failed: {exc}", file=sys.stderr)
+            self.writer = None
         for handle in (self.video_run, self.run):
             if handle is None:
                 continue
@@ -842,6 +880,41 @@ class Pipeline:
                 handle.close()
             except Exception as exc:  # pragma: no cover - teardown must not mask errors
                 print(f"[warn] close failed: {exc}", file=sys.stderr)
+
+
+def open_video_writer(cfg: AppConfig, width: int, height: int, fps: int):
+    """Annotated MP4 written on the DevKit. Returns (writer, path) or (None, '')."""
+    if not cfg.video_enable:
+        return None, ""
+
+    path = Path(cfg.video_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    out_fps = cfg.video_fps or fps or 25
+
+    fourcc = cv2.VideoWriter_fourcc(*cfg.video_codec)
+    writer = cv2.VideoWriter(str(path), fourcc, float(out_fps), (width, height))
+    if writer.isOpened():
+        return writer, str(path)
+
+    # mp4v is not always built into the DevKit's OpenCV. MJPG in an AVI works
+    # essentially everywhere, at the cost of a much larger file.
+    writer.release()
+    fallback = path.with_suffix(".avi")
+    print(
+        f"[warn] codec {cfg.video_codec!r} unavailable for {path.name}, "
+        f"falling back to MJPG/{fallback.name}",
+        file=sys.stderr,
+    )
+    writer = cv2.VideoWriter(
+        str(fallback), cv2.VideoWriter_fourcc(*"MJPG"), float(out_fps), (width, height)
+    )
+    if not writer.isOpened():
+        writer.release()
+        raise RuntimeError(
+            f"could not open a video writer for {path} with codec {cfg.video_codec} "
+            f"or MJPG fallback. Set output.video.enable: false to skip video output."
+        )
+    return writer, str(fallback)
 
 
 def load_labels(path: Path) -> list[str]:
@@ -974,6 +1047,12 @@ def build_pipeline(cfg: AppConfig) -> Pipeline:
         step(f"  view at https://localhost:9900 and select channel {cfg.insight_channel}")
     if cfg.save_enable:
         step(f"save: dir={cfg.save_dir} every={cfg.save_every} overlay={cfg.save_overlay}")
+    if cfg.video_enable:
+        pipeline.writer, pipeline.writer_path = open_video_writer(cfg, width, height, fps)
+        step(
+            f"video: {pipeline.writer_path} codec={cfg.video_codec} "
+            f"fps={cfg.video_fps or fps} hud={cfg.video_hud}"
+        )
     step("running. press Ctrl-C to stop.")
     return pipeline
 
@@ -1121,30 +1200,120 @@ def frame_to_bgr(tensor):
     return np.ascontiguousarray(frame)
 
 
+# A 20-colour palette with even hue spacing and consistent saturation, so
+# neighbouring classes stay distinguishable and nothing vanishes against a
+# bright or dark frame. BGR, because that is what OpenCV expects.
 BOX_COLORS = [
-    (0, 255, 0), (255, 0, 0), (0, 0, 255), (255, 255, 0),
-    (255, 0, 255), (0, 255, 255), (128, 255, 0), (255, 128, 0),
+    (56, 56, 255), (49, 210, 207), (10, 249, 72), (227, 195, 0), (255, 112, 132),
+    (144, 31, 255), (29, 178, 255), (49, 121, 255), (0, 194, 255), (98, 205, 0),
+    (185, 243, 52), (255, 156, 87), (255, 88, 178), (184, 61, 245), (86, 96, 255),
+    (0, 151, 255), (0, 229, 178), (146, 255, 51), (255, 194, 26), (255, 92, 92),
 ]
 
+FONT = cv2.FONT_HERSHEY_DUPLEX if cv2 is not None else 0
 
-def draw_boxes(frame, boxes: list[dict], labels: list[str]) -> None:
+
+def class_color(class_id: int) -> tuple[int, int, int]:
+    return BOX_COLORS[class_id % len(BOX_COLORS)]
+
+
+def draw_corner_box(frame, x1, y1, x2, y2, color, thickness: int) -> None:
+    """Box with weighted corner brackets. Reads clearly over busy footage."""
+    corner = max(12, int(min(x2 - x1, y2 - y1) * 0.18))
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, max(1, thickness - 1), cv2.LINE_AA)
+    heavy = thickness + 1
+    for cx, cy, dx, dy in (
+        (x1, y1, 1, 1), (x2, y1, -1, 1), (x1, y2, 1, -1), (x2, y2, -1, -1)
+    ):
+        cv2.line(frame, (cx, cy), (cx + dx * corner, cy), color, heavy, cv2.LINE_AA)
+        cv2.line(frame, (cx, cy), (cx, cy + dy * corner), color, heavy, cv2.LINE_AA)
+
+
+def draw_label(frame, x1, y1, text, color, scale: float, thickness: int, top_margin: int = 0):
+    """Filled caption above the box, flipped inside when it would clip the top.
+
+    `top_margin` reserves the HUD strip so captions never disappear behind it.
+    """
+    (tw, th), base = cv2.getTextSize(text, FONT, scale, thickness)
+    pad_x, pad_y = int(th * 0.5), int(th * 0.4)
+    box_h = th + base + pad_y * 2
+
+    top = y1 - box_h
+    below = top < top_margin
+    if below:
+        top = max(y1, top_margin)
+    top = max(top_margin, min(top, frame.shape[0] - box_h))
+    left = max(0, min(x1, frame.shape[1] - (tw + pad_x * 2)))
+
+    cv2.rectangle(
+        frame, (left, top), (left + tw + pad_x * 2, top + box_h), color, -1, cv2.LINE_AA
+    )
+    # Luminance decides black or white text, so light and dark colours both read.
+    b, g, r = color
+    ink = (0, 0, 0) if (0.114 * b + 0.587 * g + 0.299 * r) > 140 else (255, 255, 255)
+    cv2.putText(
+        frame, text, (left + pad_x, top + th + pad_y), FONT, scale, ink, thickness, cv2.LINE_AA
+    )
+    return below
+
+
+def draw_hud(frame, boxes: list[dict], labels: list[str], fps: float) -> int:
+    """Translucent summary strip: frame rate, object count, top classes.
+
+    Returns its height so box captions can avoid drawing underneath it.
+    """
+    h, w = frame.shape[:2]
+    scale = max(0.5, min(w, h) / 1400.0)
+    pad = int(14 * scale * 2)
+    bar_h = int(46 * scale * 2)
+
+    overlay = frame[0:bar_h, 0:w].copy()
+    cv2.rectangle(frame, (0, 0), (w, bar_h), (24, 24, 24), -1)
+    cv2.addWeighted(frame[0:bar_h, 0:w], 0.55, overlay, 0.45, 0, frame[0:bar_h, 0:w])
+    cv2.line(frame, (0, bar_h), (w, bar_h), (0, 229, 178), max(1, int(2 * scale * 2)))
+
+    counts: dict[str, int] = {}
     for box in boxes:
+        cid = int(box["class_id"])
+        name = labels[cid] if 0 <= cid < len(labels) else str(cid)
+        counts[name] = counts.get(name, 0) + 1
+    top = sorted(counts.items(), key=lambda kv: -kv[1])[:4]
+    summary = "  ".join(f"{n} x{c}" for n, c in top) if top else "no detections"
+
+    text = f"{fps:5.1f} FPS   |   {len(boxes)} objects   |   {summary}"
+    cv2.putText(
+        frame, text, (pad, int(bar_h * 0.66)), FONT,
+        0.6 * scale * 2, (240, 240, 240), max(1, int(scale * 2)), cv2.LINE_AA,
+    )
+    return bar_h
+
+
+def draw_boxes(frame, boxes: list[dict], labels: list[str], top_margin: int = 0) -> None:
+    h, w = frame.shape[:2]
+    # Scale strokes and text to the frame, so 4K does not get hairlines and
+    # 480p does not get slabs.
+    scale = max(0.45, min(w, h) / 1400.0)
+    thickness = max(2, int(round(2.4 * scale)))
+    font_scale = 0.62 * scale
+
+    # Paint larger boxes first, so small foreground objects stay legible.
+    ordered = sorted(
+        boxes, key=lambda b: (b["x2"] - b["x1"]) * (b["y2"] - b["y1"]), reverse=True
+    )
+    for box in ordered:
         x1 = max(0, int(round(box["x1"])))
         y1 = max(0, int(round(box["y1"])))
-        x2 = min(frame.shape[1] - 1, int(round(box["x2"])))
-        y2 = min(frame.shape[0] - 1, int(round(box["y2"])))
+        x2 = min(w - 1, int(round(box["x2"])))
+        y2 = min(h - 1, int(round(box["y2"])))
         if x2 <= x1 or y2 <= y1:
             continue
         class_id = int(box["class_id"])
-        color = BOX_COLORS[class_id % len(BOX_COLORS)]
+        color = class_color(class_id)
         name = labels[class_id] if 0 <= class_id < len(labels) else str(class_id)
-        text = f"{name} {box['score']:.2f}"
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-        cv2.rectangle(frame, (x1, max(0, y1 - th - 4)), (x1 + tw, y1), color, -1)
-        cv2.putText(
-            frame, text, (x1, max(th, y1 - 2)),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1,
+        draw_corner_box(frame, x1, y1, x2, y2, color, thickness)
+        draw_label(
+            frame, x1, y1, f"{name}  {box['score'] * 100:.0f}%", color, font_scale, 1,
+            top_margin,
         )
 
 
@@ -1205,14 +1374,22 @@ def push_video(pipeline: Pipeline, sample, frame_bgr) -> None:
         raise RuntimeError("Insight video push failed")
 
 
-def save_frame(cfg: AppConfig, pipeline: Pipeline, index: int, frame, boxes: list[dict]) -> None:
-    if not cfg.save_enable or cfg.save_every <= 0 or index % cfg.save_every != 0:
-        return
-    annotated = frame.copy() if cfg.save_overlay else frame
-    if cfg.save_overlay:
-        draw_boxes(annotated, boxes, pipeline.labels)
+def wants_jpeg(cfg: AppConfig, index: int) -> bool:
+    return cfg.save_enable and cfg.save_every > 0 and index % cfg.save_every == 0
+
+
+def render_annotated(cfg: AppConfig, pipeline: Pipeline, frame, boxes: list[dict], fps: float):
+    """Draw once per frame and share the result between the video and JPEG sinks."""
+    annotated = frame.copy()
+    # HUD first, so box captions can reserve its height and stay visible.
+    top_margin = draw_hud(annotated, boxes, pipeline.labels, fps) if cfg.video_hud else 0
+    draw_boxes(annotated, boxes, pipeline.labels, top_margin)
+    return annotated
+
+
+def save_frame(cfg: AppConfig, index: int, frame) -> None:
     out_path = Path(cfg.save_dir) / f"frame_{index:06d}.{cfg.save_format}"
-    if not cv2.imwrite(str(out_path), annotated):
+    if not cv2.imwrite(str(out_path), frame):
         print(f"[warn] failed to write {out_path}", file=sys.stderr)
 
 
@@ -1296,6 +1473,7 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
     timeouts = 0
     heartbeat_start = time_ms()
     heartbeat_boxes = 0
+    live_fps = float(pipeline.fps or 25)   # HUD value, refreshed each heartbeat
 
     while not stopper.stop and (cfg.frames <= 0 or processed < cfg.frames):
         pull_start = time_ms()
@@ -1322,10 +1500,22 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
         frame = frame_to_bgr(first_tensor(joined_field(sample, "frame", 0)))
         decode_end = time_ms()
 
+        # Insight receives the raw frame and draws its own overlay from the
+        # metadata stream, so annotate only for the local sinks.
         push_video(pipeline, sample, frame)
         send_metadata(pipeline, sample, boxes)
         processed += 1
-        save_frame(cfg, pipeline, processed, frame, boxes)
+
+        need_jpeg = wants_jpeg(cfg, processed)
+        if pipeline.writer is not None or (need_jpeg and cfg.save_overlay):
+            annotated = render_annotated(cfg, pipeline, frame, boxes, live_fps)
+            if pipeline.writer is not None:
+                pipeline.writer.write(annotated)
+                pipeline.writer_frames += 1
+            if need_jpeg:
+                save_frame(cfg, processed, annotated)
+        elif need_jpeg:
+            save_frame(cfg, processed, frame)
         sink_end = time_ms()
 
         profile.add(
@@ -1337,6 +1527,7 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
         if processed % HEARTBEAT_EVERY == 0:
             elapsed = time_ms() - heartbeat_start
             rate = HEARTBEAT_EVERY * 1000.0 / elapsed if elapsed > 0 else 0.0
+            live_fps = rate or live_fps
             print(
                 f"[{processed}] {rate:.1f} fps, "
                 f"{heartbeat_boxes / HEARTBEAT_EVERY:.1f} detections/frame avg",

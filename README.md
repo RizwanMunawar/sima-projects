@@ -274,10 +274,40 @@ sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yol
 
 ### 9️⃣ Deploy and run
 
+The app lives in [`object-detection/`](object-detection/):
+
+```
+object-detection/
+├── config.yaml          # every setting
+├── README.md            # preprocessing and tuning notes
+├── assets/
+│   ├── models/          # .tar.gz model packs  (not in git)
+│   └── video/           # .h264 streams        (not in git)
+└── src/
+    ├── main.py          # the pipeline
+    ├── probe_source.py  # source-only isolation test
+    ├── coco_labels.txt
+    └── requirements.txt
+```
+
+Models and video are gitignored, so after cloning you supply your own: download a model
+(step 8) into `assets/models/`, and put a `.h264` stream in `assets/video/`.
+
+On the DevKit, once per board:
+
+```bash
+pip install -r ~/object-detection/src/requirements.txt
+```
+
+> [!CAUTION]
+> **Never let pip pull numpy 2.x.** `pyneat` and every `simaai-*` package need
+> `numpy<2`. The pins in `requirements.txt` handle it. If you already broke it:
+> `pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"`
+
 **One command copies everything.** Do this after every change:
 
 ```powershell
-scp -r yolo-detector/ sima@192.168.137.193:~
+scp -r object-detection/ sima@192.168.137.193:~
 ```
 
 > [!IMPORTANT]
@@ -289,7 +319,7 @@ Then on the DevKit:
 ```bash
 ssh -tt sima@192.168.137.193                     # two t's, see below
 source ~/pyneat/bin/activate
-cd ~/yolo-detector && python3 src/main.py --config config.yaml
+cd ~/object-detection && python3 src/main.py --config config.yaml
 ```
 
 Healthy output:
@@ -342,30 +372,75 @@ running. press Ctrl-C to stop.
 
 ```
 metadata: sent=102 failures=0 would_block=0
+video: wrote 3012 frames to sandbox/detections.mp4 (48.3 MB)
 ```
 
 `failures=0` means every datagram left the board. If Insight is still blank after that,
 the problem is on the receiving side: the firewall (step 4), or `insight.host` pointing
 at `127.0.0.1`.
 
+### 🎬 The recording
+
+You do not need Insight at all to see results. The app writes an annotated video **on
+the DevKit**, so every run leaves something you can review afterwards.
+
+```
+   ┌──────────────────────────────────────────────────────────┐
+   │  24.7 FPS  │  5 objects  │  person x2  car x1  truck x1   │  ← HUD strip
+   ├──────────────────────────────────────────────────────────┤
+   │   ┏━                          ━┓                          │
+   │   ┃   [ person 94% ]           ┃   ← corner brackets,     │
+   │                                      per-class colour     │
+   │   ┗━                          ━┛                          │
+   └──────────────────────────────────────────────────────────┘
+```
+
+Boxes use a 20-colour palette keyed to class id, corner brackets that stay readable
+over busy footage, captions that flip below the box rather than clipping off-frame, and
+black or white text chosen by background luminance. Strokes and text scale with the
+frame, so 4K does not get hairlines and 480p does not get slabs.
+
+Pull the results back to your PC:
+
+```powershell
+scp sima@192.168.137.193:~/object-detection/sandbox/detections.mp4 .
+scp -r sima@192.168.137.193:~/object-detection/sandbox/frames .
+```
+
+| Setting | Meaning |
+|:--|:--|
+| `output.video.path` | Where to write, relative to the launch directory |
+| `output.video.codec` | 4-char FourCC. `mp4v` by default, auto-falls back to `MJPG`/`.avi` |
+| `output.video.fps` | `0` matches the source rate |
+| `output.video.hud` | The summary strip. Turn off for clean footage |
+| `output.save.every` | Write every Nth frame as a JPEG. `0` disables |
+
 ---
 
 ## ⚙️ Configuration
 
-Everything lives in `yolo-detector/config.yaml`. Five settings matter:
+Everything lives in `object-detection/config.yaml`. These settings matter:
 
 ```yaml
 model:
   path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
-  family: yolo26                    # must match your model
+  family: yolo26                       # must match your model
 
 source:
-  type: video                       # video | rtsp | usb
-  uri: assets/video/video-4.h264    # DevKit path, relative to ~/yolo-detector
+  type: video                          # video | rtsp | usb
+  uri: assets/video/video-loop.h264    # DevKit path, relative to ~/object-detection
 
 output:
+  video:
+    enable: true
+    path: sandbox/detections.mp4       # annotated video, written on the DevKit
+    hud: true                          # fps + object count strip
+  save:
+    enable: true
+    dir: sandbox/frames                # annotated stills
+    every: 25
   insight:
-    host: 192.168.137.1             # NOT 127.0.0.1
+    host: 192.168.137.1                # NOT 127.0.0.1
 ```
 
 | ❌ Mistake | What happens |
@@ -419,7 +494,7 @@ sudo su - && cd /mnt/d/work/sima-projects && source sima/bin/activate && sima-cl
 Then: **edit → copy → run → watch**, repeat.
 
 ```powershell
-scp -r yolo-detector/ sima@192.168.137.193:~
+scp -r object-detection/ sima@192.168.137.193:~
 ```
 
 <details>
@@ -429,7 +504,7 @@ scp -r yolo-detector/ sima@192.168.137.193:~
 
 ```powershell
 # pull annotated frames back
-scp -r sima@192.168.137.193:~/yolo-detector/sandbox .
+scp -r sima@192.168.137.193:~/object-detection/sandbox .
 
 # stop typing your password
 ssh-keygen -t ed25519 -C "devkit"
@@ -538,7 +613,7 @@ sima-cli neat install core@v0.3.0
 |:--|:--|
 | `ssh: Could not resolve hostname d:` | Windows path used in Linux. `scp` read `D:` as a hostname |
 | `scp: Connection closed` | Usually follows the above |
-| `model archive not found` | Run from `~/yolo-detector`, and check `find assets -type f` |
+| `model archive not found` | Run from `~/object-detection`, and check `find assets -type f` |
 | `failed to open source` | Same, for the video |
 | Copy hangs | IP changed. `arp -a \| Select-String "192.168.137"` |
 

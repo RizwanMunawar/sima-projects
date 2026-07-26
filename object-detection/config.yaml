@@ -31,21 +31,17 @@ source:
   # video | rtsp | usb
   type: video
 
-  # type: video  -> filesystem path to an H.264 .mp4/.mkv
-  # type: rtsp   -> rtsp://<ip>:<port>/<stream>
-  # type: usb    -> camera device/name, or "" to use the DevKit default
-  # Path AS SEEN ON THE DEVKIT, relative to where you launch main.py (~/yolo-detector).
-  # Windows paths (C:\... or D:\...) do NOT work — the app runs on Linux.
+  # A DEVKIT path, relative to where you launch main.py (~/object-detection).
+  # Windows paths (C:\... D:\...) cannot work — the app runs on Linux.
   #
-  # Prefer a raw H.264 elementary stream (.h264) over a container (.mp4).
-  # groups.video_input has a demuxer naming bug in Neat 0.3.0 that makes .mp4
-  # fail at pipeline start with: No src-element named "nN_demux".
-  # Convert once, on any machine with ffmpeg:
-  #   ffmpeg -i video-4.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 video-4.h264
-  # video-loop.h264 is the same clip repeated 10x (~2 minutes), so there is time
-  # to open Insight and watch. UDP is fire-and-forget: nothing is buffered, so a
-  # viewer opened after the stream ends sees nothing at all.
-  #   ffmpeg -stream_loop 9 -i clip.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 out.h264
+  #   type: video -> a raw H.264 elementary stream. NOT .mp4: containers hit a
+  #                  demuxer bug in Neat 0.3.0 (No src-element named "nN_demux")
+  #   type: rtsp  -> rtsp://<ip>:<port>/<stream>
+  #   type: usb   -> camera name, or "" for the DevKit default
+  #
+  # Convert and loop in one step. The loop matters because UDP buffers nothing,
+  # so a short clip is over before you can open Insight:
+  #   ffmpeg -stream_loop 9 -i clip.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 video-loop.h264
   uri: assets/video/video-loop.h264
 
   # Raw elementary streams carry no container metadata, so set these explicitly.
@@ -147,11 +143,19 @@ runtime:
   profile_interval: 100
 
 output:
-  # --- Annotated frames to disk ---
+  # --- Annotated video written on the DevKit ---
+  video:
+    enable: true
+    path: sandbox/detections.mp4   # relative to where you launch main.py
+    codec: mp4v                    # 4-char FourCC. Falls back to MJPG/.avi automatically
+    fps: 0                         # 0 = match the source frame rate
+    hud: true                      # frame rate, object count and top classes strip
+
+  # --- Annotated still frames ---
   save:
     enable: true
-    dir: sandbox/yolo-detector
-    every: 10             # write every Nth published frame; 0 disables
+    dir: sandbox/frames
+    every: 25             # write every Nth published frame; 0 disables
     overlay: true         # draw boxes + labels before writing
     format: jpg           # jpg | png
 

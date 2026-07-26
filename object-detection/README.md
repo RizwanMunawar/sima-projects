@@ -20,7 +20,7 @@ verified against the packaged core source in this SDK image, not from memory:
 ## Layout
 
 ```
-yolo-detector/
+object-detection/
 ├── config.yaml              # everything is configured here
 ├── README.md
 └── src/
@@ -140,15 +140,15 @@ and will not import in the x86 SDK container.
 Copy the project into the SDK workspace, which is NFS-exported to the DevKit:
 
 ```bash
-cp -r yolo-detector /root/workspace/
+cp -r object-detection /root/workspace/
 ```
 
 On the DevKit:
 
 ```bash
 source ~/pyneat/bin/activate
-pip install -r yolo-detector/src/requirements.txt
-python3 yolo-detector/src/main.py --config yolo-detector/config.yaml
+pip install -r object-detection/src/requirements.txt
+python3 object-detection/src/main.py --config object-detection/config.yaml
 ```
 
 Validate the config first — this parses and checks everything without touching
@@ -165,7 +165,7 @@ forwarded and the app can be orphaned on the DevKit still holding the MLA and
 streaming UDP. For interactive runs:
 
 ```bash
-ssh -tt <devkit> 'cd ~/workspace/yolo-detector && python3 src/main.py --config config.yaml'
+ssh -tt <devkit> 'cd ~/workspace/object-detection && python3 src/main.py --config config.yaml'
 ```
 
 `main.py` installs `SIGINT`/`SIGTERM`/`SIGHUP` handlers that close the `Run` and the
