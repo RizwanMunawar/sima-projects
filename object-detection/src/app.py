@@ -519,11 +519,13 @@ SCALING_TYPES = {
     "NO_SCALING",
 }
 RUN_PRESETS: dict[str, str] = {
+    "auto": "Reliable",   # placeholder, resolve_flow_control() picks the real one
     "realtime": "Realtime",
     "balanced": "Balanced",
     "reliable": "Reliable",
 }
 OVERFLOW_POLICIES: dict[str, str] = {
+    "auto": "Block",      # placeholder, resolve_flow_control() picks the real one
     "block": "Block",
     "keep_latest": "KeepLatest",
     "drop_incoming": "DropIncoming",
@@ -1035,14 +1037,51 @@ def load_labels(path: Path) -> list[str]:
     return labels
 
 
+def resolve_flow_control(cfg: AppConfig) -> tuple[str, str]:
+    """Choose a run preset and overflow policy for the source type.
+
+    File sources must not drop buffers. The graph branches into a fast frame
+    passthrough and a slow MLA inference path, then recombines them with
+    ``CombinePolicy.ByFrame``. Under ``keep_latest`` the two branches drop
+    *different* frames, the combine waits for an id that will never arrive on
+    one side, and the run stalls part-way through the file. ``block`` keeps them
+    in lockstep and makes throughput model-bound, which is what offline
+    processing wants.
+
+    Live sources want the opposite: staying current matters more than keeping
+    every frame, so dropping is correct.
+
+    Args:
+        cfg: Application configuration.
+
+    Returns:
+        A ``(preset, overflow_policy)`` pair of config tokens.
+    """
+    live = cfg.source_type in {"rtsp", "usb"}
+    preset = cfg.run_preset
+    policy = cfg.overflow_policy
+    if preset == "auto":
+        preset = "realtime" if live else "reliable"
+    if policy == "auto":
+        policy = "keep_latest" if live else "block"
+    return preset, policy
+
+
 def make_run_options(cfg: AppConfig):
+    """Build RunOptions, resolving any ``auto`` flow-control settings.
+
+    Args:
+        cfg: Application configuration.
+
+    Returns:
+        A populated ``pyneat.RunOptions``.
+    """
+    preset, policy = resolve_flow_control(cfg)
     run_options = pyneat.RunOptions()
-    run_options.preset = enum_value(
-        pyneat.RunPreset, cfg.run_preset, RUN_PRESETS, "runtime.preset"
-    )
+    run_options.preset = enum_value(pyneat.RunPreset, preset, RUN_PRESETS, "runtime.preset")
     run_options.queue_depth = cfg.queue_depth
     run_options.overflow_policy = enum_value(
-        pyneat.OverflowPolicy, cfg.overflow_policy, OVERFLOW_POLICIES, "runtime.overflow_policy"
+        pyneat.OverflowPolicy, policy, OVERFLOW_POLICIES, "runtime.overflow_policy"
     )
     run_options.output_memory = pyneat.OutputMemory.ZeroCopy
     return run_options
@@ -1124,6 +1163,14 @@ def build_pipeline(cfg: AppConfig) -> Pipeline:
         f"model: {cfg.model_path} family={cfg.family} "
         f"decode_type={FAMILY_DECODE_TOKENS[cfg.family]} labels={len(labels)}"
     )
+
+    preset, policy = resolve_flow_control(cfg)
+    step(f"runtime: preset={preset} overflow={policy} queue_depth={cfg.queue_depth}")
+    if policy != "block" and cfg.source_type == "video":
+        step(
+            "[warn] a file source with a dropping overflow policy can stall the\n"
+            "       ByFrame combine part-way through. Use overflow_policy: auto."
+        )
 
     step("building graph...")
     graph = build_detector_graph(cfg, model, width, height, fps)
@@ -1629,7 +1676,14 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
                 file=sys.stderr, flush=True,
             )
             if cfg.source_type == "video":
-                print("end of video file or stalled source; stopping", flush=True)
+                print(
+                    f"source produced nothing for {cfg.pull_timeout_ms} ms after "
+                    f"{processed} frames; stopping.\n"
+                    "If that is far short of the clip length, the source stalled "
+                    "rather than ended.\nSet runtime.overflow_policy: auto so a file "
+                    "source never drops buffers.",
+                    flush=True,
+                )
                 break
             continue
 

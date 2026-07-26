@@ -18,9 +18,9 @@ model:
 
 source:
   type: video                          # video | rtsp | usb
-  uri: assets/videos/video-6.h264    # .h264 only, see note below
+  uri: assets/videos/video-3.h264    # .h264 only, see note below
 
-  fps: 25                              # 0 = probe (raw .h264 cannot be probed)
+  fps: 30                              # 0 = probe (raw .h264 cannot be probed)
   width: 1920
   height: 1080
 
@@ -82,8 +82,12 @@ runtime:
   frames: 0                  # 0 = run until interrupted
   pull_timeout_ms: 20000     # how long to wait for a frame before giving up
   queue_depth: 3
-  preset: realtime           # realtime | balanced | reliable
-  overflow_policy: keep_latest   # keep_latest | block | drop_incoming
+  # auto picks per source: files get reliable+block so no frame is ever dropped,
+  # live sources get realtime+keep_latest so they stay current.
+  # Dropping on a file source stalls the ByFrame combine part-way through and
+  # truncates the output video.
+  preset: auto               # auto | realtime | balanced | reliable
+  overflow_policy: auto      # auto | block | keep_latest | drop_incoming
   profile: false             # per-stage timings
   profile_interval: 100
 
