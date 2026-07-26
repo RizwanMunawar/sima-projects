@@ -867,6 +867,65 @@ def make_elementary_h264_source(cfg: AppConfig, width: int, height: int, fps: in
     return graph
 
 
+def check_source_file(cfg: AppConfig) -> None:
+    """Fail fast when a file source is missing, empty or a container.
+
+    ``filesrc`` reports a missing file on the GStreamer bus rather than raising,
+    so without this the run looks healthy right up to a 20 second pull timeout
+    reporting zero frames, which is indistinguishable from a stall.
+
+    Args:
+        cfg: Application configuration.
+
+    Raises:
+        RuntimeError: If the file is missing or empty.
+    """
+    if cfg.source_type != "video":
+        return
+
+    path = Path(cfg.source_uri)
+    if not path.exists():
+        listing = ""
+        parent = path.parent
+        for candidate in (parent, Path("assets/video"), Path("assets/videos")):
+            if candidate.is_dir():
+                names = sorted(p.name for p in candidate.iterdir() if p.is_file())
+                if names:
+                    listing += f"\n  {candidate}/ contains: {', '.join(names[:8])}"
+        raise RuntimeError(
+            f"source file not found: {path}\n"
+            f"  looked in: {path.resolve().parent}\n"
+            f"  launched from: {Path.cwd()}"
+            f"{listing}\n"
+            "source.uri is relative to the directory you launch app.py from."
+        )
+
+    size = path.stat().st_size
+    if size == 0:
+        raise RuntimeError(f"source file is empty: {path}")
+
+    if is_elementary_h264(cfg.source_uri):
+        head = path.open("rb").read(12)
+        # Annex-B streams open with a 3 or 4 byte start code. An MP4 carries
+        # "ftyp" at offset 4, which is what a rename rather than a convert looks
+        # like, and h264parse would simply never produce a frame.
+        annex_b = head.startswith(b"\x00\x00\x00\x01") or head.startswith(b"\x00\x00\x01")
+        if not annex_b:
+            hint = (
+                " That looks like an MP4 container renamed to .h264."
+                if b"ftyp" in head
+                else ""
+            )
+            raise RuntimeError(
+                f"{path} is not a raw H.264 elementary stream.{hint}\n"
+                f"  first bytes: {head[:8].hex(' ')}\n"
+                "Convert rather than rename:\n"
+                "  ffmpeg -i clip.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 clip.h264"
+            )
+
+    print(f"source file: {path} ({size / 1e6:.1f} MB)", flush=True)
+
+
 def make_source_graph(cfg: AppConfig, width: int, height: int, fps: int):
     """File / RTSP / camera head of the Graph. All three produce NV12 frames."""
     if cfg.source_type == "video":
@@ -1156,6 +1215,7 @@ def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
 def build_pipeline(cfg: AppConfig) -> Pipeline:
     step = lambda msg: print(msg, flush=True)
 
+    check_source_file(cfg)
     width, height, fps = resolve_source_geometry(cfg)
     step(f"source: type={cfg.source_type} uri={cfg.source_uri or '<default camera>'} "
          f"stream={width}x{height}@{fps}")

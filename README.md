@@ -682,7 +682,8 @@ sima-cli neat install core@v0.3.0
 | `ssh: Could not resolve hostname d:` | Windows path used in Linux. `scp` read `D:` as a hostname |
 | `scp: Connection closed` | Usually follows the above |
 | `model archive not found` | Run from `~/object-detection`, and check `find assets -type f` |
-| `failed to open source` | Same, for the video |
+| `source file not found` | The path is relative to where you launch `app.py`. The error lists what is actually in the folder |
+| `is not a raw H.264 elementary stream` | You renamed a `.mp4` instead of converting it. Use the ffmpeg command in the error |
 | Copy hangs | IP changed. `arp -a \| Select-String "192.168.137"` |
 
 </details>
