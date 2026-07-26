@@ -1,0 +1,912 @@
+<div align="center">
+
+# SiMa Neat SDK
+
+### Live YOLO object detection on a Modalix DevKit
+
+<br>
+
+[![SiMa.ai](https://img.shields.io/badge/SiMa.ai-Modalix-E63946?style=for-the-badge)](https://sima.ai)
+[![Palette SDK](https://img.shields.io/badge/Palette_SDK-2.1.2-457B9D?style=for-the-badge)](https://docs.sima.ai)
+[![Neat](https://img.shields.io/badge/Neat-0.3.0-2A9D8F?style=for-the-badge)](https://docs.sima.ai)
+
+![Windows](https://img.shields.io/badge/Windows_11-0078D6?style=flat-square&logo=windows11&logoColor=white)
+![WSL2](https://img.shields.io/badge/WSL2-E95420?style=flat-square&logo=ubuntu&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
+![Python](https://img.shields.io/badge/Python_3.10+-3776AB?style=flat-square&logo=python&logoColor=white)
+![YOLO](https://img.shields.io/badge/YOLO-26_·_11_·_v8_·_v5-FFB703?style=flat-square&labelColor=333)
+
+![Setup](https://img.shields.io/badge/setup-~2h-6C757D?style=flat-square)
+![Download](https://img.shields.io/badge/download-12.6_GB-DC3545?style=flat-square)
+
+</div>
+
+## What this is
+
+A **setup guide** and a **working detector app**, both written while actually bringing
+up a DevKit. Every warning marks somewhere real time was lost.
+
+```
+   ┌──────────────┐        ┌──────────────────┐        ┌───────────────┐
+   │  WINDOWS PC  │        │   WSL2 · UBUNTU  │        │    DEVKIT     │
+   ├──────────────┤        ├──────────────────┤        ├───────────────┤
+   │  Chrome      │<──────>│  sima-cli        │<──────>│  MLA          │
+   │  scp / ssh   │ :9900  │  Docker + SDK    │  UDP   │  your app     │
+   │              │        │  Neat Insight    │ 9000/  │               │
+   │              │        │                  │ 9100   │               │
+   └──────────────┘        └──────────────────┘        └───────────────┘
+        viewer                build + receive             inference
+```
+
+Your app runs **on the DevKit**. It sends H.264 video and JSON detections over UDP,
+and Insight recombines them in your browser.
+
+```bash
+git clone https://github.com/RizwanMunawar/sima-projects.git
+cd sima-projects
+```
+
+Already have a DevKit set up? Jump to [Deploy and run](#step-9). Starting
+from a bare machine? Work through the steps in order.
+
+---
+
+## Complete workflow
+
+Who does what, and in which order. **Click any step to jump to it.**
+
+```
+┌───────────────────────────────────────────────────────────────────────────────┐
+│      WINDOWS PC        │       WSL2 · UBUNTU        │     MODALIX DEVKIT      │
+├────────────────────────┼────────────────────────────┼─────────────────────────┤
+├─────────────────────────────── ONE-TIME SETUP ────────────────────────────────┤
+│                        │                            │                         │
+│ 1  cable up  ──────────┼────────────────────────────┼───>  DHCP address       │
+│      USB + Ethernet    │                            │      board powers on    │
+│                        │                            │                         │
+│ 2  wsl --install ──────┼───>  Ubuntu ready          │                         │
+│                        │                            │                         │
+│ 3  .wslconfig  ────────┼───>  WSL takes .137.1  ────┼───>  now reachable      │
+│      mirrored mode     │        same subnet         │      both directions    │
+│                        │                            │                         │
+│ 4  firewall rules ─────┼───>  UDP 9000/9100 open    │                         │
+│      Hyper-V inbound   │        ready to receive    │                         │
+│                        │                            │                         │
+│                        │ 5  git clone + sima-cli    │                         │
+│                        │      repo + venv           │                         │
+│                        │                            │                         │
+│                        │ 6  docker + nfs            │                         │
+│                        │      the SDK is a container│                         │
+│                        │                            │                         │
+│                        │ 7  sima-cli sdk setup ─────┼─>  pyneat + runtime     │
+│                        │      12.6 GB image         │      installed on board │
+│                        │                            │                         │
+│                        │ 8  download model          │                         │
+│                        │      yolo26m .tar.gz       │                         │
+│                        │                            │                         │
+├────────────────────────────── EVERY RUN, REPEAT ──────────────────────────────┤
+│                        │                            │                         │
+│                        │ 9  scp object-detection/ ──┼─>  ~/object-detection   │
+│                        │      edit, copy, run       │      python3 src/app.py │
+│                        │                            │                         │
+│10  browser  <──────────┼────  Insight  <────────────┼────  VideoSender        │
+│      localhost:9900    │        live, while running │      MetadataSender     │
+│                        │                            │                         │
+│10  scp  <──────────────┼────────────────────────────┼────  VideoWriter        │
+│      keeps a copy      │        detections.mp4      │      every frame        │
+│                        │                            │                         │
+└────────────────────────┴────────────────────────────┴─────────────────────────┘
+```
+
+| Step | Runs on | Time | Notes |
+|:--|:--|:--|:--|
+| [1. Cable up the DevKit](#step-1) | PowerShell | 15 min | |
+| [2. Install WSL2](#step-2) | PowerShell | 10 min | |
+| [3. Mirrored networking](#step-3) | PowerShell | 5 min | **Do not do this late** |
+| [4. Firewall](#step-4) | PowerShell | 2 min | **Do not do this late** |
+| [5. Get the code and install sima-cli](#step-5) | WSL | 5 min | |
+| [6. Docker Engine + NFS](#step-6) | WSL | 10 min | |
+| [7. Install the Neat SDK](#step-7) | WSL | 30 to 60 min | 12.6 GB download |
+| [8. Download a model](#step-8) | SDK container | 5 min | |
+| [9. Deploy and run](#step-9) | DevKit | 2 min | Repeats every change |
+| [10. The result](#step-10) | DevKit + Browser | 2 min | Repeats every change |
+
+Steps 3 and 4 are load-bearing. Step 7 installs onto the board over the network and
+fails silently if they are not done first, which is the usual way to lose an afternoon.
+
+<a id="step-1"></a>
+### 1. Cable up the DevKit
+
+USB cable (serial console) + Ethernet straight to your PC. Open the
+[serial tool](https://docs.sima.ai/_static/tools/serial/index.html), set the DevKit to
+**DHCP**.
+
+```powershell
+arp -a | Select-String "192.168.137"     # find the board
+ping <devkit-ip>
+```
+
+> ✅ Must reply. Nothing else works until it does.
+
+> [!IMPORTANT]
+> **`<devkit-ip>` appears throughout this guide. Substitute your own.** The board gets
+> its address by DHCP, so it changes between reboots: mine has been both
+> `192.168.137.123` and `192.168.137.193`. Your PC keeps `192.168.137.1`, which is why
+> that one is written out in full.
+
+<a id="step-2"></a>
+### 2. Install WSL2
+
+```powershell
+wsl --install -d Ubuntu      # PowerShell as Administrator
+wsl -l -v                    # want: Ubuntu · Running · 2
+```
+
+<a id="step-3"></a>
+### 3. Mirrored networking
+
+WSL sits behind NAT by default and **cannot see your DevKit**. Later, pairing installs
+software onto the board over the network. With no route, the PC half succeeds and the
+board half silently does nothing. You find out an hour later.
+
+```powershell
+@"
+[wsl2]
+networkingMode=mirrored
+"@ | Set-Content -Path "$env:USERPROFILE\.wslconfig" -Encoding utf8
+
+wsl --shutdown
+```
+
+Wait 10 seconds, open a WSL terminal, then verify:
+
+```powershell
+wsl -- hostname -I                  # must list 192.168.137.1
+wsl -- ping -c 2 <devkit-ip>        # must reply
+```
+
+> ✅ **Both must pass.** Be stubborn here.
+>
+> **Note.** Made the file in Notepad? Check it is not secretly `.wslconfig.txt`.
+
+<a id="step-4"></a>
+### 4. Firewall
+
+Mirrored mode puts WSL behind the Hyper-V firewall, which blocks inbound by default.
+Your DevKit pushing video **is** inbound. Skip this and Insight loads perfectly and
+shows nothing, with no error anywhere.
+
+```powershell
+# PowerShell as Administrator
+New-NetFirewallHyperVRule -Name "NeatVideo" -DisplayName "Neat Insight video" `
+  -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' `
+  -Protocol UDP -LocalPorts 9000-9079 -Action Allow
+
+New-NetFirewallHyperVRule -Name "NeatMeta" -DisplayName "Neat Insight metadata" `
+  -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' `
+  -Protocol UDP -LocalPorts 9100-9179 -Action Allow
+```
+
+> **Note.** These live in Windows, not the distro, so they survive `wsl --unregister`.
+
+<a id="step-5"></a>
+### 5. Get the code and install sima-cli
+
+Become root **first**. `sudo su -` is a login shell, so it drops you in `/root`.
+Cloning after that puts the repo at `/root/sima-projects`, which is why every later
+step can just say `cd sima-projects`.
+
+```bash
+# WSL
+sudo su -
+apt update && apt install -y git python3-venv python3-pip
+
+git clone https://github.com/RizwanMunawar/sima-projects.git
+cd sima-projects
+
+python3 -m venv sima
+source sima/bin/activate
+pip install sima-cli
+sima-cli login                  # needs a community.sima.ai account
+```
+
+You now have the app in [`object-detection/`](object-detection/) and the `sima` venv
+beside it. **Every command below runs from this directory.**
+
+<a id="step-6"></a>
+### 6. Docker Engine + NFS
+
+The Neat SDK **is** a Docker container. No Docker, no SDK.
+
+```bash
+# WSL, from docs.docker.com/engine/install/ubuntu
+sudo apt update && sudo apt install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo apt install -y nfs-kernel-server nfs-common
+```
+
+Docker needs systemd to survive a WSL restart:
+
+```bash
+grep -q 'systemd=true' /etc/wsl.conf 2>/dev/null || sudo tee -a /etc/wsl.conf <<'EOF'
+
+[boot]
+systemd=true
+EOF
+```
+
+```powershell
+wsl --shutdown          # PowerShell, then reopen WSL
+```
+
+```bash
+sudo systemctl enable --now docker
+sudo docker run hello-world
+```
+
+> ✅ Must print **"Hello from Docker!"**
+
+<a id="step-7"></a>
+### 7. Install the Neat SDK
+
+```bash
+sudo su -
+cd sima-projects
+source sima/bin/activate
+sima-cli install ghcr:sima-neat/sdk
+sima-cli sdk setup --devkit <devkit-ip>
+```
+
+**Answer every prompt.** The ones that matter:
+
+| Prompt | Answer |
+|:--|:--|
+| `Some system checks failed. Continue?` | `y`. The Firewall row says *Unverified*, not failed |
+| `Install Model Compiler extension?` | `Y`. Adds **9 GB**, only needed to compile your own models |
+| `Install VSCode Extensions?` | `y` lowercase. A bare Enter is rejected |
+| `Apply passwordless sudo on DevKit?` | `y`. Required for workspace sync |
+| everything else | `Y` / Enter |
+
+Then confirm the **board half** actually happened, because it is what fails quietly:
+
+```bash
+ssh sima@<devkit-ip> "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat.__version__)'"
+```
+
+> ✅ Prints a version → done.
+> ❌ `No such file or directory` → see [Recovery](#recovery).
+
+> [!NOTE]
+> **`mount.nfs: Connection timed out` is fine.** Setup falls back to rsync and carries
+> on. Also: **the DevKit IP changes between reboots** (DHCP). If things hang, check with
+> `arp -a | Select-String "192.168.137"`.
+
+<a id="step-8"></a>
+### 8. Download a model
+
+```bash
+sima-cli sdk neat        # WSL, starts the container and drops you inside
+
+# in the container
+sima-cli login
+mkdir -p /workspace/assets/models && cd /workspace/assets/models
+MODELS=https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yolo26-detection
+sima-cli download $MODELS/yolo26m-det-bf16-mla_tess-b1.tar.gz
+```
+
+Swap `yolo26m` for `n`, `s`, `l` or `x` to trade speed against accuracy.
+
+<a id="step-9"></a>
+### 9. Deploy and run
+
+The app lives in [`object-detection/`](object-detection/):
+
+```
+object-detection/
+├── config.yaml          # every setting lives here
+├── assets/
+│   ├── models/          # .tar.gz model packs  (not in git)
+│   └── video/           # .h264 streams        (not in git)
+└── src/
+    ├── app.py           # the pipeline
+    ├── coco_labels.txt  # 80 COCO class names
+    └── requirements.txt
+```
+
+Models and video are gitignored, so after cloning you supply your own: download a model
+(step 8) into `assets/models/`, and put a `.h264` stream in `assets/video/`.
+
+On the DevKit, once per board:
+
+```bash
+pip install -r ~/object-detection/src/requirements.txt
+```
+
+> [!CAUTION]
+> **Never let pip pull numpy 2.x.** `pyneat` and every `simaai-*` package need
+> `numpy<2`. The pins in `requirements.txt` handle it. If you already broke it:
+> `pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"`
+
+**One command copies everything.** Run it from the repo root in WSL, after every
+change:
+
+```bash
+scp -r object-detection/ sima@<devkit-ip>:~
+```
+
+> [!IMPORTANT]
+> Mind the **IP**, yours may differ. This overwrites the copy on the board, so the
+> repo in WSL stays the original.
+
+Then on the DevKit:
+
+```bash
+ssh -tt sima@<devkit-ip>                     # two t's, see below
+source ~/pyneat/bin/activate
+cd ~/object-detection && python3 src/app.py --config config.yaml
+```
+
+Healthy output:
+
+```
+source: type=video uri=assets/video/video-4.h264 stream=1920x1080@24
+preprocess: ... resize=letterbox pad=114 normalize=coco_yolo
+model: ... family=yolo26 decode_type=YoloV26 labels=80
+runtime: preset=reliable overflow=block queue_depth=3
+graph built
+insight: host=192.168.137.1 video=9000 metadata=9100 channel=0
+running. press Ctrl-C to stop.
+[50] 24.8 fps, 6.2 detections/frame avg
+```
+
+> [!CAUTION]
+> **Use `ssh -tt`, two t's.** Without a pty, Ctrl-C never reaches the app. It keeps
+> running invisibly holding the MLA and your next run fails.
+> Rescue: `ssh sima@<devkit-ip> pkill -f src/app.py`
+
+<a id="step-10"></a>
+### 10. The result
+
+Every run writes an annotated video on the board at
+`~/object-detection/detections.mp4`, one entry per processed frame. Pull it across and
+play it:
+
+```bash
+scp sima@<devkit-ip>:~/object-detection/detections.mp4 .
+```
+
+It looks like this:
+
+<div align="center">
+
+<!-- ─────────────────────────────────────────────────────────────────────────
+     Embed the demo video here.
+     GitHub accepts a drag-and-dropped .mp4 directly in the README editor,
+     or paste the user-images.githubusercontent.com URL it generates.
+     ───────────────────────────────────────────────────────────────────── -->
+
+https://github.com/user-attachments/assets/REPLACE-WITH-YOUR-VIDEO
+
+
+</div>
+
+<div align="center">
+
+### Or watch it live
+
+<h2><a href="https://localhost:9900">https://localhost:9900</a></h2>
+
+**select channel 0**
+
+</div>
+
+> [!IMPORTANT]
+> **Open Insight and select the channel _before_ you start the app.** Video and
+> detections go out over UDP, which buffers nothing. A viewer opened after the stream
+> ends sees an empty page, even though everything worked.
+>
+> Short clips make this worse. A 12-second video is over before you can switch windows.
+> Loop it into something you can actually watch:
+> ```powershell
+> ffmpeg -stream_loop 9 -i clip.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 video-loop.h264
+> ```
+
+> [!WARNING]
+> **Ignore the address `neat` prints.** It says `https://192.168.137.1:9900`, which
+> Windows cannot reach: that counts as inbound to the WSL VM and the firewall drops it.
+> `localhost` takes a different path. Same for the VS Code URL, keep the token and swap
+> the host.
+
+**How to tell it is actually streaming.** The app prints these on the way out:
+
+```
+metadata: sent=102 failures=0 would_block=0
+video: wrote 3012 frames to sandbox/detections.mp4 (48.3 MB)
+```
+
+`failures=0` means every datagram left the board. If Insight is still blank after that,
+the problem is on the receiving side: the firewall (step 4), or `insight.host` pointing
+at `127.0.0.1`.
+
+### The recording
+
+**Every processed frame** is written to an annotated video on the DevKit, so a run
+always leaves something to review even if nobody was watching Insight at the time.
+
+```
+   ┌───────────────────────────────────────────────────────────┐
+   │ ┌──────────┐                                              │
+   │ │ FPS: 24.7│                                              │
+   │ └──────────┘   ┌────────────┐                             │
+   │                │ person 94% │                             │
+   │                ├────────────┴─────────┐                   │
+   │                │                      │                   │
+   │                │           •          │   centre marker   │
+   │                │                      │                   │
+   │                └──────────────────────┘                   │
+   └───────────────────────────────────────────────────────────┘
+```
+
+A plain rectangle in the class colour, a centre dot, and a filled caption directly
+above carrying the class name and confidence in white. Captions flip inside the box
+rather than clipping off the top of the frame. Colours come from a 20-entry palette
+keyed to class id, so the same class is always the same colour. Line weight, text size
+and padding scale with the frame, so 4K does not get hairlines and 480p does not get
+slabs.
+
+The same annotated frame is what Insight receives, so the browser view and the
+recording look identical. Set `output.insight.annotated: false` to send the raw frame
+instead and let Insight draw its own overlay from the metadata stream.
+
+Pull the results back to your PC:
+
+```powershell
+scp sima@<devkit-ip>:~/object-detection/sandbox/detections.mp4 .
+scp -r sima@<devkit-ip>:~/object-detection/sandbox/frames .
+```
+
+| Setting | Meaning |
+|:--|:--|
+| `output.video.path` | Where to write, relative to the launch directory |
+| `output.video.codec` | 4-char FourCC. `mp4v` by default, auto-falls back to `MJPG`/`.avi` |
+| `output.video.fps` | `0` matches the source rate |
+| `output.video.hud` | Small FPS badge in the corner. Turn off for clean footage |
+| `output.save.every` | Write every Nth frame as a JPEG. `0` disables |
+| `output.insight.annotated` | `true` sends our overlay to Insight, `false` sends the raw frame |
+
+## Configuration
+
+Everything lives in `object-detection/config.yaml`. These settings matter:
+
+```yaml
+model:
+  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
+  family: yolo26                       # must match your model
+
+source:
+  type: video                          # video | rtsp | usb
+  uri: assets/video/video-loop.h264    # DevKit path, relative to ~/object-detection
+
+output:
+  video:
+    enable: true
+    path: sandbox/detections.mp4       # annotated video, written on the DevKit
+    hud: true                          # small FPS badge
+  insight:
+    annotated: true                    # Insight shows our overlay
+  save:
+    enable: true
+    dir: sandbox/frames                # annotated stills
+    every: 25
+  insight:
+    host: 192.168.137.1                # NOT 127.0.0.1
+```
+
+| ❌ Mistake | What happens |
+|:--|:--|
+| `uri: C:\Users\...\video.mp4` | The DevKit has no `C:` drive |
+| `uri: r"C:\path\file.mp4"` | `r"..."` is Python. YAML keeps the `r` and quotes |
+| `host: 127.0.0.1` | Means "the board itself". Video goes nowhere |
+| `family` mismatched | No detections, or every score near zero |
+| A `.mp4` source | Hits a demuxer bug. Convert to `.h264`, see below |
+
+### Video must be raw H.264
+
+The DevKit decodes H.264 in hardware, and `.mp4` containers hit a
+[known bug](#known-issues). Convert once, losslessly:
+
+```powershell
+ffmpeg -i video-4.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 video-4.h264
+```
+
+Raw streams carry no metadata, so set geometry explicitly:
+
+```yaml
+source:
+  fps: 25
+  width: 1920
+  height: 1080
+```
+
+### First run: prove the model offline
+
+Debugging the model and the network at once is what makes this painful. Set:
+
+```yaml
+runtime: { frames: 100, profile: true }
+output:
+  save:   { enable: true }
+  insight: { enable: false }
+```
+
+100 frames, annotated JPEGs to disk, timings, exits by itself, **zero networking**.
+Boxes look right? Model and config are correct, so anything later is transport.
+
+## Daily loop
+
+Start the SDK:
+
+```bash
+sudo su -
+cd sima-projects
+source sima/bin/activate
+sima-cli sdk neat
+```
+
+Then **edit, copy, run, watch**, and repeat. From the repo root in WSL:
+
+```bash
+scp -r object-detection/ sima@<devkit-ip>:~
+```
+
+| Task | Command | Run in |
+|:--|:--|:--|
+| Start the SDK container | `sima-cli sdk neat` | WSL |
+| Push the app to the board | `scp -r object-detection/ sima@<devkit-ip>:~` | WSL |
+| Pull the video back | `scp sima@<devkit-ip>:~/object-detection/detections.mp4 .` | WSL |
+| Pull the stills back | `scp -r sima@<devkit-ip>:~/object-detection/sandbox .` | WSL |
+| SSH to the board | `dk shell` | SDK container |
+| Check the sync method | `dk status` | SDK container |
+| Component versions and ports | `neat` | SDK container |
+| Run the app | `python3 src/app.py --config config.yaml` | DevKit |
+| Kill an orphaned run | `pkill -f src/app.py` | DevKit |
+
+Tired of typing the password? Install a key once:
+
+```bash
+ssh-keygen -t ed25519 -C "devkit"
+ssh-copy-id sima@<devkit-ip>
+```
+
+## Recovery
+
+<details>
+<summary><b>DevKit firmware version mismatch</b></summary>
+
+```
+ERROR: DevKit/SDK version mismatch. DevKit 2.0.0, SDK 2.1.2
+```
+
+New boards often ship older firmware. **eLxr cannot be updated remotely**, so this runs
+**on the board**. It needs internet, which Windows ICS already provides over your
+Ethernet cable.
+
+```bash
+ssh sima@<devkit-ip>
+sima-cli login
+sima-cli update            # menu → "Update all packages to the latest"
+```
+
+The sudo password is the same one you SSH in with. Budget 15–40 minutes plus a reboot.
+
+> `--dryrun` ends with `No ELXR update was applied`. That is what a dry run does. Run
+> it again without the flag.
+>
+> A firmware update may wipe the board's home directory. Never keep the only copy of
+> anything there.
+
+Afterwards, re-run `sima-cli sdk setup --devkit <ip>`. If SSH complains the host key
+changed, that is expected: `ssh-keygen -R <ip>`.
+
+</details>
+
+<details>
+<summary><b>pyneat missing on the DevKit</b></summary>
+
+<a id="recovery"></a>
+
+Means pairing never installed it, almost always because networking was not fixed first.
+Re-run pairing from **WSL** now that it works:
+
+```bash
+sima-cli sdk setup --devkit <devkit-ip>
+```
+
+Still missing? Install by hand on the board. Match the version from `neat` in the
+container, and install under `/media/nvme` because the root filesystem is too small:
+
+```bash
+sudo mkdir -p /media/nvme/neat && sudo chown "$USER:$USER" /media/nvme/neat
+cd /media/nvme/neat
+sima-cli login
+sima-cli neat install core@v0.3.0
+```
+
+> `sima-cli` downloads into the **current directory**, so `cd` somewhere you own first.
+> `-t pyneat` fetches only the wheel, which is not enough to run an app.
+
+</details>
+
+## Troubleshooting
+
+<details open>
+<summary><b>Setup</b></summary>
+
+| Symptom | Fix |
+|:--|:--|
+| `sima-cli: command not found` | Venv not active: `sudo su -`, `cd`, `source sima/bin/activate` |
+| Venv landed in `/root/sima` | You ran `cd` before `sudo su -` |
+| `externally-managed-environment` | Create the venv first |
+| `Error: No such command 'sdk'` | You ran it on the board. `sdk` is PC-side |
+| WSL cannot ping the DevKit | `.wslconfig` missing, saved as `.txt`, or WSL not restarted |
+| `Cannot connect to the Docker daemon` | `sudo systemctl start docker` |
+| Docker dead after every restart | systemd not enabled in `/etc/wsl.conf` |
+
+</details>
+
+<details>
+<summary><b>Copying and paths</b></summary>
+
+| Symptom | Fix |
+|:--|:--|
+| `ssh: Could not resolve hostname d:` | Windows path used in Linux. `scp` read `D:` as a hostname |
+| `scp: Connection closed` | Usually follows the above |
+| `model archive not found` | Run from `~/object-detection`, and check `find assets -type f` |
+| `source file not found` | The path is relative to where you launch `app.py`. The error lists what is actually in the folder |
+| `is not a raw H.264 elementary stream` | You renamed a `.mp4` instead of converting it. Use the ffmpeg command in the error |
+| Copy hangs | IP changed. `arp -a \| Select-String "192.168.137"` |
+
+</details>
+
+<details>
+<summary><b>Running</b></summary>
+
+| Symptom | Fix |
+|:--|:--|
+| `pyneat requires numpy<2` | `pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"` |
+| `No src-element named "nN_demux"` | `.mp4` demuxer bug. Convert to `.h264` |
+| `ModuleNotFoundError: pyneat` | You are on the PC, or pairing never ran |
+| Device busy | Orphaned run: `ssh sima@<ip> pkill -f src/app.py` |
+| Stuck after `loading model` | First load unpacks the archive. Give it a minute |
+
+</details>
+
+<details>
+<summary><b>Detections and display</b></summary>
+
+| Symptom | Fix |
+|:--|:--|
+| Insight blank but `sent=N failures=0` | The stream already ended. UDP buffers nothing, so open the viewer **first** and use a looped source |
+| Insight loads, no video | **Firewall.** Step 4 skipped. Most common failure by far |
+| Insight blank, no errors | `insight.host` is `127.0.0.1`. Use `192.168.137.1` |
+| Output video shorter than the input, and plays fast | Frames are being dropped. Set `runtime.overflow_policy: auto`, which picks `block` for a file so every frame is kept. Expect the run to take longer than the clip |
+| `processed=0` and a 20 s timeout | The source caps filter is not negotiating. Leave `source.width`, `source.height` and `source.fps` at 0 so the app reads them from the stream |
+| `192.168.137.1:9900` will not load | Expected. Use `https://localhost:9900` |
+| No detections at all | `model.family` mismatch, then lower `decode.score_threshold` |
+| Boxes in the wrong place | `resize.mode: letterbox`, `pad_value: 114`. Do not add your own maths |
+| Scores all near zero | Head mismatch. YOLOX, v6 and v26 use raw-logit heads |
+| Dropped frames on a live source | Raise `runtime.queue_depth`, keep `overflow_policy: auto` |
+
+</details>
+
+## How the app works
+
+<details>
+<summary><b>Pipeline shape, preprocessing and decode types</b></summary>
+
+Built by following the `neat-application-builder` playbook. Every pyneat call was
+verified against the packaged core source in the SDK container, not written from
+memory:
+
+| What | Source of truth |
+|:--|:--|
+| `PreprocessOptions` fields | `include/model/PreprocessPlan.h` |
+| `ModelOptions` fields | `include/model/Model.h` |
+| `BoxDecodeType` members | `include/pipeline/BoxDecodeType.h` |
+| Preproc semantics | `docs/reference/nodes/preproc.mdx` |
+| BBOX wire payload | `docs/reference/boxdecode_decode_types.md` |
+| Insight senders | `docs/develop-apps/advanced-concepts/application-design/` |
+| Python enum names | `python/src/module.cpp` |
+| Reference implementation | `apps-src/examples/object-detection/single-stream-object-detector` |
+
+All relative to `/neat-resources/core-src/` inside the container.
+
+### Pipeline
+
+The playbook's decision map puts this on `Graph` rather than `Model.run(...)`, because
+there are multiple stages, named public endpoints and a branch with a fan-in:
+
+```
+   source --> branch --> frame ----------------+
+                   |                           +--> combine("detector_output")
+                   +---> model --> detections -+
+```
+
+`detector_output` is pulled from the `Run` handle, the BBOX payload is parsed, and the
+frame fans out to the video writer, the still writer, the `MetadataSender`, and a
+second small graph (`Input -> VideoSender`) that encodes for Insight.
+
+### Preprocessing
+
+The `preprocess:` block is an **intent layer**, not a set of instructions. `Model`
+resolves it against the archive's MPK contract and compiles the matching Preproc,
+Quant, Tess or QuantTess graph. Anything left on `auto` is the planner's call.
+
+| Config key | pyneat field | Notes |
+|:--|:--|:--|
+| `kind` | `preprocess.kind` | `image` for every source here |
+| `enable` | `preprocess.enable` | Master switch |
+| `input_format` | `color_convert.input_format` | **Must match what the source produces** |
+| `output_format` | `color_convert.output_format` | `auto` takes it from the model |
+| `input_max_*` | `input_max_width/height` | Buffer capacity. Defaults to 1920x1080 |
+| `resize.mode` | `resize.mode` | `letterbox` preserves aspect and pads |
+| `resize.width/height` | `resize.width/height` | `0` infers 640x640 for most YOLO |
+| `pad_value` | `resize.pad_value` | `114`, the YOLO convention |
+| `normalize.preset` | `preprocess.preset` | `coco_yolo` for every YOLO detector |
+| `quantize`, `tessellate` | same | Leave on `auto` |
+
+**The one that matters most is `input_format`.** Getting it wrong is the usual cause of
+"the model runs but detects nothing":
+
+| Source | `input_format` |
+|:--|:--|
+| `video`, `rtsp` (hardware H.264 decode) | `NV12` |
+| `usb` (libcamera) | `NV12` |
+| `cv2.imread` images | `BGR` |
+
+**Coordinate mapping is automatic.** Preproc writes resize and letterbox metadata onto
+the tensor, and BoxDecode reads it back, so boxes arrive in original-image pixels. Do
+not undo the letterbox yourself. Shifted boxes mean `resize.mode` or `pad_value` is
+wrong, not that inverse maths is missing.
+
+### Model family to decode type
+
+| `family` | `BoxDecodeType` |
+|:--|:--|
+| `yolo` | `Yolo` |
+| `yolov5`, `yolov5-seg` | `YoloV5`, `YoloV5Seg` |
+| `yolov6` | `YoloV6` |
+| `yolov7`, `yolov7-seg` | `YoloV7`, `YoloV7Seg` |
+| `yolov8`, `-seg`, `-pose` | `YoloV8`, `YoloV8Seg`, `YoloV8Pose` |
+| `yolov9`, `yolov9-seg` | `YoloV9`, `YoloV9Seg` |
+| `yolov10`, `yolov10-seg` | `YoloV10`, `YoloV10Seg` |
+| **`yolo11`, `-seg`, `-pose`** | **`YoloV8`, `YoloV8Seg`, `YoloV8Pose`** |
+| `yolo26`, `-seg`, `-pose` | `YoloV26`, `YoloV26Seg`, `YoloV26Pose` |
+| `yolox` | `YoloX` |
+
+> **YOLO11 has no `BoxDecodeType` of its own.** The enum goes v5, v6, v7, v8, v9, v10,
+> v26, X. Ultralytics YOLO11 exports the same decoupled DFL detect head as YOLOv8, so
+> `yolo11` maps to `YoloV8`. Verify against your own export: uniformly near-zero scores
+> mean the head does not match the decode family.
+
+YOLOX, v6 and v26 use raw logit heads. Do not decode them as probability-only YOLO
+heads. `-seg` and `-pose` families decode, but this app renders only the leading boxes;
+masks and keypoints need `decode_segmentation` or `decode_pose` in the frame handler.
+
+### Tuning
+
+| Symptom | Setting |
+|:--|:--|
+| Missing detections | Lower `decode.score_threshold` |
+| Duplicate boxes | Lower `decode.nms_iou` |
+| Too many detections | Raise `decode.score_threshold`, lower `max_detections` |
+| Dropped frames | Raise `runtime.queue_depth` |
+| Want timings | `runtime.profile: true` |
+
+</details>
+
+## Known issues
+
+<details>
+<summary><b><code>groups.video_input</code> cannot play <code>.mp4</code> · Neat 0.3.0</b></summary>
+
+<a id="known-issues"></a>
+
+```
+gst_parse_launch failed: No src-element named "n1_demux" - omitting link
+```
+
+`VideoTrackSelect` builds its fragment from one variable, so what it emits is correct:
+
+```cpp
+const std::string base = "n" + std::to_string(node_index) + "_demux";
+ss << "qtdemux name=" << base << " " << base << ".video_" << idx_;
+```
+
+The graph then appends an instance suffix, but the renamer only rewrites `name=<x>`
+declarations. `element_names()` reports just `{"n1_demux"}`, so the pad reference is
+never fixed. **Any non-empty suffix breaks it**, so reordering does not help.
+
+**Fix:** no container, no demuxer. `app.py` detects `.h264` / `.264` / `.avc` and
+builds the chain by hand:
+
+```
+FileInput → H264Parse → Queue → SimaDecode → CapsRaw
+```
+
+Selected automatically by extension: `.h264`, `.264`, `.bin`, `.avc`. A container input
+still uses `groups.video_input` and prints the conversion command.
+
+</details>
+
+## Reference
+
+### Addresses
+
+| What | Value | Notes |
+|:--|:--|:--|
+| DevKit | `<devkit-ip>`, user `sima` | DHCP, changes between reboots |
+| Your PC, as the board sees it | `192.168.137.1` | Fixed by ICS, use this for `insight.host` |
+| Insight web view | `https://localhost:9900` | Not `192.168.137.1:9900` |
+
+### Ports
+
+| Port | Protocol | Purpose |
+|:--|:--|:--|
+| `9000-9079` | UDP | Video to Insight, `9000 + channel` |
+| `9100-9179` | UDP | Detection metadata, `9100 + channel` |
+| `9900` | TCP | Insight web UI |
+| `8081` | TCP | Insight video UI |
+| `8554` | TCP | RTSP |
+| `8022` | TCP | Web SSH |
+
+### Paths
+
+| What | Where | Machine |
+|:--|:--|:--|
+| Repo | `/root/sima-projects` | WSL |
+| Repo, from Windows | `\\wsl$\Ubuntu\root\sima-projects` | Windows |
+| Shared workspace | `/workspace` | SDK container |
+| Shared workspace | `/root/workspace` | WSL |
+| SDK container name | `ghcr.io-sima-neat-sdk-latest` | WSL |
+| PyNeat venv | `~/pyneat` | DevKit |
+| App | `~/object-detection` | DevKit |
+| Output video | `~/object-detection/detections.mp4` | DevKit |
+| Playbooks | `/neat-resources/apps-src/skills/` | SDK container |
+| Neat source | `/neat-resources/core-src/` | SDK container |
+
+### Six rules that prevent most problems
+
+| # | Rule | Because |
+|:--|:--|:--|
+| 1 | Networking before pairing | Pairing installs over the network. No route means a silent no-op |
+| 2 | Docker before the SDK | The SDK **is** a container |
+| 3 | `cd` after `sudo su -` | `-` is a login shell, so it drops you in `/root` |
+| 4 | `insight.host = 192.168.137.1` | `127.0.0.1` means the board itself |
+| 5 | Raw `.h264`, never `.mp4` | Containers hit a demuxer bug in Neat 0.3.0 |
+| 6 | Always `ssh -tt` | Ctrl-C needs a pty to reach the app and release the MLA |
+
+<div align="center">
+
+Built with the `neat-application-builder` playbook <br>
+API details verified against `/neat-resources/core-src`, not from memory
+
+![SiMa](https://img.shields.io/badge/SiMa.ai-E63946?style=flat-square)
+![Modalix](https://img.shields.io/badge/Modalix-457B9D?style=flat-square)
+![Neat](https://img.shields.io/badge/Neat-2A9D8F?style=flat-square)
+
+</div>
