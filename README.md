@@ -1194,6 +1194,10 @@ flowchart LR
     style F fill:#2A9D8F,stroke:#1B6E63,color:#fff
 ```
 
+### Start the SDK
+
+**`WSL`**
+
 ```bash
 sudo su -
 cd /mnt/d/work/sima-projects
@@ -1202,6 +1206,91 @@ sima-cli sdk neat
 ```
 
 If Docker did not autostart, run `sudo service docker start` first.
+
+---
+
+### Copying files to the DevKit
+
+Set the address once per terminal, so a DHCP change is a one-line edit rather than a
+hunt back through your shell history.
+
+**`PowerShell`**
+
+```powershell
+$DK  = "sima@192.168.137.193"        # check with: arp -a | Select-String "192.168.137"
+$APP = "d:\work\sima-projects\yolo-detector"
+```
+
+| What | Command |
+|:--|:--|
+| One file | `scp $APP\config.yaml ${DK}:~/yolo-detector/` |
+| One file into a subfolder | `scp $APP\src\main.py ${DK}:~/yolo-detector/src/` |
+| A whole folder | `scp -r $APP\src ${DK}:~/yolo-detector/` |
+| Several files at once | `scp $APP\config.yaml $APP\src\main.py ${DK}:~/yolo-detector/` |
+| A model | `scp $APP\assets\models\*.tar.gz ${DK}:~/yolo-detector/assets/models/` |
+| A video | `scp $APP\assets\video\video-4.h264 ${DK}:~/yolo-detector/assets/video/` |
+| The whole project | `scp -r $APP ${DK}:~/` |
+| Pull results back | `scp -r ${DK}:~/yolo-detector/sandbox $APP\` |
+
+> [!IMPORTANT]
+> **`scp` does not create missing directories.** Copying into
+> `~/yolo-detector/assets/models/` fails outright if that folder does not exist, and
+> copying to `~/yolo-detector/` instead quietly leaves the file in the wrong place,
+> which then shows up as `model archive not found`. Create the tree once:
+> ```powershell
+> ssh $DK "mkdir -p ~/yolo-detector/assets/models ~/yolo-detector/assets/video"
+> ```
+
+### The fast loop: send only what changed
+
+`sima-cli sdk setup` installs `rsync` on the board. For the edit-run-edit cycle it beats
+`scp`, because it skips unchanged files. That matters once a 63 MB model is sitting in
+the tree.
+
+**`PowerShell`**
+
+```powershell
+# code and config only, leave assets alone
+rsync -av $APP/src $APP/config.yaml ${DK}:~/yolo-detector/
+
+# everything except the big stuff
+rsync -av --exclude 'assets/' --exclude 'sandbox/' $APP/ ${DK}:~/yolo-detector/
+
+# pull annotated frames back
+rsync -av ${DK}:~/yolo-detector/sandbox/ $APP/sandbox/
+```
+
+> [!TIP]
+> No `rsync` on your Windows PATH? Run these from **WSL** instead and swap the path for
+> `/mnt/d/work/sima-projects/yolo-detector`. WSL reaches the board directly now that
+> mirrored networking is on.
+
+### Shortcuts from inside the SDK container
+
+Setup wires up a `dk` helper, listed in its closing banner:
+
+**`SDK container`**
+
+```bash
+dk shell                    # SSH straight into the DevKit
+dk status                   # sync method, remote path, connection state
+dk /workspace/<binary>      # run an arm64 binary on the board
+```
+
+`dk status` is the quickest way to see whether you ended up on an NFS mount or the
+rsync fallback, and which remote path the board is really using.
+
+### Stop typing the password
+
+`sima-cli sdk setup` installs an SSH key for the **container's** root user, not for your
+Windows or WSL user. Add one for yourself and the prompts stop:
+
+**`PowerShell`**
+
+```powershell
+ssh-keygen -t ed25519 -C "devkit"      # skip if you already have a key
+type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh $DK "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
+```
 
 ---
 
@@ -1432,10 +1521,24 @@ one fragment.
 ```bash
 neat                          # SDK: component versions and exposed ports
 neat update                   # SDK: update Neat components
+dk shell                      # SDK: SSH into the DevKit
+dk status                     # SDK: sync method and remote path
 sudo docker ps                # WSL: is the SDK container up
 sudo systemctl status docker  # WSL: is the daemon healthy
 sima-cli device discover      # find DevKits on the network
 cat /etc/buildinfo            # DevKit: firmware version
+```
+
+### Copying, at a glance
+
+```powershell
+$DK = "sima@192.168.137.193"
+
+scp file ${DK}:~/yolo-detector/                    # one file
+scp -r folder ${DK}:~/yolo-detector/               # one folder
+rsync -av folder/ ${DK}:~/yolo-detector/folder/    # only what changed
+scp -r ${DK}:~/yolo-detector/sandbox .             # pull results back
+ssh $DK "mkdir -p ~/yolo-detector/assets/models"   # scp will not create dirs
 ```
 
 ---
