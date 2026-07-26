@@ -929,22 +929,27 @@ def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
 
 
 def build_pipeline(cfg: AppConfig) -> Pipeline:
-    width, height, fps = resolve_source_geometry(cfg)
-    print(f"source: type={cfg.source_type} uri={cfg.source_uri or '<default camera>'} "
-          f"stream={width}x{height}@{fps}")
-    print(describe_preprocess(cfg, width, height))
+    step = lambda msg: print(msg, flush=True)
 
+    width, height, fps = resolve_source_geometry(cfg)
+    step(f"source: type={cfg.source_type} uri={cfg.source_uri or '<default camera>'} "
+         f"stream={width}x{height}@{fps}")
+    step(describe_preprocess(cfg, width, height))
+
+    step("loading model (first load unpacks the archive, this can take a minute)...")
     model = make_model(cfg, width, height)
     labels = load_labels(cfg.labels_path)
-    print(
+    step(
         f"model: {cfg.model_path} family={cfg.family} "
         f"decode_type={FAMILY_DECODE_TOKENS[cfg.family]} labels={len(labels)}"
     )
 
+    step("building graph...")
     graph = build_detector_graph(cfg, model, width, height, fps)
     if cfg.profile:
-        print(f"Backend:\n{graph.describe_backend()}")
+        step(f"Backend:\n{graph.describe_backend()}")
     run = graph.build(make_run_options(cfg))
+    step("graph built")
 
     pipeline = Pipeline(
         model=model, graph=graph, run=run, labels=labels,
@@ -952,6 +957,7 @@ def build_pipeline(cfg: AppConfig) -> Pipeline:
     )
 
     if cfg.insight_enable:
+        step("starting Insight senders...")
         pipeline.video_graph, pipeline.video_run, pipeline.video_port = build_video_graph(
             cfg, width, height, fps
         )
@@ -960,13 +966,15 @@ def build_pipeline(cfg: AppConfig) -> Pipeline:
         metadata_options.channel = cfg.insight_channel
         metadata_options.metadata_port_base = cfg.metadata_port_base
         pipeline.metadata_sender = pyneat.MetadataSender(metadata_options)
-        print(
+        step(
             f"insight: host={cfg.insight_host} video={pipeline.video_port} "
             f"metadata={pipeline.metadata_sender.metadata_port()} "
             f"channel={cfg.insight_channel}"
         )
+        step(f"  view at https://localhost:9900 and select channel {cfg.insight_channel}")
     if cfg.save_enable:
-        print(f"save: dir={cfg.save_dir} every={cfg.save_every} overlay={cfg.save_overlay}")
+        step(f"save: dir={cfg.save_dir} every={cfg.save_every} overlay={cfg.save_overlay}")
+    step("running. press Ctrl-C to stop.")
     return pipeline
 
 
@@ -1279,10 +1287,15 @@ class ProfileWindow:
         self.reset()
 
 
+HEARTBEAT_EVERY = 50
+
+
 def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
     profile = ProfileWindow(cfg.profile, cfg.profile_interval)
     processed = 0
     timeouts = 0
+    heartbeat_start = time_ms()
+    heartbeat_boxes = 0
 
     while not stopper.stop and (cfg.frames <= 0 or processed < cfg.frames):
         pull_start = time_ms()
@@ -1318,6 +1331,19 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
         profile.add(
             pull_end - pull_start, decode_end - pull_end, sink_end - decode_end, len(boxes)
         )
+
+        # Heartbeat, so a healthy run does not look identical to a stalled one.
+        heartbeat_boxes += len(boxes)
+        if processed % HEARTBEAT_EVERY == 0:
+            elapsed = time_ms() - heartbeat_start
+            rate = HEARTBEAT_EVERY * 1000.0 / elapsed if elapsed > 0 else 0.0
+            print(
+                f"[{processed}] {rate:.1f} fps, "
+                f"{heartbeat_boxes / HEARTBEAT_EVERY:.1f} detections/frame avg",
+                flush=True,
+            )
+            heartbeat_start = time_ms()
+            heartbeat_boxes = 0
 
     profile.flush()
     print(f"processed={processed} timeouts={timeouts}")
