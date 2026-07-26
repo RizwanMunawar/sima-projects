@@ -582,8 +582,40 @@ ssh sima@192.168.137.123 "cat /etc/buildinfo | head -5"
 sima-cli sdk setup --devkit 192.168.137.123
 ```
 
-Answer **`Y`** to every prompt. It asks two or three times about optional modules such
-as the SiMa Neat, Claude and Codex VS Code extensions.
+### Every prompt it asks you
+
+Setup is interactive in more places than the docs suggest. Here is the full list:
+
+| Prompt | Answer | Why |
+|:--|:--|:--|
+| `Some system checks failed. Continue anyway?` | **`y`** | The Firewall row says `Unverified`, not failed. `sima-cli` cannot inspect the Windows firewall from inside WSL. |
+| `Select SDK images to start` | **Space, then Enter** | Usually one entry. Space selects it, Enter confirms. |
+| `Use this workspace? /root/workspace` | **`Y`** | |
+| `Remove and recreate container?` | **`Y`** | Safe, it rebuilds from the same image. |
+| `Install the Model Compiler extension now?` | **`Y`** | Adds about **9 GB** and up to 15 minutes. Only needed to quantize and compile your own models. Add it later with `sima-cli install -v 2.1.2 tools/model-compiler/amd64`. |
+| `Install SiMa Neat, Claude, and Codex VSCode Extensions?` | **`y`** | Lowercase. A bare Enter is rejected as an invalid choice. |
+| `Apply passwordless sudo on the DevKit?` | **`y`** | Required for the workspace sync to configure itself. |
+| `Enter sudo password for sima@…` | your DevKit password | Enter alone tries the default. |
+| `Destination mount path on DevKit [/workspace]` | **Enter** | |
+
+> [!IMPORTANT]
+> **The DevKit IP can change between reboots.** It comes from DHCP, so a board that
+> was `192.168.137.123` may return as `192.168.137.193`. If commands suddenly hang or
+> time out, re-check the address before assuming something broke:
+> ```powershell
+> arp -a | Select-String "192.168.137"
+> ```
+
+> [!NOTE]
+> **NFS often fails and falls back to rsync. That is fine.** You will see:
+> ```
+> mount.nfs: Connection timed out
+> ERROR: DevKit NFS workspace setup was not successful.
+> WARNING: using rsync fallback: /workspace -> sima@…:/workspace-rsync
+> ```
+> Setup continues and `dk` still works. The practical difference is that the board
+> sees `/workspace-rsync`, not a live mount, so files are synced rather than shared.
+> This guide copies with `scp` anyway, so it does not affect anything below.
 
 Then check the board half actually happened, because it is the part that fails quietly:
 
@@ -1030,6 +1062,31 @@ cd ~/yolo-detector
 python3 src/main.py --config config.yaml
 ```
 
+> [!CAUTION]
+> **Never let pip upgrade numpy past 2.x on the DevKit.** `pyneat 0.3.0` requires
+> `numpy<2`, as do every `simaai-*` package. An unpinned install produces this, and
+> it is easy to scroll past because the app still starts:
+> ```
+> pyneat 0.3.0 requires numpy<2,>=1.24, but you have numpy 2.4.6 which is incompatible.
+> ```
+> `requirements.txt` pins `numpy>=1.24,<2` and `opencv-python<5` for this reason. If
+> you already broke it:
+> ```bash
+> pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"
+> ```
+
+> [!TIP]
+> **Paths are relative to where you launch from.** Run from inside `~/yolo-detector`,
+> not from your home directory, or `config.yaml` and `assets/…` will not resolve.
+> Check the layout on the board matches what the config expects:
+> ```bash
+> cd ~/yolo-detector && find assets -type f
+> # assets/models/<your-model>.tar.gz
+> # assets/video/<your-video>.mp4
+> ```
+> `scp` drops files wherever you point it, so a model landing in `~/yolo-detector/`
+> instead of `~/yolo-detector/assets/models/` is a common first-run stumble.
+
 A healthy startup banner looks like this. Read it, it confirms four separate things at
 once:
 
@@ -1193,6 +1250,10 @@ If Docker did not autostart, run `sudo service docker start` first.
 
 | Symptom | Cause and fix |
 |:--|:--|
+| `gst_parse_launch failed: No src-element named "n1_demux"` | Known `groups.video_input` bug: element named `n1_demux_8`, pad link written as `n1_demux`. Use an RTSP source instead. See [Known issues](#-known-issues). |
+| `model archive not found: assets/models/…` | The `.tar.gz` is not where the config points. `find assets -type f` on the board. |
+| `failed to open source for probing: assets/video/…` | Same, for the video. Also check you launched from `~/yolo-detector`. |
+| `pyneat 0.3.0 requires numpy<2` | pip upgraded numpy. `pip install "numpy>=1.24,<2"`. |
 | Insight loads, no video | Firewall. Section 4 skipped. By far the most common failure. |
 | Insight blank, no errors anywhere | `output.insight.host` is `127.0.0.1`. Use `192.168.137.1`. |
 | No detections at all | `model.family` does not match the model. Then lower `decode.score_threshold`. |
@@ -1203,6 +1264,60 @@ If Docker did not autostart, run `sudo service docker start` first.
 | Running slowly | `runtime.profile: true` for per stage timings. |
 
 </details>
+
+---
+
+## 🐞 Known issues
+
+### `groups.video_input` generates an unlinkable pipeline
+
+![status](https://img.shields.io/badge/status-open-E63946?style=flat-square)
+![affects](https://img.shields.io/badge/affects-Neat_0.3.0-457B9D?style=flat-square)
+
+Local video files fail at pipeline start with:
+
+```
+[ERR] [build.parse_launch] RunCore::start(plan/source): gst_parse_launch failed:
+      No src-element named "n1_demux" - omitting link
+```
+
+Look at the generated pipeline and the cause is visible:
+
+```
+filesrc ! qtdemux name=n1_demux_8   n1_demux.video_0 ! queue ! h264parse ! …
+                            ^^^^^^^^  ^^^^^^^^^
+                            declared   referenced without the _8 suffix
+```
+
+The group applies a per-graph instance suffix to every element name, but writes the
+demuxer pad link using the unsuffixed name, so GStreamer cannot resolve it. Nothing
+in your config causes this and nothing in it can avoid it.
+
+**Isolate it** with the source-only probe, which builds nothing but the source and one
+output node:
+
+```bash
+cd ~/yolo-detector
+python3 src/probe_source.py assets/video/video-4.mp4
+```
+
+**Work around it** by using an RTSP source instead. That path goes through
+`groups.rtsp_decoded_input`, which is the code path SiMa's own reference example
+exercises:
+
+```yaml
+source:
+  type: rtsp
+  uri: rtsp://<host>:8554/<stream>
+```
+
+```bash
+python3 src/probe_source.py rtsp://<host>:8554/<stream>
+```
+
+Everything upstream of this works: the model archive loads, the graph builds, the MLA
+firmware activates and passes its dispatch probe. The failure is confined to the file
+source fragment.
 
 ---
 
