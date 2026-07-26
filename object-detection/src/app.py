@@ -1,18 +1,28 @@
-"""YOLO object detector for SiMa Modalix — video file / RTSP / camera source,
-annotated frames to disk + Neat Insight (H.264 RTP/UDP video + JSON metadata).
+"""Object detection on the SiMa Modalix DevKit.
+
+Reads a video file, RTSP stream or camera, runs a YOLO model on the MLA
+accelerator, and publishes results three ways: an annotated video and stills on
+the DevKit, plus a live Neat Insight feed over UDP.
 
 Built against the Neat Library public Python API (pyneat) as packaged in
-2.1.2_Palette_SDK. Runs on the Modalix DevKit, not in the x86 SDK container.
+2.1.2_Palette_SDK. Runs on the DevKit, not in the x86 SDK container, because
+pyneat is compiled for aarch64.
 
-Pipeline shape (Graph, because there are multiple stages and named endpoints):
+The pipeline is a Graph rather than a single Model.run call, because it has
+multiple stages, named public endpoints and a branch with a fan-in::
 
-    source ──> branch ──> frame ───────────────┐
-                    │                          ├─> combine("detector_output")
-                    └──> model ──> detections ─┘
+    source --> branch --> frame ----------------+
+                    |                           +--> combine("detector_output")
+                    +---> model --> detections -+
 
-    detector_output ──> BBOX parse ──> overlay ──> disk
-                                   ├─> MetadataSender (UDP JSON, Insight)
-                                   └─> video Graph: Input ──> VideoSender (RTP/UDP, Insight)
+    detector_output --> BBOX parse --> overlay --> video file + stills
+                                   +-> MetadataSender  (JSON over UDP)
+                                   +-> VideoSender     (H.264 RTP over UDP)
+
+Typical usage::
+
+    python3 src/app.py --config config.yaml
+    python3 src/app.py --config config.yaml --validate-config
 """
 
 from __future__ import annotations
@@ -40,14 +50,39 @@ np = None
 pyneat = None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Config
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 @dataclass(frozen=True)
 class PreprocessConfig:
-    """Mirrors pyneat.ModelOptions.preprocess (PreprocessOptions)."""
+    """Preprocessing intent, mirroring pyneat.ModelOptions.preprocess.
+
+    This is what the application asks for. The route planner resolves it against
+    the model archive's MPK contract and compiles the matching graph, so a value
+    here is a request rather than a guarantee.
+
+    Attributes:
+        kind: Input kind. One of ``image``, ``tensor`` or ``auto``.
+        enable: Master switch. One of ``on``, ``off`` or ``auto``.
+        input_format: Colour format the source hands to Preproc, such as
+            ``NV12`` for hardware-decoded video or ``BGR`` for cv2 images.
+        output_format: Model input colour space, or ``auto`` to take it from the
+            model contract.
+        input_max_width: Preproc buffer width capacity. 0 uses the probed size.
+        input_max_height: Preproc buffer height capacity. 0 uses the probed size.
+        resize_enable: Whether to resize. ``auto``, ``on`` or ``off``.
+        resize_width: Target width. 0 infers it from the model contract.
+        resize_height: Target height. 0 infers it from the model contract.
+        resize_mode: One of ``letterbox``, ``stretch`` or ``crop``.
+        pad_value: Fill value for letterbox padding. 114 is the YOLO default.
+        scaling_type: Interpolation token, for example ``BILINEAR``.
+        normalize_enable: Whether to normalize. ``auto``, ``on`` or ``off``.
+        normalize_preset: One of ``coco_yolo``, ``imagenet`` or ``none``.
+        mean: Per-channel mean, read only when the preset is ``none``.
+        stddev: Per-channel divisor, read only when the preset is ``none``.
+        quantize_enable: Quantization control. Normally left on ``auto``.
+        quantize_zero_point: Explicit zero point, applied only when enabled.
+        quantize_scale: Explicit scale. 0.0 uses the model's calibration.
+        tessellate_enable: MLA tile-layout control. Normally left on ``auto``.
+        tessellate_slice_shape: Tile geometry override. Empty uses the contract.
+    """
 
     kind: str = "image"
     enable: str = "on"
@@ -78,6 +113,57 @@ class PreprocessConfig:
 
 @dataclass(frozen=True)
 class AppConfig:
+    """Fully resolved application configuration.
+
+    Built by :func:`load_app_config` from ``config.yaml`` and validated by
+    :func:`validate_config` before anything touches the hardware, so a bad
+    config fails in under a second instead of part-way through a graph build.
+
+    Attributes:
+        model_path: Path to the compiled model archive on the DevKit.
+        labels_path: Path to the newline-separated class label file.
+        family: Detection head token, mapped by ``FAMILY_DECODE_TOKENS``.
+        decode_type_option: Head packing override. Normally ``auto``.
+        num_classes: Class count override. 0 reads it from the archive.
+        source_type: One of ``video``, ``rtsp`` or ``usb``.
+        source_uri: File path or stream URL, as seen on the DevKit.
+        source_fps: Frame rate. 0 probes it from the source.
+        source_width: Frame width. 0 probes it.
+        source_height: Frame height. 0 probes it.
+        rtsp_codec: ``h264`` or ``mjpeg``.
+        rtsp_tcp: Whether to use TCP transport for RTSP.
+        rtsp_latency_ms: Jitter buffer latency.
+        usb_camera_name: libcamera device name, or empty for the default.
+        usb_format: Pixel format requested from the camera.
+        preprocess: Preprocessing intent. See :class:`PreprocessConfig`.
+        score_threshold: Minimum detection confidence.
+        nms_iou: Non-max suppression IoU threshold.
+        max_detections: Top-K cap per frame.
+        frames: Frame limit. 0 runs until interrupted.
+        pull_timeout_ms: How long to wait for a frame before giving up.
+        queue_depth: Runtime queue depth.
+        run_preset: One of ``realtime``, ``balanced`` or ``reliable``.
+        overflow_policy: One of ``keep_latest``, ``block`` or ``drop_incoming``.
+        profile: Whether to print per-stage timings.
+        profile_interval: Frames per profiling window.
+        save_enable: Whether to write annotated stills.
+        save_dir: Directory for stills.
+        save_every: Write every Nth frame. 0 disables.
+        save_overlay: Whether stills carry the overlay.
+        save_format: ``jpg`` or ``png``.
+        video_enable: Whether to write an annotated video on the DevKit.
+        video_path: Output video path.
+        video_codec: Four-character FourCC, with an MJPG fallback.
+        video_fps: Output frame rate. 0 matches the source.
+        video_hud: Whether to draw the summary strip.
+        insight_enable: Whether to stream to Neat Insight.
+        insight_host: Insight address as the DevKit sees it.
+        insight_channel: Channel offset added to both port bases.
+        video_port_base: First UDP video port.
+        metadata_port_base: First UDP metadata port.
+        bitrate_kbps: H.264 encoder bitrate for the Insight feed.
+    """
+
     model_path: str
     labels_path: Path
     family: str
@@ -418,7 +504,7 @@ COLOR_FORMATS: dict[str, str] = {
     "I420": "I420",
 }
 # NormalizePreset.None is bound under the Python keyword `None`, so it must be
-# reached with getattr() — `pyneat.NormalizePreset.None` is a SyntaxError.
+# reached with getattr(). `pyneat.NormalizePreset.None` is a SyntaxError.
 NORMALIZE_PRESETS: dict[str, str] = {
     "none": "None",
     "imagenet": "ImageNet",
@@ -482,16 +568,22 @@ def time_ms() -> float:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Pre-processing — the intent layer handed to the route planner
+# Pre-processing: the intent layer handed to the route planner
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def apply_preprocess_options(opt, pre: PreprocessConfig, frame_w: int, frame_h: int) -> None:
-    """Translate the `preprocess:` config block onto pyneat.ModelOptions.preprocess.
+    """Translate the config's preprocess block onto pyneat ModelOptions.
 
-    `Model` resolves this against the archive's MPK contract and builds the
-    matching Preproc / Quant / Tess / QuantTess graph family. Anything left on
-    `auto` is decided by the planner.
+    ``Model`` resolves this against the archive's MPK contract and builds the
+    matching Preproc, Quant, Tess or QuantTess graph family. Anything left on
+    ``auto`` is decided by the planner rather than here.
+
+    Args:
+        opt: A ``pyneat.ModelOptions`` to populate in place.
+        pre: Preprocessing intent from the config file.
+        frame_w: Probed source width, used when no capacity is configured.
+        frame_h: Probed source height, used when no capacity is configured.
     """
     p = opt.preprocess
 
@@ -685,7 +777,7 @@ def resolve_source_geometry(cfg: AppConfig) -> tuple[int, int, int]:
     width, height, fps = cfg.source_width, cfg.source_height, cfg.source_fps
 
     if cfg.source_type == "usb":
-        # libcamera is queried at build time, not probeable here — fall back to
+        # libcamera is queried at build time, not probeable here, so fall back to
         # the CameraInputOptions defaults.
         return width or 1920, height or 1080, fps or 30
 
@@ -737,23 +829,30 @@ def is_elementary_h264(path: str) -> bool:
 
 
 def make_elementary_h264_source(cfg: AppConfig, width: int, height: int, fps: int):
-    """VideoInputGroup rebuilt by hand, minus the demuxer.
+    """Build a file source chain without a demuxer.
 
-    Works around a Neat 0.3.0 bug. `VideoTrackSelect` emits its fragment as
-    `qtdemux name=<base> <base>.video_0`, which is internally consistent, but the
-    graph then appends an instance suffix to element *names* only. The declaration
-    becomes `name=n1_demux_8` while the pad reference stays `n1_demux.video_0`, so
-    gst_parse_launch fails with:
+    This is ``VideoInputGroup`` rebuilt by hand to work around a Neat 0.3.0 bug.
+    ``VideoTrackSelect`` emits ``qtdemux name=<base> <base>.video_0``, which is
+    internally consistent, but the graph then appends an instance suffix to
+    element *names* only. The declaration becomes ``name=n1_demux_8`` while the
+    pad reference stays ``n1_demux.video_0``, so gst_parse_launch fails with
+    ``No src-element named "n1_demux"``. ``element_names()`` reports only the one
+    name, so the renamer never learns to rewrite the pad reference, and any
+    non-empty suffix triggers it. Reordering graph construction does not help.
 
-        No src-element named "n1_demux" - omitting link
-
-    `element_names()` reports just the one name, so the renamer never learns to
-    rewrite the pad reference, and any non-empty suffix breaks it. Reordering graph
-    construction does not help.
-
-    Dropping the container removes the demuxer, and with it the bug. Convert once:
+    Dropping the container removes the demuxer, and with it the bug::
 
         ffmpeg -i input.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 output.h264
+
+    Args:
+        cfg: Application configuration, for ``source_uri``.
+        width: Frame width for the output caps filter.
+        height: Frame height for the output caps filter.
+        fps: Frame rate for the output caps filter.
+
+    Returns:
+        A ``pyneat.Graph`` of FileInput, H264Parse, Queue, SimaDecode and
+        optionally CapsRaw, producing NV12 frames.
     """
     graph = pyneat.Graph("file_source")
     graph.add(pyneat.nodes.file_input(cfg.source_uri))
@@ -824,7 +923,7 @@ def make_source_graph(cfg: AppConfig, width: int, height: int, fps: int):
         set_output_caps(opt.output_caps, fps, width, height)
         return pyneat.groups.rtsp_decoded_input(opt)
 
-    # usb / on-board camera — libcamera-backed. Confirm the device is visible
+    # usb / on-board camera, libcamera-backed. Confirm the device is visible
     # with `cam -l` on the DevKit and put its name in source.usb.camera_name.
     opt = pyneat.CameraInputOptions()
     opt.camera_name = cfg.usb_camera_name or None
@@ -845,6 +944,25 @@ def make_source_graph(cfg: AppConfig, width: int, height: int, fps: int):
 
 @dataclass
 class Pipeline:
+    """Everything a running pipeline owns, so teardown has one place to look.
+
+    Attributes:
+        model: The loaded ``pyneat.Model``.
+        graph: The detector ``Graph``.
+        run: Live ``Run`` handle for the detector graph.
+        video_graph: Separate graph that encodes frames for Insight.
+        video_run: Live ``Run`` handle for the video graph.
+        metadata_sender: ``MetadataSender`` publishing detections as JSON.
+        labels: Class names, indexed by class id.
+        frame_w: Source frame width in pixels.
+        frame_h: Source frame height in pixels.
+        fps: Source frame rate.
+        video_port: Resolved UDP port for the Insight video feed.
+        writer: OpenCV ``VideoWriter`` for the on-device recording.
+        writer_path: Path the writer actually opened, after any fallback.
+        writer_frames: Frames written so far.
+    """
+
     model: object
     graph: object
     run: object
@@ -1082,7 +1200,7 @@ def tensor_bbox_payload(sample, tensor=None) -> bytes:
     if fmt and fmt != "BBOX":
         raise RuntimeError(
             f"expected a BBOX tensor but got {fmt}. If this is `raw_output_heads`, "
-            "the route did not include BoxDecode — check model.family / the model archive."
+            "the route did not include BoxDecode. Check model.family and the model archive."
         )
     payload = tensor.copy_payload_bytes()
     if not payload:
@@ -1399,12 +1517,15 @@ def save_frame(cfg: AppConfig, index: int, frame) -> None:
 
 
 class Stopper:
-    """Clean teardown on SIGINT/SIGTERM/SIGHUP.
+    """Cooperative stop flag driven by SIGINT, SIGTERM and SIGHUP.
 
-    `dk` / `devkit-run` invoke over SSH without a pty, so a terminal Ctrl-C is
-    not forwarded and the app can be orphaned on the DevKit still holding the
-    MLA. Launch interactive runs with `ssh -tt` and let these handlers close the
-    Run cleanly.
+    ``dk`` and ``devkit-run`` invoke over SSH without a pty, so a terminal
+    Ctrl-C is never forwarded and the app can be orphaned on the DevKit while
+    still holding the MLA. The next run then fails with a busy device. Launch
+    interactive runs with ``ssh -tt`` and let these handlers close the Run.
+
+    Attributes:
+        stop: Set to True once a signal has been received.
     """
 
     def __init__(self) -> None:
@@ -1422,7 +1543,24 @@ class Stopper:
 
 
 class ProfileWindow:
+    """Rolling per-stage timing accumulator.
+
+    Sums pull, decode and sink latencies over a fixed number of frames, then
+    prints one averaged line and resets. Averaging avoids the noise of
+    per-frame timings without needing to keep every sample.
+
+    Attributes:
+        enabled: Whether profiling output is on at all.
+        interval: Frames per window before a flush.
+    """
+
     def __init__(self, enabled: bool, interval: int) -> None:
+        """Initialise the window.
+
+        Args:
+            enabled: Whether to collect and print timings.
+            interval: Frames to accumulate before printing a summary.
+        """
         self.enabled = enabled
         self.interval = interval
         self.reset()

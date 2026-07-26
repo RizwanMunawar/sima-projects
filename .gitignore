@@ -243,3 +243,7 @@ videos/
 
 # Application output
 sandbox/
+
+# Terminal captures
+logs.txt
+*.log

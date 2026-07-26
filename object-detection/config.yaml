@@ -1,171 +1,115 @@
-# SiMa Neat YOLO object detector — 2.1.2_Palette_SDK
+# SiMa Neat object detection
 #
-# Every key below maps to a concrete pyneat option. See README.md for the
-# header/source that each block is derived from.
+# Paths are DevKit paths, relative to where you launch app.py (~/object-detection).
+# Windows paths (C:\ D:\) cannot work: the app runs on Linux.
 
 model:
-  # Path to the compiled model archive (MPK .tar.gz) on the DevKit.
   path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
   labels: src/coco_labels.txt
 
-  # Detection head family -> pyneat.BoxDecodeType. Supported tokens:
-  #   yolo, yolov5, yolov6, yolov7, yolov8, yolov9, yolov10, yolo11, yolo26, yolox
-  #   yolov5-seg, yolov7-seg, yolov8-seg, yolov9-seg, yolov10-seg, yolo26-seg
-  #   yolov8-pose, yolo26-pose
-  #
-  # NOTE: YOLO11 has no BoxDecodeType of its own. Ultralytics YOLO11 exports the
-  # same decoupled DFL detect head as YOLOv8, so `yolo11` maps to BoxDecodeType.YoloV8.
+  # Detection head. Must match your model or you get no detections.
+  # yolo | yolov5 | yolov6 | yolov7 | yolov8 | yolov9 | yolov10 
+  # | yolo11 | yolo26 | yolox
+  # Add -seg or -pose for those variants. yolo11 maps to the YOLOv8 head.
   family: yolo26
 
-  # Advanced: head packing override. Leave `auto` for SiMa-compiled model packs.
-  # One of: auto, packed_per_head, interleaved_by_head, grouped_by_role,
-  #         split3_interleaved, split3_grouped, interleaved_by_head_probability,
-  #         interleaved_by_head_logit, grouped_by_role_probability, grouped_by_role_logit
-  decode_type_option: auto
-
-  # Only set for detection packs whose class-head depth cannot be inferred
-  # (e.g. single-class YOLO split heads). 0 = use the model archive metadata.
-  num_classes: 0
+  decode_type_option: auto            # head packing override, leave auto for SiMa model packs
+  num_classes: 0                      # 0 = read from the model archive
 
 source:
-  # video | rtsp | usb
-  type: video
+  type: video                          # video | rtsp | usb
+  uri: assets/video/video-loop.h264    # .h264 only, see note below
 
-  # A DEVKIT path, relative to where you launch main.py (~/object-detection).
-  # Windows paths (C:\... D:\...) cannot work — the app runs on Linux.
-  #
-  #   type: video -> a raw H.264 elementary stream. NOT .mp4: containers hit a
-  #                  demuxer bug in Neat 0.3.0 (No src-element named "nN_demux")
-  #   type: rtsp  -> rtsp://<ip>:<port>/<stream>
-  #   type: usb   -> camera name, or "" for the DevKit default
-  #
-  # Convert and loop in one step. The loop matters because UDP buffers nothing,
-  # so a short clip is over before you can open Insight:
-  #   ffmpeg -stream_loop 9 -i clip.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 video-loop.h264
-  uri: assets/video/video-loop.h264
-
-  # Raw elementary streams carry no container metadata, so set these explicitly.
-  # For .mp4 sources 0 means "probe it".
-  fps: 25
+  fps: 25                              # 0 = probe (raw .h264 cannot be probed)
   width: 1920
   height: 1080
 
   rtsp:
-    codec: h264        # h264 | mjpeg
-    tcp: true          # TCP transport for RTSP
-    latency_ms: 100    # jitter-buffer latency
+    codec: h264                        # h264 | mjpeg
+    tcp: true
+    latency_ms: 100
 
   usb:
-    # Leave empty for the platform default camera.
-    camera_name: ""
+    camera_name: ""                    # "" = DevKit default camera
     format: NV12
 
-# ---------------------------------------------------------------------------
-# PRE-PROCESSING — pyneat.ModelOptions.preprocess (PreprocessOptions)
-#
-# This is the "intent" layer. The route planner resolves it against the model
-# archive's MPK contract to produce the actual compiled Preproc graph.
-# `auto` on any tri-state knob means "planner decides".
-# ---------------------------------------------------------------------------
+# Use a raw H.264 elementary stream, not .mp4. Containers hit a demuxer bug in
+# Neat 0.3.0. Convert and loop in one step (looping gives you time to open Insight):
+#   ffmpeg -stream_loop 9 -i clip.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 video-loop.h264
+
 preprocess:
-  # image  -> decoded pixels (what every source below produces)
-  # tensor -> already-shaped tensor, preprocess is a pass-through
-  # auto   -> infer from caps
-  kind: image
+  # What the app asks for. The route planner resolves it against the model
+  # archive and compiles the matching graph. `auto` means "planner decides".
+  kind: image                # image | tensor | auto
+  enable: on                 # on | off | auto
 
-  # Master switch: on | off | auto
-  enable: on
+  input_format: NV12         # what the source produces: NV12 for video/rtsp/usb, BGR for images
+  output_format: auto        # auto = take it from the model contract
 
-  # Source pixel format handed to Preproc.
-  #   video/rtsp-h264 -> NV12  (hardware decoder output)
-  #   usb camera      -> NV12  (or whatever source.usb.format produces)
-  #   cv2.imread      -> BGR
-  # auto lets the planner read it from caps.
-  input_format: NV12
-
-  # Model input colour space. auto = take it from the model contract.
-  # YOLO packs are normally RGB.
-  output_format: auto
-
-  # Input capacity for the Preproc node. 0 = default 1920x1080.
-  # Set these to the real stream size so buffers are sized correctly.
-  input_max_width: 0     # 0 -> filled in from the probed source width
-  input_max_height: 0    # 0 -> filled in from the probed source height
+  input_max_width: 0         # 0 = use the probed source size
+  input_max_height: 0
 
   resize:
     enable: on
-    # 0 = infer the target from the model input contract (640x640 for most YOLO).
-    width: 0
+    width: 0                 # 0 = infer from the model (640x640 for most YOLO)
     height: 0
-    # stretch   -> anisotropic scale, aspect ratio NOT preserved
-    # letterbox -> preserve aspect, pad the remainder with pad_value  <-- YOLO default
-    # crop      -> center-crop after isotropic scale
-    mode: letterbox
+    mode: letterbox          # letterbox (YOLO default) | stretch | crop
     pad_value: 114
-    # BILINEAR | NEAREST_NEIGHBOUR | BICUBIC | INTERAREA | NO_SCALING
-    scaling_type: BILINEAR
+    scaling_type: BILINEAR   # BILINEAR | NEAREST_NEIGHBOUR | BICUBIC | INTERAREA | NO_SCALING
 
   normalize:
     enable: on
-    # none | imagenet | coco_yolo
-    #   coco_yolo -> YOLO-family COCO stats (use this for every YOLO detector)
-    #   none      -> use the explicit mean/stddev below
-    preset: coco_yolo
-    # Only read when preset is `none`. Must match the model's training preprocessing.
-    mean: [0.0, 0.0, 0.0]
+    preset: coco_yolo        # coco_yolo (all YOLO) | imagenet | none
+    mean: [0.0, 0.0, 0.0]    # only read when preset is none
     stddev: [1.0, 1.0, 1.0]
 
-  # Leave both on `auto` unless you are overriding the model's calibration.
-  # The planner picks the Preproc/Quant/Tess/QuantTess graph family from the
-  # model pack's dtype contract — a `-mla_tess-` pack already implies tessellation.
+  # Leave both auto. The model pack's dtype contract decides whether these run
+  # in the preprocess graph or inside the MLA.
   quantize:
     enable: auto
     zero_point: 0
-    scale: 0.0          # 0.0 = use the model's calibration
+    scale: 0.0               # 0.0 = use the model's calibration
   tessellate:
     enable: auto
-    slice_shape: []     # empty = use the contract geometry
+    slice_shape: []          # empty = use the contract geometry
 
 decode:
-  score_threshold: 0.30   # 0.0 keeps the model archive's packaged threshold
-  nms_iou: 0.60           # 0.0 keeps the packaged NMS IoU
-  max_detections: 50      # 0 keeps the packaged top-K
+  score_threshold: 0.30      # minimum confidence, 0.0 keeps the packaged value
+  nms_iou: 0.60              # overlap threshold for non-max suppression
+  max_detections: 50         # top-K cap per frame
 
 runtime:
-  frames: 0               # 0 = run until interrupted
-  pull_timeout_ms: 20000
+  frames: 0                  # 0 = run until interrupted
+  pull_timeout_ms: 20000     # how long to wait for a frame before giving up
   queue_depth: 3
-  # realtime | balanced | throughput
-  preset: realtime
-  # keep_latest | block
-  overflow_policy: keep_latest
-  profile: false
+  preset: realtime           # realtime | balanced | reliable
+  overflow_policy: keep_latest   # keep_latest | block | drop_incoming
+  profile: false             # per-stage timings
   profile_interval: 100
 
 output:
-  # --- Annotated video written on the DevKit ---
+  
+  # Annotated video written on the DevKit. Survives the run, unlike the UDP feed.
   video:
     enable: true
-    path: sandbox/detections.mp4   # relative to where you launch main.py
-    codec: mp4v                    # 4-char FourCC. Falls back to MJPG/.avi automatically
-    fps: 0                         # 0 = match the source frame rate
-    hud: true                      # frame rate, object count and top classes strip
+    path: sandbox/detections.mp4
+    codec: mp4v              # 4-char FourCC, falls back to MJPG/.avi automatically
+    fps: 0                   # 0 = match the source
+    hud: true                # frame rate and object count strip
 
-  # --- Annotated still frames ---
+  # Annotated stills.
   save:
     enable: true
     dir: sandbox/frames
-    every: 25             # write every Nth published frame; 0 disables
-    overlay: true         # draw boxes + labels before writing
-    format: jpg           # jpg | png
+    every: 1                 # write every Nth frame, 0 disables
+    overlay: true
+    format: jpg              # jpg | png
 
-  # --- Neat Insight (H.264 RTP/UDP video + JSON metadata over UDP) ---
+  # Live feed to Neat Insight (H.264 RTP video + JSON metadata, both UDP).
   insight:
     enable: true
-    # Address of the Insight receiver AS THE DEVKIT SEES IT.
-    # 127.0.0.1 means "the DevKit itself" — the stream would go nowhere.
-    host: 192.168.137.1
-    channel: 0            # video port = video_port_base + channel
+    host: 192.168.137.1       # your PC ip address as the DevKit sees it, NOT 127.0.0.1
+    channel: 0                # video port = video_port_base + channel
     video_port_base: 9000
     metadata_port_base: 9100
     bitrate_kbps: 2000

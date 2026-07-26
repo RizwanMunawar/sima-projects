@@ -172,7 +172,7 @@ sima-cli login                         # needs a community.sima.ai account
 The Neat SDK **is** a Docker container. No Docker, no SDK.
 
 ```bash
-# WSL — from docs.docker.com/engine/install/ubuntu
+# WSL, from docs.docker.com/engine/install/ubuntu
 sudo apt update && sudo apt install -y ca-certificates curl
 sudo install -m 0755 -d /etc/apt/keyrings
 sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
@@ -229,10 +229,10 @@ sima-cli sdk setup --devkit 192.168.137.123
 
 | Prompt | Answer |
 |:--|:--|
-| `Some system checks failed. Continue?` | `y` — the Firewall row says *Unverified*, not failed |
-| `Install Model Compiler extension?` | `Y` — adds **9 GB**, only needed to compile your own models |
-| `Install VSCode Extensions?` | `y` — lowercase, bare Enter is rejected |
-| `Apply passwordless sudo on DevKit?` | `y` — required for workspace sync |
+| `Some system checks failed. Continue?` | `y`. The Firewall row says *Unverified*, not failed |
+| `Install Model Compiler extension?` | `Y`. Adds **9 GB**, only needed to compile your own models |
+| `Install VSCode Extensions?` | `y` lowercase. A bare Enter is rejected |
+| `Apply passwordless sudo on DevKit?` | `y`. Required for workspace sync |
 | everything else | `Y` / Enter |
 
 Then confirm the **board half** actually happened, because it is what fails quietly:
@@ -254,7 +254,7 @@ ssh sima@192.168.137.123 "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat._
 ### 8️⃣ Download a model
 
 ```bash
-sima-cli sdk neat        # WSL — starts the container and drops you inside
+sima-cli sdk neat        # WSL, starts the container and drops you inside
 
 # in the container
 sima-cli login
@@ -278,15 +278,13 @@ The app lives in [`object-detection/`](object-detection/):
 
 ```
 object-detection/
-├── config.yaml          # every setting
-├── README.md            # preprocessing and tuning notes
+├── config.yaml          # every setting lives here
 ├── assets/
 │   ├── models/          # .tar.gz model packs  (not in git)
 │   └── video/           # .h264 streams        (not in git)
 └── src/
-    ├── main.py          # the pipeline
-    ├── probe_source.py  # source-only isolation test
-    ├── coco_labels.txt
+    ├── app.py           # the pipeline
+    ├── coco_labels.txt  # 80 COCO class names
     └── requirements.txt
 ```
 
@@ -311,7 +309,7 @@ scp -r object-detection/ sima@192.168.137.193:~
 ```
 
 > [!IMPORTANT]
-> Run it from `d:\work\sima-projects`, and mind the **IP** — yours may differ.
+> Run it from `d:\work\sima-projects`, and mind the **IP**, yours may differ.
 > This overwrites the board copy, so keep your originals on the PC.
 
 Then on the DevKit:
@@ -319,7 +317,7 @@ Then on the DevKit:
 ```bash
 ssh -tt sima@192.168.137.193                     # two t's, see below
 source ~/pyneat/bin/activate
-cd ~/object-detection && python3 src/main.py --config config.yaml
+cd ~/object-detection && python3 src/app.py --config config.yaml
 ```
 
 Healthy output:
@@ -337,7 +335,7 @@ running. press Ctrl-C to stop.
 > [!CAUTION]
 > **Use `ssh -tt`, two t's.** Without a pty, Ctrl-C never reaches the app. It keeps
 > running invisibly holding the MLA and your next run fails.
-> Rescue: `ssh sima@192.168.137.193 pkill -f src/main.py`
+> Rescue: `ssh sima@192.168.137.193 pkill -f src/app.py`
 
 <br>
 
@@ -545,7 +543,7 @@ sima-cli update            # menu → "Update all packages to the latest"
 
 The sudo password is the same one you SSH in with. Budget 15–40 minutes plus a reboot.
 
-> `--dryrun` ends with `No ELXR update was applied` — that is what a dry run does. Run
+> `--dryrun` ends with `No ELXR update was applied`. That is what a dry run does. Run
 > it again without the flag.
 >
 > A firmware update may wipe the board's home directory. Never keep the only copy of
@@ -629,7 +627,7 @@ sima-cli neat install core@v0.3.0
 | `pyneat requires numpy<2` | `pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"` |
 | `No src-element named "nN_demux"` | `.mp4` demuxer bug. Convert to `.h264` |
 | `ModuleNotFoundError: pyneat` | You are on the PC, or pairing never ran |
-| Device busy | Orphaned run: `ssh sima@<ip> pkill -f src/main.py` |
+| Device busy | Orphaned run: `ssh sima@<ip> pkill -f src/app.py` |
 | Stuck after `loading model` | First load unpacks the archive. Give it a minute |
 
 </details>
@@ -650,6 +648,116 @@ sima-cli neat install core@v0.3.0
 | Boxes in the wrong place | `resize.mode: letterbox`, `pad_value: 114`. Do not add your own maths |
 | Scores all near zero | Head mismatch. YOLOX, v6 and v26 use raw-logit heads |
 | Dropped frames | Raise `runtime.queue_depth`, keep `overflow_policy: keep_latest` |
+
+</details>
+
+---
+
+## 🔬 How the app works
+
+<details>
+<summary><b>Pipeline shape, preprocessing and decode types</b></summary>
+
+<br>
+
+Built by following the `neat-application-builder` playbook. Every pyneat call was
+verified against the packaged core source in the SDK container, not written from
+memory:
+
+| What | Source of truth |
+|:--|:--|
+| `PreprocessOptions` fields | `include/model/PreprocessPlan.h` |
+| `ModelOptions` fields | `include/model/Model.h` |
+| `BoxDecodeType` members | `include/pipeline/BoxDecodeType.h` |
+| Preproc semantics | `docs/reference/nodes/preproc.mdx` |
+| BBOX wire payload | `docs/reference/boxdecode_decode_types.md` |
+| Insight senders | `docs/develop-apps/advanced-concepts/application-design/` |
+| Python enum names | `python/src/module.cpp` |
+| Reference implementation | `apps-src/examples/object-detection/single-stream-object-detector` |
+
+All relative to `/neat-resources/core-src/` inside the container.
+
+### Pipeline
+
+The playbook's decision map puts this on `Graph` rather than `Model.run(...)`, because
+there are multiple stages, named public endpoints and a branch with a fan-in:
+
+```
+   source --> branch --> frame ----------------+
+                   |                           +--> combine("detector_output")
+                   +---> model --> detections -+
+```
+
+`detector_output` is pulled from the `Run` handle, the BBOX payload is parsed, and the
+frame fans out to the video writer, the still writer, the `MetadataSender`, and a
+second small graph (`Input -> VideoSender`) that encodes for Insight.
+
+### Preprocessing
+
+The `preprocess:` block is an **intent layer**, not a set of instructions. `Model`
+resolves it against the archive's MPK contract and compiles the matching Preproc,
+Quant, Tess or QuantTess graph. Anything left on `auto` is the planner's call.
+
+| Config key | pyneat field | Notes |
+|:--|:--|:--|
+| `kind` | `preprocess.kind` | `image` for every source here |
+| `enable` | `preprocess.enable` | Master switch |
+| `input_format` | `color_convert.input_format` | **Must match what the source produces** |
+| `output_format` | `color_convert.output_format` | `auto` takes it from the model |
+| `input_max_*` | `input_max_width/height` | Buffer capacity. Defaults to 1920x1080 |
+| `resize.mode` | `resize.mode` | `letterbox` preserves aspect and pads |
+| `resize.width/height` | `resize.width/height` | `0` infers 640x640 for most YOLO |
+| `pad_value` | `resize.pad_value` | `114`, the YOLO convention |
+| `normalize.preset` | `preprocess.preset` | `coco_yolo` for every YOLO detector |
+| `quantize`, `tessellate` | same | Leave on `auto` |
+
+**The one that matters most is `input_format`.** Getting it wrong is the usual cause of
+"the model runs but detects nothing":
+
+| Source | `input_format` |
+|:--|:--|
+| `video`, `rtsp` (hardware H.264 decode) | `NV12` |
+| `usb` (libcamera) | `NV12` |
+| `cv2.imread` images | `BGR` |
+
+**Coordinate mapping is automatic.** Preproc writes resize and letterbox metadata onto
+the tensor, and BoxDecode reads it back, so boxes arrive in original-image pixels. Do
+not undo the letterbox yourself. Shifted boxes mean `resize.mode` or `pad_value` is
+wrong, not that inverse maths is missing.
+
+### Model family to decode type
+
+| `family` | `BoxDecodeType` |
+|:--|:--|
+| `yolo` | `Yolo` |
+| `yolov5`, `yolov5-seg` | `YoloV5`, `YoloV5Seg` |
+| `yolov6` | `YoloV6` |
+| `yolov7`, `yolov7-seg` | `YoloV7`, `YoloV7Seg` |
+| `yolov8`, `-seg`, `-pose` | `YoloV8`, `YoloV8Seg`, `YoloV8Pose` |
+| `yolov9`, `yolov9-seg` | `YoloV9`, `YoloV9Seg` |
+| `yolov10`, `yolov10-seg` | `YoloV10`, `YoloV10Seg` |
+| **`yolo11`, `-seg`, `-pose`** | **`YoloV8`, `YoloV8Seg`, `YoloV8Pose`** |
+| `yolo26`, `-seg`, `-pose` | `YoloV26`, `YoloV26Seg`, `YoloV26Pose` |
+| `yolox` | `YoloX` |
+
+> **YOLO11 has no `BoxDecodeType` of its own.** The enum goes v5, v6, v7, v8, v9, v10,
+> v26, X. Ultralytics YOLO11 exports the same decoupled DFL detect head as YOLOv8, so
+> `yolo11` maps to `YoloV8`. Verify against your own export: uniformly near-zero scores
+> mean the head does not match the decode family.
+
+YOLOX, v6 and v26 use raw logit heads. Do not decode them as probability-only YOLO
+heads. `-seg` and `-pose` families decode, but this app renders only the leading boxes;
+masks and keypoints need `decode_segmentation` or `decode_pose` in the frame handler.
+
+### Tuning
+
+| Symptom | Setting |
+|:--|:--|
+| Missing detections | Lower `decode.score_threshold` |
+| Duplicate boxes | Lower `decode.nms_iou` |
+| Too many detections | Raise `decode.score_threshold`, lower `max_detections` |
+| Dropped frames | Raise `runtime.queue_depth` |
+| Want timings | `runtime.profile: true` |
 
 </details>
 
@@ -677,18 +785,15 @@ The graph then appends an instance suffix, but the renamer only rewrites `name=<
 declarations. `element_names()` reports just `{"n1_demux"}`, so the pad reference is
 never fixed. **Any non-empty suffix breaks it**, so reordering does not help.
 
-**Fix:** no container, no demuxer. `main.py` detects `.h264` / `.264` / `.avc` and
+**Fix:** no container, no demuxer. `app.py` detects `.h264` / `.264` / `.avc` and
 builds the chain by hand:
 
 ```
 FileInput → H264Parse → Queue → SimaDecode → CapsRaw
 ```
 
-Isolate a source problem from a model problem with:
-
-```bash
-python3 src/probe_source.py assets/video/video-4.h264
-```
+Selected automatically by extension: `.h264`, `.264`, `.bin`, `.avc`. A container input
+still uses `groups.video_input` and prints the conversion command.
 
 </details>
 
