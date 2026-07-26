@@ -309,7 +309,8 @@ sima-cli sdk neat        # WSL, starts the container and drops you inside
 # in the container
 sima-cli login
 mkdir -p /workspace/assets/models && cd /workspace/assets/models
-sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
+MODELS=https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yolo26-detection
+sima-cli download $MODELS/yolo26m-det-bf16-mla_tess-b1.tar.gz
 ```
 
 Swap `yolo26m` for `n`, `s`, `l` or `x` to trade speed against accuracy.
