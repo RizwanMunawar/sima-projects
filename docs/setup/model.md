@@ -32,7 +32,7 @@ One folder, three names. This is how files move between machines.
 
 ```
    WINDOWS                              WSL                   SDK CONTAINER
-   \\wsl$\Ubuntu\root\workspace   ═══   /root/workspace  ═══   /workspace
+   \\wsl$\Ubuntu\root\workspace   ───   /root/workspace  ───   /workspace
 ```
 
 ## Other model families

@@ -32,15 +32,15 @@ fine, which makes everything feel healthy, but it has **no route at all** to the
 `192.168.137.x` subnet your DevKit lives on.
 
 ```
-   ┌────────── BEFORE · default NAT ──────────┐   ┌───────── AFTER · mirrored ──────────┐
-   │                                          │   │                                     │
-   │   WSL      172.22.41.196                 │   │   WSL      192.168.137.1            │
-   │              │                           │   │              │                      │
-   │              │  ✗  no route              │   │              │  ✓  same subnet      │
-   │              ▼                           │   │              ▼                      │
-   │   DevKit   <devkit-ip>                   │   │   DevKit   <devkit-ip>              │
-   │                                          │   │                                     │
-   └──────────────────────────────────────────┘   └─────────────────────────────────────┘
+┌─────── BEFORE · default NAT ───────┐   ┌───────── AFTER · mirrored ─────────┐
+│                                    │   │                                    │
+│   WSL      172.22.41.196           │   │   WSL      192.168.137.1           │
+│              │                     │   │              │                     │
+│              │   X  no route       │   │              │   =  same subnet    │
+│              v                     │   │              v                     │
+│   DevKit   <devkit-ip>             │   │   DevKit   <devkit-ip>             │
+│                                    │   │                                    │
+└────────────────────────────────────┘   └────────────────────────────────────┘
 ```
 
 The reason this bites so hard is timing. In [step 7](sdk.md#7-install-the-neat-sdk),
@@ -86,8 +86,8 @@ traffic.
 ```
    DevKit                    Hyper-V firewall              Neat Insight
    ──────                    ────────────────              ────────────
-   UDP 9000  ──────────────►  ╳  BLOCKED  ╳  ─ ─ ─ ─ ─ ─►   (nothing)
-   UDP 9100  ──────────────►  ╳  BLOCKED  ╳  ─ ─ ─ ─ ─ ─►   (nothing)
+   UDP 9000  ──────────────>  [ BLOCKED ]  - - - - - - >   (nothing)
+   UDP 9100  ──────────────>  [ BLOCKED ]  - - - - - - >   (nothing)
 ```
 
 What makes this one nasty is the failure mode. Insight loads perfectly in your browser,

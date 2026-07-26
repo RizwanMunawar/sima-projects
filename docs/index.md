@@ -35,7 +35,7 @@ Almost every problem in this stack comes from running a command in the wrong pla
 ┌──────────────┐       ┌─────────────────┐        ┌───────────────┐
 │  WINDOWS PC  │       │  WSL2 · UBUNTU  │        │    DEVKIT     │
 ├──────────────┤       ├─────────────────┤        ├───────────────┤
-│  Chrome      │◄─────►│  sima-cli       │◄──────►│  MLA          │
+│  Chrome      │<─────>│  sima-cli       │<──────>│  MLA          │
 │  scp / ssh   │ :9900 │  Docker + SDK   │  UDP   │  your app     │
 │              │       │  Neat Insight   │ 9000/  │               │
 │              │       │                 │ 9100   │               │

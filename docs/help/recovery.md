@@ -25,7 +25,7 @@ something went wrong.
 ### Step 1. Give the board internet access
 
 ```
-   Internet ──► Wi-Fi ──► [ Windows ICS ] ──► Ethernet ──► DevKit
+   Internet ──> Wi-Fi ──> [ Windows ICS ] ──> Ethernet ──> DevKit
                            192.168.137.1                 <devkit-ip>
 ```
 

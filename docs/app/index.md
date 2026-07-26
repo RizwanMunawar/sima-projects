@@ -27,9 +27,9 @@ Models and video are gitignored, so after cloning you supply your own.
 ## The loop
 
 ```
-   edit config or code   ──►   scp to the board   ──►   run   ──►   watch
-          ▲                                                            │
-          └────────────────────────────────────────────────────────────┘
+   ┌──> edit config or code ──> scp to the board ──> run ──> watch ──┐
+   │                                                                 │
+   └─────────────────────────────────────────────────────────────────┘
 ```
 
 Everything runs **on the DevKit**. `pyneat` is compiled for the board's ARM processor

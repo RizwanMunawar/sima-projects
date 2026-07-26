@@ -9,15 +9,15 @@ Eight one-time steps, from a bare Windows PC to a paired DevKit with a model on 
 ├────────────────────────┼────────────────────────────┼─────────────────────────┤
 ├─────────────────────────────── ONE-TIME SETUP ────────────────────────────────┤
 │                        │                            │                         │
-│ 1  cable up  ══════════╪════════════════════════════╪═══►  DHCP address       │
+│ 1  cable up  ──────────┼────────────────────────────┼───>  DHCP address       │
 │      USB + Ethernet    │                            │      board powers on    │
 │                        │                            │                         │
-│ 2  wsl --install ══════╪═══►  Ubuntu ready          │                         │
+│ 2  wsl --install ──────┼───>  Ubuntu ready          │                         │
 │                        │                            │                         │
-│ 3  .wslconfig  ════════╪═══►  WSL takes .137.1  ════╪═══►  now reachable      │
+│ 3  .wslconfig  ────────┼───>  WSL takes .137.1  ────┼───>  now reachable      │
 │      mirrored mode     │        same subnet         │      both directions    │
 │                        │                            │                         │
-│ 4  firewall rules ═════╪═══►  UDP 9000/9100 open    │                         │
+│ 4  firewall rules ─────┼───>  UDP 9000/9100 open    │                         │
 │      Hyper-V inbound   │        ready to receive    │                         │
 │                        │                            │                         │
 │                        │ 5  git clone + sima-cli    │                         │
@@ -26,7 +26,7 @@ Eight one-time steps, from a bare Windows PC to a paired DevKit with a model on 
 │                        │ 6  docker + nfs            │                         │
 │                        │      the SDK is a container│                         │
 │                        │                            │                         │
-│                        │ 7  sima-cli sdk setup ═════╪═►  pyneat + runtime     │
+│                        │ 7  sima-cli sdk setup ─────┼─>  pyneat + runtime     │
 │                        │      12.6 GB image         │      installed on board │
 │                        │                            │                         │
 │                        │ 8  download model          │                         │
@@ -34,17 +34,16 @@ Eight one-time steps, from a bare Windows PC to a paired DevKit with a model on 
 │                        │                            │                         │
 ├────────────────────────────── EVERY RUN, REPEAT ──────────────────────────────┤
 │                        │                            │                         │
-│                        │ 9  scp object-detection/ ══╪═►  ~/object-detection   │
-│                        │      edit → copy → run     │      python3 src/app.py │
+│                        │ 9  scp object-detection/ ──┼─>  ~/object-detection   │
+│                        │      edit, copy, run       │      python3 src/app.py │
 │                        │                            │                         │
-│10  browser  ◄══════════╪════  Insight  ◄════════════╪═══╡ VideoSender         │
+│10  browser  <──────────┼────  Insight  <────────────┼────  VideoSender        │
 │      localhost:9900    │        live, while running │      MetadataSender     │
 │                        │                            │                         │
-│10  scp  ◄══════════════╪════════════════════════════╪═══╡ VideoWriter         │
+│10  scp  <──────────────┼────────────────────────────┼────  VideoWriter        │
 │      keeps a copy      │        detections.mp4      │      every frame        │
 │                        │                            │                         │
 └────────────────────────┴────────────────────────────┴─────────────────────────┘
-
 ```
 
 | Step | Runs on | Time |

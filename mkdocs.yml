@@ -91,10 +91,10 @@ nav:
   - Home: index.md
   - Setup:
       - setup/index.md
-      - 1. Connect the DevKit: setup/hardware.md
-      - 2-4. WSL and networking: setup/wsl.md
-      - 5-7. sima-cli, Docker, SDK: setup/sdk.md
-      - 8. Download a model: setup/model.md
+      - Connect the DevKit: setup/hardware.md
+      - WSL and networking: setup/wsl.md
+      - sima-cli, Docker, SDK: setup/sdk.md
+      - Download a model: setup/model.md
   - Running the app:
       - app/index.md
       - Deploy and run: app/deploy.md
