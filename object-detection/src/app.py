@@ -953,6 +953,7 @@ class Pipeline:
         writer: OpenCV ``VideoWriter`` for the on-device recording.
         writer_path: Path the writer actually opened, after any fallback.
         writer_frames: Frames written so far.
+        video_dropped: Preview frames the Insight feed refused.
     """
 
     model: object
@@ -969,6 +970,7 @@ class Pipeline:
     writer: object = None
     writer_path: str = ""
     writer_frames: int = 0
+    video_dropped: int = 0
 
     def close(self) -> None:
         if self.writer is not None:
@@ -1038,18 +1040,16 @@ def load_labels(path: Path) -> list[str]:
 
 
 def resolve_flow_control(cfg: AppConfig) -> tuple[str, str]:
-    """Choose a run preset and overflow policy for the source type.
+    """Resolve ``auto`` flow-control settings to concrete tokens.
 
-    File sources must not drop buffers. The graph branches into a fast frame
-    passthrough and a slow MLA inference path, then recombines them with
-    ``CombinePolicy.ByFrame``. Under ``keep_latest`` the two branches drop
-    *different* frames, the combine waits for an id that will never arrive on
-    one side, and the run stalls part-way through the file. ``block`` keeps them
-    in lockstep and makes throughput model-bound, which is what offline
-    processing wants.
+    ``auto`` means realtime plus keep_latest for every source type.
 
-    Live sources want the opposite: staying current matters more than keeping
-    every frame, so dropping is correct.
+    Do not switch a file source to ``block`` hoping to capture every frame. It
+    deadlocks: the branch, combine and appsink stages all apply backpressure, so
+    with nothing allowed to drop the graph never reaches steady state and the
+    first pull times out having produced zero frames. Full-length output comes
+    from never blocking the run loop, which is why the Insight preview push is
+    non-blocking, not from forbidding drops.
 
     Args:
         cfg: Application configuration.
@@ -1057,13 +1057,12 @@ def resolve_flow_control(cfg: AppConfig) -> tuple[str, str]:
     Returns:
         A ``(preset, overflow_policy)`` pair of config tokens.
     """
-    live = cfg.source_type in {"rtsp", "usb"}
     preset = cfg.run_preset
     policy = cfg.overflow_policy
     if preset == "auto":
-        preset = "realtime" if live else "reliable"
+        preset = "realtime"
     if policy == "auto":
-        policy = "keep_latest" if live else "block"
+        policy = "keep_latest"
     return preset, policy
 
 
@@ -1128,6 +1127,12 @@ def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
     input_options.fps_n = fps
     input_options.fps_d = 1
     input_options.memory_policy = pyneat.InputMemoryPolicy.Ev74
+    # Never block the caller. The default appsrc is block=true, so once the
+    # encoder or UDP egress falls behind, push() stops returning, the run loop
+    # never reaches its next pull(), and the whole detector graph stalls. The
+    # Insight feed is best effort, so a dropped preview frame is the right
+    # trade for keeping inference and the recording running.
+    input_options.block = False
 
     sender_options = pyneat.VideoSenderOptions.h264_rtp_udp_from_raw(width, height, fps)
     sender_options.host = cfg.insight_host
@@ -1166,10 +1171,11 @@ def build_pipeline(cfg: AppConfig) -> Pipeline:
 
     preset, policy = resolve_flow_control(cfg)
     step(f"runtime: preset={preset} overflow={policy} queue_depth={cfg.queue_depth}")
-    if policy != "block" and cfg.source_type == "video":
+    if policy == "block":
         step(
-            "[warn] a file source with a dropping overflow policy can stall the\n"
-            "       ByFrame combine part-way through. Use overflow_policy: auto."
+            "[warn] overflow_policy: block deadlocks this graph. Every stage applies\n"
+            "       backpressure, so with nothing allowed to drop the run produces\n"
+            "       zero frames. Use auto."
         )
 
     step("building graph...")
@@ -1523,6 +1529,17 @@ def send_metadata(pipeline: Pipeline, sample, boxes: list[dict]) -> None:
 
 
 def push_video(pipeline: Pipeline, sample, frame_bgr) -> None:
+    """Send one frame to the Insight preview, dropping it if the feed is busy.
+
+    Best effort by design. A refused push means the encoder or UDP egress is
+    behind; skipping that frame keeps inference and the recording at full rate,
+    which matters more than a complete preview.
+
+    Args:
+        pipeline: Live pipeline, whose ``video_run`` may be None.
+        sample: Source sample, for timestamps and ids.
+        frame_bgr: BGR image to send.
+    """
     if pipeline.video_run is None:
         return
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
@@ -1538,8 +1555,11 @@ def push_video(pipeline: Pipeline, sample, frame_bgr) -> None:
     video_sample.duration_ns = sample.duration_ns
     video_sample.frame_id = sample.frame_id
     video_sample.stream_id = sample.stream_id
-    if not pipeline.video_run.push([video_sample]):
-        raise RuntimeError("Insight video push failed")
+    try:
+        if not pipeline.video_run.push([video_sample]):
+            pipeline.video_dropped += 1
+    except Exception:
+        pipeline.video_dropped += 1
 
 
 def wants_jpeg(cfg: AppConfig, index: int) -> bool:
@@ -1751,6 +1771,11 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
         print(
             f"metadata: sent={stats.datagrams_sent} failures={stats.send_failures} "
             f"would_block={stats.would_block}"
+        )
+    if pipeline.video_dropped:
+        print(
+            f"insight: dropped {pipeline.video_dropped} preview frames because the "
+            f"feed was busy. The recording is unaffected."
         )
     return processed
 

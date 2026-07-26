@@ -705,8 +705,8 @@ sima-cli neat install core@v0.3.0
 | Insight blank but `sent=N failures=0` | The stream already ended. UDP buffers nothing, so open the viewer **first** and use a looped source |
 | Insight loads, no video | **Firewall.** Step 4 skipped. Most common failure by far |
 | Insight blank, no errors | `insight.host` is `127.0.0.1`. Use `192.168.137.1` |
-| Output video far shorter than the input | The run stalled. Set `runtime.overflow_policy: auto` so a file source never drops buffers |
-| Stops early with `timed out waiting for detections` | Same cause. A dropping policy desynchronises the two branches and the `ByFrame` combine starves |
+| Output video far shorter than the input | The run stalled on backpressure. Keep `overflow_policy: auto`, and set `output.insight.enable: false` to rule out the preview feed |
+| `processed=0` and a 20 s timeout | You set `overflow_policy: block`. Every stage applies backpressure, so forbidding drops deadlocks the graph. Use `auto` |
 | `192.168.137.1:9900` will not load | Expected. Use `https://localhost:9900` |
 | No detections at all | `model.family` mismatch, then lower `decode.score_threshold` |
 | Boxes in the wrong place | `resize.mode: letterbox`, `pad_value: 114`. Do not add your own maths |

@@ -82,10 +82,9 @@ runtime:
   frames: 0                  # 0 = run until interrupted
   pull_timeout_ms: 20000     # how long to wait for a frame before giving up
   queue_depth: 3
-  # auto picks per source: files get reliable+block so no frame is ever dropped,
-  # live sources get realtime+keep_latest so they stay current.
-  # Dropping on a file source stalls the ByFrame combine part-way through and
-  # truncates the output video.
+  # auto = realtime + keep_latest. Do NOT set block: every stage applies
+  # backpressure, so forbidding drops deadlocks the graph at zero frames.
+  # Full-length output comes from the non-blocking Insight push, not from this.
   preset: auto               # auto | realtime | balanced | reliable
   overflow_policy: auto      # auto | block | keep_latest | drop_incoming
   profile: false             # per-stage timings
