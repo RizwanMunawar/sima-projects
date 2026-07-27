@@ -1019,14 +1019,14 @@ bringing up a DevKit.
 
 <br>
 
-<a href="https://github.com/RizwanMunawar" target="_blank" rel="noopener noreferrer"><img src="assets/socials/github.svg" width="50" alt="GitHub"></a>
+<a href="https://github.com/RizwanMunawar"><img src="assets/socials/github.svg" width="50" alt="GitHub"></a>
 &nbsp;&nbsp;
-<a href="https://www.linkedin.com/in/muhammadrizwanmunawar/" target="_blank" rel="noopener noreferrer"><img src="assets/socials/linkedin.svg" width="50" alt="LinkedIn"></a>
+<a href="https://www.linkedin.com/in/muhammadrizwanmunawar/"><img src="assets/socials/linkedin.svg" width="50" alt="LinkedIn"></a>
 &nbsp;&nbsp;
-<a href="https://x.com/muhammdrizwanmr" target="_blank" rel="noopener noreferrer"><img src="assets/socials/x.svg" width="50" alt="X"></a>
+<a href="https://x.com/muhammdrizwanmr"><img src="assets/socials/x.svg" width="50" alt="X"></a>
 &nbsp;&nbsp;
-<a href="https://www.youtube.com/@muhammadrizwanmunawar" target="_blank" rel="noopener noreferrer"><img src="assets/socials/youtube.svg" width="50" alt="YouTube"></a>
+<a href="https://www.youtube.com/@muhammadrizwanmunawar"><img src="assets/socials/youtube.svg" width="50" alt="YouTube"></a>
 &nbsp;&nbsp;
-<a href="https://muhammadrizwanmunawar.medium.com/" target="_blank" rel="noopener noreferrer"><img src="assets/socials/medium.svg" width="50" alt="Medium"></a>
+<a href="https://muhammadrizwanmunawar.medium.com/"><img src="assets/socials/medium.svg" width="50" alt="Medium"></a>
 
 </div>
