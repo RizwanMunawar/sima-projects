@@ -47,54 +47,33 @@ cd sima-projects
 
 ## Contents
 
-**Set up once.** About two hours, mostly downloading.
+Steps 1 to 7 run once per machine, about two hours and mostly downloading. Steps 8 and 9
+are the loop you live in after that.
 
-| | Step | Time |
+| | Section | What it covers |
 |:--|:--|:--|
-| 1 | [Cable up the DevKit](#step-1) | 15 min |
-| 2 | [Install WSL2](#step-2) | 10 min |
-| 3 | [Mirrored networking](#step-3) | 5 min |
-| 4 | [Get the code and install sima-cli](#step-4) | 5 min |
-| 5 | [Docker Engine + NFS](#step-5) | 10 min |
-| 6 | [Install the Neat SDK](#step-6) | 30–60 min |
-| 7 | [Download a model](#step-7) | 5 min |
-
-**Every run.** The loop you actually live in.
-
-| | Step | Time |
-|:--|:--|:--|
-| 8 | [Deploy and run](#step-8) | 2 min |
-| 9 | [See the result](#step-9) | 1 min |
-
-**Everything else.**
-
-| Section | What it covers |
-|:--|:--|
-| [Test it in three commands](#test-it-in-three-commands) | Push, run, pull the result back |
-| [Complete workflow](#complete-workflow) | Who does what, and in which order |
-| [The overlay](#the-overlay) | Every box, caption and FPS badge setting |
-| [Configuration](#configuration) | `config.yaml`, and the mistakes it catches |
-| [Daily loop](#daily-loop) | The commands you repeat after every edit |
-| [How the app works](#how-the-app-works) | Pipeline, preprocessing, decode types |
-| [Known issues](#known-issues) | The `.mp4` demuxer bug in Neat 0.3.0 |
-| [Reference](#reference) | Addresses, paths, five rules |
-
-**When something breaks.**
-
-| Section | What it covers |
-|:--|:--|
-| [Questions people ask](#questions-people-ask) | FAQ: own models, cameras, short runs, where output lands |
-| [Common errors](#common-errors) | One table, symptom to fix |
-| [Recovery](#recovery) | Firmware mismatch, missing pyneat |
-
-**Project.**
-
-| Section | What it covers |
-|:--|:--|
-| [License](#license) | YOLO26 under AGPL-3.0, everything else Apache-2.0 |
-| [Credits](#credits) | SiMa.ai, Ultralytics, and where to find me |
-
----
+| | [Test it in three commands](#test-it-in-three-commands) | Push, run, pull the result back |
+| | [Complete workflow](#complete-workflow) | Who does what, and in which order |
+| 1 | [Cable up the DevKit](#step-1) | USB serial and Ethernet, set DHCP. 15 min |
+| 2 | [Install WSL2](#step-2) | `wsl --install -d Ubuntu`. 10 min |
+| 3 | [Mirrored networking](#step-3) | So WSL can see the board at all. 5 min |
+| 4 | [Get the code and install sima-cli](#step-4) | Clone, venv, login. 5 min |
+| 5 | [Docker Engine + NFS](#step-5) | The Neat SDK is a container. 10 min |
+| 6 | [Install the Neat SDK](#step-6) | Pairs the board, 12.6 GB. 30 to 60 min |
+| 7 | [Download a model](#step-7) | A YOLO26 `.tar.gz` pack. 5 min |
+| 8 | [Deploy and run](#step-8) | `scp` the app over and run it. 2 min |
+| 9 | [See the result](#step-9) | Pull `detections.mp4` and `frames/` back. 1 min |
+| | [The overlay](#the-overlay) | Every box, caption and FPS badge setting |
+| | [Configuration](#configuration) | `config.yaml`, and the mistakes it catches |
+| | [Daily loop](#daily-loop) | The commands you repeat after every edit |
+| | [How the app works](#how-the-app-works) | Pipeline, preprocessing, decode types |
+| | [Known issues](#known-issues) | The `.mp4` demuxer bug in Neat 0.3.0 |
+| | [Reference](#reference) | Addresses, paths, five rules |
+| | [Questions people ask](#questions-people-ask) | FAQ: own models, cameras, short runs, where output lands |
+| | [Common errors](#common-errors) | One table, symptom to fix |
+| | [Recovery](#recovery) | Firmware mismatch, missing pyneat |
+| | [License](#license) | YOLO26 under AGPL-3.0, everything else Apache-2.0 |
+| | [Credits](#credits) | SiMa.ai, Ultralytics, and where to find me |
 
 ## Test it in three commands
 
