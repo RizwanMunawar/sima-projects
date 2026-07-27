@@ -1039,7 +1039,7 @@ under **AGPL-3.0**. All other parts of this code are released under **Apache-2.0
 ## Credits
 
 - [SiMa.ai on GitHub](https://github.com/SiMa-ai): Modalix, the Palette SDK and Neat
-- [Ultralytics](https://github.com/ultralytics/ultralytics): the YOLO models
+- [Ultralytics](https://github.com/ultralytics/ultralytics): YOLO26 models
 
 <div align="center">
 
@@ -1051,6 +1051,6 @@ bringing up a DevKit.
 
 <br>
 
-[![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)](https://github.com/RizwanMunawar) &nbsp;&nbsp; [![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/muhammadrizwanmunawar/) &nbsp;&nbsp; [![X](https://img.shields.io/badge/X-000000?logo=x&logoColor=white)](https://x.com/muhammdrizwanmr) &nbsp;&nbsp; [![YouTube](https://img.shields.io/badge/YouTube-FF0000?logo=youtube&logoColor=white)](https://www.youtube.com/@muhammadrizwanmunawar) &nbsp;&nbsp; [![Medium](https://img.shields.io/badge/Medium-000000?logo=medium&logoColor=white)](https://muhammadrizwanmunawar.medium.com/)
+[![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)](https://github.com/RizwanMunawar)&nbsp; [![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/muhammadrizwanmunawar/)&nbsp; [![X](https://img.shields.io/badge/X-000000?logo=x&logoColor=white)](https://x.com/muhammdrizwanmr)&nbsp; [![YouTube](https://img.shields.io/badge/YouTube-FF0000?logo=youtube&logoColor=white)](https://www.youtube.com/@muhammadrizwanmunawar)&nbsp; [![Medium](https://img.shields.io/badge/Medium-000000?logo=medium&logoColor=white)](https://muhammadrizwanmunawar.medium.com/)
 
 </div>
