@@ -12,7 +12,7 @@
 ![WSL2](https://img.shields.io/badge/WSL2-E95420?style=flat-square&logo=ubuntu&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
 ![Python](https://img.shields.io/badge/Python_3.10+-3776AB?style=flat-square&logo=python&logoColor=white)
-![YOLO](https://img.shields.io/badge/YOLO-26_·_11_·_v8_·_v5-FFB703?style=flat-square&labelColor=333)
+![YOLO](https://img.shields.io/badge/Ultralytics_YOLO26-FFB703?style=flat-square&labelColor=333)
 
 ![Setup](https://img.shields.io/badge/setup-~2h-6C757D?style=flat-square)
 ![Download](https://img.shields.io/badge/download-12.6_GB-DC3545?style=flat-square)
@@ -69,7 +69,7 @@ reviewing the result is the loop you live in after that.
 | [How the app works](#how-the-app-works) | Pipeline, preprocessing, decode types |
 | [Known issues](#known-issues) | The `.mp4` demuxer bug in Neat 0.3.0 |
 | [Reference](#reference) | Addresses, paths, five rules |
-| [Questions people ask](#questions-people-ask) | FAQ: own models, cameras, short runs, where output lands |
+| [Questions people ask](#questions-people-ask) | FAQ: model sizes, cameras, short runs, where output lands |
 | [Common errors](#common-errors) | One table, symptom to fix |
 | [Recovery](#recovery) | Firmware mismatch, missing pyneat |
 | [License](#license) | YOLO26 under AGPL-3.0, everything else Apache-2.0 |
@@ -522,7 +522,7 @@ Everything lives in `object-detection/config.yaml`. These settings matter:
 ```yaml
 model:
   path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
-  family: yolo26                       # must match your model
+  family: yolo26                       # the YOLO26 detect head
 
 source:
   type: video                          # video | rtsp | usb
@@ -561,7 +561,7 @@ next run: see [The overlay](#the-overlay) for the full list, what each one does,
 |:--|:--|
 | `uri: C:\Users\...\video.mp4` | The DevKit has no `C:` drive |
 | `uri: r"C:\path\file.mp4"` | `r"..."` is Python. YAML keeps the `r` and quotes |
-| `family` mismatched | No detections, or every score near zero |
+| `family` not `yolo26` | No detections, or every score near zero |
 | A `.mp4` source | Hits a demuxer bug. Convert to `.h264`, see below |
 
 ### Video must be raw H.264
@@ -651,9 +651,9 @@ Quant, Tess or QuantTess graph. Anything left on `auto` is the planner's call.
 | `output_format` | `color_convert.output_format` | `auto` takes it from the model |
 | `input_max_*` | `input_max_width/height` | Buffer capacity. Defaults to 1920x1080 |
 | `resize.mode` | `resize.mode` | `letterbox` preserves aspect and pads |
-| `resize.width/height` | `resize.width/height` | `0` infers 640x640 for most YOLO |
-| `pad_value` | `resize.pad_value` | `114`, the YOLO convention |
-| `normalize.preset` | `preprocess.preset` | `coco_yolo` for every YOLO detector |
+| `resize.width/height` | `resize.width/height` | `0` infers 640x640, the YOLO26 input |
+| `pad_value` | `resize.pad_value` | `114`, what YOLO26 letterboxes with |
+| `normalize.preset` | `preprocess.preset` | `coco_yolo`, what YOLO26 expects |
 | `quantize`, `tessellate` | same | Leave on `auto` |
 
 **The one that matters most is `input_format`.** Getting it wrong is the usual cause of
@@ -670,29 +670,18 @@ the tensor, and BoxDecode reads it back, so boxes arrive in original-image pixel
 not undo the letterbox yourself. Shifted boxes mean `resize.mode` or `pad_value` is
 wrong, not that inverse maths is missing.
 
-### Model family to decode type
+### Decoding YOLO26 boxes
 
-| `family` | `BoxDecodeType` |
-|:--|:--|
-| `yolo` | `Yolo` |
-| `yolov5`, `yolov5-seg` | `YoloV5`, `YoloV5Seg` |
-| `yolov6` | `YoloV6` |
-| `yolov7`, `yolov7-seg` | `YoloV7`, `YoloV7Seg` |
-| `yolov8`, `-seg`, `-pose` | `YoloV8`, `YoloV8Seg`, `YoloV8Pose` |
-| `yolov9`, `yolov9-seg` | `YoloV9`, `YoloV9Seg` |
-| `yolov10`, `yolov10-seg` | `YoloV10`, `YoloV10Seg` |
-| **`yolo11`, `-seg`, `-pose`** | **`YoloV8`, `YoloV8Seg`, `YoloV8Pose`** |
-| `yolo26`, `-seg`, `-pose` | `YoloV26`, `YoloV26Seg`, `YoloV26Pose` |
-| `yolox` | `YoloX` |
+`model.family: yolo26` selects `BoxDecodeType.YoloV26`, and the app prints the pair it
+resolved on startup so you can see it took:
 
-> **YOLO11 has no `BoxDecodeType` of its own.** The enum goes v5, v6, v7, v8, v9, v10,
-> v26, X. Ultralytics YOLO11 exports the same decoupled DFL detect head as YOLOv8, so
-> `yolo11` maps to `YoloV8`. Verify against your own export: uniformly near-zero scores
-> mean the head does not match the decode family.
+```
+model: ... family=yolo26 decode_type=YoloV26 labels=80
+```
 
-YOLOX, v6 and v26 use raw logit heads. Do not decode them as probability-only YOLO
-heads. `-seg` and `-pose` families decode, but this app renders only the leading boxes;
-masks and keypoints need `decode_segmentation` or `decode_pose` in the frame handler.
+YOLO26 has a **raw logit head**, so it must not be decoded as a probability-only head.
+That is what `YoloV26` handles. Uniformly near-zero scores mean the decode does not match
+the head, so check `family` before touching thresholds.
 
 ### Tuning
 
@@ -790,26 +779,26 @@ Yes, the config half:
 python3 object-detection/src/app.py --validate-config
 ```
 
-It needs only `pyyaml`, runs on Windows or WSL, and checks the model family maps to a
-real `BoxDecodeType`, that every path resolves, and what the preprocess plan will be.
+It needs only `pyyaml`, runs on Windows or WSL, and checks that the model family resolves
+to a real `BoxDecodeType`, that every path exists, and what the preprocess plan will be.
 Inference itself needs the board, because it runs on the MLA.
 
 </details>
 
 <details>
-<summary><b>Can I run my own YOLO model?</b></summary>
+<summary><b>Can I use a different YOLO26 size?</b></summary>
 
-Put the `.tar.gz` model pack in `object-detection/assets/models/`, then set two keys:
+Yes. Download the pack you want in [step 7](#step-7), drop it in
+`object-detection/assets/models/`, and point `model.path` at it:
 
 ```yaml
 model:
-  path: assets/models/<your-pack>.tar.gz
-  family: yolo11                       # the head your export actually has
+  path: assets/models/yolo26s-det-bf16-mla_tess-b1.tar.gz
+  family: yolo26
 ```
 
-`family` must match the export, not the name of the weights file. See
-[model family to decode type](#model-family-to-decode-type); YOLO11 maps to the
-`YoloV8` head. Uniformly near-zero scores mean the family is wrong.
+`n`, `s`, `m`, `l` and `x` trade speed against accuracy. `family` stays `yolo26`, since
+they all share the same detect head.
 
 </details>
 
@@ -942,9 +931,9 @@ No. `pyneat` and every `simaai-*` package on the board need `numpy<2`, which is 
 | `ModuleNotFoundError: pyneat` | You are on the PC, or pairing never ran |
 | Device busy | Orphaned run: `ssh sima@<ip> pkill -f src/app.py` |
 | Stuck after `loading model` | First load unpacks the archive. Give it a minute |
-| No detections at all | `model.family` mismatch, then lower `decode.score_threshold` |
+| No detections at all | Check `model.family` is `yolo26`, then lower `decode.score_threshold` |
 | Boxes in the wrong place | `resize.mode: letterbox`, `pad_value: 114`. Do not add your own maths |
-| Scores all near zero | Head mismatch. YOLOX, v6 and v26 use raw-logit heads |
+| Scores all near zero | `model.family` is not `yolo26`, so the raw-logit head is being decoded wrong |
 | Output video shorter than the input, and plays fast | Frames are being dropped. Set `runtime.overflow_policy: auto`, which picks `block` for a file so every frame is kept |
 | `processed=0` and a 20 s timeout | The source caps filter is not negotiating. Leave `source.width`, `source.height` and `source.fps` at 0 |
 | Dropped frames on a live source | Raise `runtime.queue_depth`, keep `overflow_policy: auto` |
@@ -1030,14 +1019,14 @@ bringing up a DevKit.
 
 <br>
 
-<a href="https://github.com/RizwanMunawar"><img src="assets/socials/github.svg" width="54" alt="GitHub"></a>
+<a href="https://github.com/RizwanMunawar"><img src="assets/socials/github.svg" width="50" alt="GitHub"></a>
 &nbsp;&nbsp;
-<a href="https://www.linkedin.com/in/muhammadrizwanmunawar/"><img src="assets/socials/linkedin.svg" width="54" alt="LinkedIn"></a>
+<a href="https://www.linkedin.com/in/muhammadrizwanmunawar/"><img src="assets/socials/linkedin.svg" width="50" alt="LinkedIn"></a>
 &nbsp;&nbsp;
-<a href="https://x.com/muhammdrizwanmr"><img src="assets/socials/x.svg" width="54" alt="X"></a>
+<a href="https://x.com/muhammdrizwanmr"><img src="assets/socials/x.svg" width="50" alt="X"></a>
 &nbsp;&nbsp;
-<a href="https://www.youtube.com/@muhammadrizwanmunawar"><img src="assets/socials/youtube.svg" width="54" alt="YouTube"></a>
+<a href="https://www.youtube.com/@muhammadrizwanmunawar"><img src="assets/socials/youtube.svg" width="50" alt="YouTube"></a>
 &nbsp;&nbsp;
-<a href="https://muhammadrizwanmunawar.medium.com/"><img src="assets/socials/medium.svg" width="54" alt="Medium"></a>
+<a href="https://muhammadrizwanmunawar.medium.com/"><img src="assets/socials/medium.svg" width="50" alt="Medium"></a>
 
 </div>
