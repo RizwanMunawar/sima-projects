@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/sima-devkit-docs-logo.png" alt="SiMa Neat SDK — live YOLO object detection on a Modalix DevKit 3.0" width="640">
+<img src="assets/sima-devkit-docs-logo.png" alt="SiMa Neat SDK: live YOLO object detection on a Modalix DevKit 3.0" width="640">
 
 <br>
 
@@ -47,7 +47,7 @@ cd sima-projects
 
 ## Contents
 
-**Set up once** — about two hours, mostly downloading
+**Set up once.** About two hours, mostly downloading.
 
 | | Step | Time |
 |:--|:--|:--|
@@ -59,21 +59,40 @@ cd sima-projects
 | 6 | [Install the Neat SDK](#step-6) | 30–60 min |
 | 7 | [Download a model](#step-7) | 5 min |
 
-**Every run** — the loop you actually live in
+**Every run.** The loop you actually live in.
 
 | | Step | Time |
 |:--|:--|:--|
 | 8 | [Deploy and run](#step-8) | 2 min |
 | 9 | [See the result](#step-9) | 1 min |
 
-**Everything else** — [Test it in three commands](#test-it-in-three-commands) ·
-[Complete workflow](#complete-workflow) · [The overlay](#the-overlay) ·
-[Configuration](#configuration) · [Daily loop](#daily-loop) ·
-[How the app works](#how-the-app-works) · [Known issues](#known-issues) ·
-[Reference](#reference) · [License](#license) · [Credits](#credits)
+**Everything else.**
 
-**Something broke** — [Questions people ask](#questions-people-ask) ·
-[Common errors](#common-errors) · [Recovery](#recovery)
+| Section | What it covers |
+|:--|:--|
+| [Test it in three commands](#test-it-in-three-commands) | Push, run, pull the result back |
+| [Complete workflow](#complete-workflow) | Who does what, and in which order |
+| [The overlay](#the-overlay) | Every box, caption and FPS badge setting |
+| [Configuration](#configuration) | `config.yaml`, and the mistakes it catches |
+| [Daily loop](#daily-loop) | The commands you repeat after every edit |
+| [How the app works](#how-the-app-works) | Pipeline, preprocessing, decode types |
+| [Known issues](#known-issues) | The `.mp4` demuxer bug in Neat 0.3.0 |
+| [Reference](#reference) | Addresses, paths, five rules |
+
+**When something breaks.**
+
+| Section | What it covers |
+|:--|:--|
+| [Questions people ask](#questions-people-ask) | FAQ: own models, cameras, short runs, where output lands |
+| [Common errors](#common-errors) | One table, symptom to fix |
+| [Recovery](#recovery) | Firmware mismatch, missing pyneat |
+
+**Project.**
+
+| Section | What it covers |
+|:--|:--|
+| [License](#license) | YOLO26 under AGPL-3.0, everything else Apache-2.0 |
+| [Credits](#credits) | SiMa.ai, Ultralytics, and where to find me |
 
 ---
 
@@ -395,7 +414,7 @@ running. press Ctrl-C to stop.
 > running invisibly holding the MLA and your next run fails.
 > Rescue: `ssh sima@<devkit-ip> pkill -f src/app.py`
 
-Anything other than that output — no detections, a stall, a crash — is in
+Anything other than that output (no detections, a stall, a crash) is in
 [Common errors](#common-errors) and [Questions people ask](#questions-people-ask).
 
 <a id="step-9"></a>
@@ -1019,12 +1038,12 @@ under **AGPL-3.0**. All other parts of this code are released under **Apache-2.0
 
 ## Credits
 
-- [SiMa.ai on GitHub](https://github.com/SiMa-ai) — Modalix, the Palette SDK and Neat
-- [Ultralytics](https://github.com/ultralytics/ultralytics) — the YOLO models
+- [SiMa.ai on GitHub](https://github.com/SiMa-ai): Modalix, the Palette SDK and Neat
+- [Ultralytics](https://github.com/ultralytics/ultralytics): the YOLO models
 
 <div align="center">
 
-Created with ❤️ by **Muhammad Rizwan Munawar** — passionate about implementing
+Created with ❤️ by **Muhammad Rizwan Munawar**, passionate about implementing
 computer vision ideas and sharing my gains with the community.
 
 If this saved you an afternoon, **⭐ the repo** and pass it on to someone else
@@ -1032,10 +1051,6 @@ bringing up a DevKit.
 
 <br>
 
-[![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)](https://github.com/RizwanMunawar)
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/muhammadrizwanmunawar/)
-[![X](https://img.shields.io/badge/X-000000?style=for-the-badge&logo=x&logoColor=white)](https://x.com/muhammdrizwanmr)
-[![YouTube](https://img.shields.io/badge/YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://www.youtube.com/@muhammadrizwanmunawar)
-[![Medium](https://img.shields.io/badge/Medium-000000?style=for-the-badge&logo=medium&logoColor=white)](https://muhammadrizwanmunawar.medium.com/)
+[![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)](https://github.com/RizwanMunawar) &nbsp;&nbsp; [![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/muhammadrizwanmunawar/) &nbsp;&nbsp; [![X](https://img.shields.io/badge/X-000000?logo=x&logoColor=white)](https://x.com/muhammdrizwanmr) &nbsp;&nbsp; [![YouTube](https://img.shields.io/badge/YouTube-FF0000?logo=youtube&logoColor=white)](https://www.youtube.com/@muhammadrizwanmunawar) &nbsp;&nbsp; [![Medium](https://img.shields.io/badge/Medium-000000?logo=medium&logoColor=white)](https://muhammadrizwanmunawar.medium.com/)
 
 </div>
