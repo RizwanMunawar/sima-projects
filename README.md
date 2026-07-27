@@ -423,8 +423,7 @@ It looks like this:
      or paste the user-images.githubusercontent.com URL it generates.
      ───────────────────────────────────────────────────────────────────── -->
 
-https://github.com/user-attachments/assets/REPLACE-WITH-YOUR-VIDEO
-
+https://github.com/user-attachments/assets/d8fbc213-dce3-4d7b-bda7-bdf643adcf4a
 
 </div>
 
