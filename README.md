@@ -1030,6 +1030,14 @@ bringing up a DevKit.
 
 <br>
 
-[![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)](https://github.com/RizwanMunawar)&nbsp; [![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/muhammadrizwanmunawar/)&nbsp; [![X](https://img.shields.io/badge/X-000000?logo=x&logoColor=white)](https://x.com/muhammdrizwanmr)&nbsp; [![YouTube](https://img.shields.io/badge/YouTube-FF0000?logo=youtube&logoColor=white)](https://www.youtube.com/@muhammadrizwanmunawar)&nbsp; [![Medium](https://img.shields.io/badge/Medium-000000?logo=medium&logoColor=white)](https://muhammadrizwanmunawar.medium.com/)
+<a href="https://github.com/RizwanMunawar"><img src="assets/socials/github.svg" width="54" alt="GitHub"></a>
+&nbsp;&nbsp;
+<a href="https://www.linkedin.com/in/muhammadrizwanmunawar/"><img src="assets/socials/linkedin.svg" width="54" alt="LinkedIn"></a>
+&nbsp;&nbsp;
+<a href="https://x.com/muhammdrizwanmr"><img src="assets/socials/x.svg" width="54" alt="X"></a>
+&nbsp;&nbsp;
+<a href="https://www.youtube.com/@muhammadrizwanmunawar"><img src="assets/socials/youtube.svg" width="54" alt="YouTube"></a>
+&nbsp;&nbsp;
+<a href="https://muhammadrizwanmunawar.medium.com/"><img src="assets/socials/medium.svg" width="54" alt="Medium"></a>
 
 </div>
