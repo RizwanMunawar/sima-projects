@@ -241,8 +241,13 @@ videos/
 **/assets/models/
 **/assets/video/
 
-# Application output
+# Application output. Each app writes these next to its own config.yaml on the
+# DevKit, so the patterns need `**/` for the same anchoring reason as above:
+# a bare `frames/` matches only <repo-root>/frames and would miss
+# instance-segmentation/frames.
 sandbox/
+**/frames/
+**/alerts/
 
 # Terminal captures
 logs.txt
