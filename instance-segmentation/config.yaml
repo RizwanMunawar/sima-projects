@@ -1,24 +1,25 @@
-# SiMa Neat object detection
+# SiMa Neat instance segmentation with a background blur
 #
-# Paths are DevKit paths, relative to where you launch app.py (~/object-detection).
+# Paths are DevKit paths, relative to where you launch app.py (~/instance-segmentation).
 # Windows paths (C:\ D:\) cannot work: the app runs on Linux.
 
 model:
-  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
+  path: assets/models/yolo26m-seg-bf16-mla_tess-b1.tar.gz
   labels: src/coco_labels.txt
 
-  # Detection head. Must match your model or you get no detections.
-  # yolo | yolov5 | yolov6 | yolov7 | yolov8 | yolov9 | yolov10 
-  # | yolo11 | yolo26 | yolox
-  # Add -seg or -pose for those variants. yolo11 maps to the YOLOv8 head.
-  family: yolo26
+  # Segment head. Must match your model or you get no masks.
+  # yolov5-seg | yolov7-seg | yolov8-seg | yolov9-seg | yolov10-seg
+  # | yolo11-seg | yolo26-seg
+  # A plain detect head has no mask data at all. If that is what you have,
+  # set segmentation.masks: off below and the blur uses bounding boxes.
+  family: yolo26-seg
 
   decode_type_option: auto            # head packing override, leave auto for SiMa model packs
   num_classes: 0                      # 0 = read from the model archive
 
 source:
   type: video                          # video | rtsp | usb
-  # Fetched by step 7 of the README. .h264 only, see note below.
+  # Fetched by "Get a test video" in the README. .h264 only, see note below.
   uri: assets/videos/people-walking-outside-mall.h264
 
   # Leave these at 0. For .h264 the app reads the real geometry out of the
@@ -81,6 +82,96 @@ decode:
   nms_iou: 0.60              # overlap threshold for non-max suppression
   max_detections: 50         # top-K cap per frame
 
+# How per-instance masks are recovered from the model output.
+#
+# Boxes come back in source-image pixels, because Preproc records the letterbox
+# on the tensor and BoxDecode undoes it. Masks do not get that treatment: they
+# arrive in the network's own 640x640 space at a quarter resolution, and the app
+# maps them back onto the frame itself.
+#
+# Three mask encodings exist, and `source: auto` works out which one arrived:
+#   packed  what SiMa's neatobjectdecode actually emits: ONE uint8 tensor whose
+#           head is the usual BBOX array and whose tail is one finished mask per
+#           box slot. There are top_k slots, not `count`, so the buffer is the
+#           same size every frame:
+#             [uint32 count][RawBox 24B * top_k][mask side*side uint8 * top_k]
+#           With max_detections: 50 and a 640-input model that is
+#             4 + 50*24 + 50*160*160 = 1281204 bytes.
+#   planes  the same finished masks, but in a tensor of their own, N x mh x mw.
+#   proto   the Ultralytics encoding. C shared prototype planes plus C
+#           coefficients per instance; the mask is their weighted sum.
+#
+# The first frame with detections prints every tensor the model emitted plus the
+# packed layout it solved, so the arithmetic above is visible in your own log.
+# Nothing here needs touching for a stock SiMa model pack.
+segmentation:
+  masks: on                  # off = blur around plain boxes, no segment head needed
+  source: auto               # auto | packed | proto | planes
+  threshold: 0.5             # mask cut-off as a probability. Lower grows instances
+  describe: on               # print the model's output tensors on the first frame
+
+  # Which space a mask lives in. `net` is the model's own letterboxed 640x640
+  # input, the YOLO convention, and the app undoes the letterbox. `box` means
+  # the mask is already cropped to its detection and only needs scaling.
+  # `auto` checks whether the mask's ink lands where its box says it should,
+  # decides on the first frame, and prints the verdict.
+  space: auto                # auto | net | box
+
+  stride: 4                  # model input pixels per mask pixel. 4 for YOLO-seg
+  net_width: 0               # 0 = derive from preprocess.resize, then from the mask
+  net_height: 0
+  coeff_counts: [16, 32, 64] # prototype bank sizes to recognise while auto-detecting
+
+  blur_mask: 0               # smooth the mask edge, px @1080p. Try 5 on a jagged mask
+  dilate: 0                  # grow the mask, px @1080p. Try 2 to cover a hair halo
+
+  # A run with no mask data still produces video: the blur falls back to
+  # box-shaped regions and says so once. Turn this off to fail loudly instead.
+  fallback_to_boxes: on
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIONAL: blur everything outside the masks.
+#
+# This app is a segmenter. It finds instances and draws their masks whatever is
+# set here. This block is one extra thing it can do with those masks: treat the
+# area they do NOT cover.
+#
+#   enable: off    pure segmentation, the frame is left alone
+#   opacity: 1.0   full-strength treatment
+#   opacity: 0.35  a hint of it, the background still readable
+#   opacity: 0.0   same result as enable: off
+#
+# Sizes are pixels for a 1080p frame and follow visualization.auto_scale, so a
+# kernel tuned on a test clip still holds at 4K.
+#
+# With no detections in a frame there is no foreground, so the whole frame is
+# background and the whole frame is treated. That is the definition working, not
+# a bug.
+# ─────────────────────────────────────────────────────────────────────────────
+blur:
+  enable: on                 # off = segmentation only, no background treatment
+  opacity: 1.0               # strength of the treatment, 0.0 to 1.0
+
+  method: gaussian           # gaussian | pixelate | none
+
+  kernel: 41                 # gaussian width, forced odd. Bigger is blurrier
+  sigma: 0.0                 # 0 = derive from kernel
+  downscale: 2               # blur at 1/N resolution. The main speed knob
+
+  pixel_size: 24             # mosaic block size, used when method is pixelate
+
+  dim: 0.0                   # darken the background, 0.0 to 1.0
+  grayscale: off             # desaturate the background
+  feather: 9                 # cross-fade the mask edge over N px. 0 = hard cut
+
+  # Blur the instances instead of the background. keep_classes: [person] plus
+  # invert: on is the anonymiser.
+  invert: off
+
+  # Which classes count as foreground and stay sharp. Names from the labels
+  # file, or bare ids. Empty keeps every detected class.
+  keep_classes: []
+
 runtime:
   frames: 0                  # 0 = run until interrupted
   pull_timeout_ms: 20000     # how long to wait for a frame before giving up
@@ -109,7 +200,7 @@ runtime:
   # survivors are still written at the source rate.
   preset: auto               # auto | realtime | balanced | reliable
   overflow_policy: auto      # auto | block | keep_latest | drop_incoming
-  profile: false             # per-stage timings
+  profile: false             # per-stage timings, including the mask stage
   profile_interval: 100
 
 # How the overlay looks. Sizes are in pixels for a 1080p frame; with
@@ -117,13 +208,16 @@ runtime:
 # does not get hairlines and 480p does not get slabs. Colours are [B, G, R]
 # because OpenCV is BGR, so [0, 0, 255] is red.
 visualization:
-  box_thickness: 3           # detection rectangle outline weight
+  mask_alpha: 0.35           # class-coloured tint over each instance. 0 = none
+  mask_outline: on           # trace the mask edge
+  outline_thickness: 3
+
+  show_boxes: off            # the mask already shows the extent
+  box_thickness: 2
+
   text_scale: 1.0            # caption font size multiplier
   text_thickness: 2          # caption stroke weight
   text_padding: 10           # gap between caption text and the edge of its band
-
-  centre_dot: on             # filled dot at the centre of each box
-  centre_dot_radius: 7
 
   show_labels: on            # class name in the caption
   show_scores: on            # confidence in the caption
@@ -162,16 +256,16 @@ visualization:
 
 output:
 
-  # Annotated video written on the DevKit, one entry per processed frame.
+  # Composited video written on the DevKit, one entry per processed frame.
   # Survives the run, unlike the UDP feed.
   video:
     enable: true
-    path: detections.mp4
+    path: segmentation.mp4
     codec: mp4v              # 4-char FourCC, falls back to MJPG/.avi automatically
     fps: 0                   # 0 = match the source
     hud: true                # small FPS badge in the top-left corner
 
-  # Annotated stills. `every` below skips STILLS only. The video above always
+  # Composited stills. `every` below skips STILLS only. The video above always
   # gets every processed frame; there is no frame-skip setting for it.
   save:
     enable: true
@@ -180,15 +274,18 @@ output:
     # the board; 10 gives you plenty to look at and keeps the pipeline ahead of
     # the decoder.
     every: 10
-    overlay: true
+    overlay: true            # false writes the untouched frame instead
     format: jpg              # jpg | png
 
   # Optional live UDP feed to Neat Insight. Off by default: everything you need
-  # is the annotated video and stills above, which survive the run. Turning this
+  # is the composited video and stills above, which survive the run. Turning this
   # on also needs inbound UDP 9000-9079 / 9100-9179 opened on the Hyper-V firewall.
+  #
+  # Insight draws from metadata, which carries boxes but no masks, so leave
+  # annotated: true if you want to see the blur in the live feed.
   insight:
     enable: false
-    annotated: true           # send our overlay. false sends raw and lets Insight draw
+    annotated: true           # send our composite. false sends the raw frame
     host: 192.168.137.1       # your PC ip address as the DevKit sees it, NOT 127.0.0.1
     channel: 0                # video port = video_port_base + channel
     video_port_base: 9000

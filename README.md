@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/sima-devkit-docs-logo.png" alt="SiMa Neat SDK: live YOLO object detection on a Modalix DevKit 3.0" width="640">
+<img src="assets/sima-devkit-docs-logo-home.png" alt="SiMa Neat SDK: live YOLO computer vision on a Modalix DevKit 3.0" width="640">
 
 <br>
 
@@ -21,8 +21,12 @@
 
 ## What this is
 
-A **setup guide** and a **working detector app**, both written while actually bringing
-up a Modalix DevKit 3.0. Every warning marks somewhere real time was lost.
+**The setup guide for a Modalix DevKit 3.0**, written while actually bringing one up.
+Every warning marks somewhere real time was lost.
+
+This page gets you from a boxed board to a paired one that can run anything in this repo.
+It does **not** cover any individual app: each app has its own README, and you go there
+once the board answers.
 
 ```
    ┌──────────────┐        ┌──────────────────┐        ┌───────────────────┐
@@ -30,7 +34,7 @@ up a Modalix DevKit 3.0. Every warning marks somewhere real time was lost.
    ├──────────────┤        ├──────────────────┤        ├───────────────────┤
    │  play .mp4   │<──────>│  sima-cli        │<──────>│  MLA              │
    │  serial      │  scp   │  Docker + SDK    │ ssh /  │  your app         │
-   │              │        │                  │  scp   │  detections.mp4   │
+   │              │        │                  │  scp   │  the output .mp4  │
    └──────────────┘        └──────────────────┘        └───────────────────┘
         review               build + deploy                 inference
 ```
@@ -43,16 +47,27 @@ git clone https://github.com/RizwanMunawar/sima-projects.git
 cd sima-projects
 ```
 
----
+## Apps in this repo
+
+Setup below is done **once per machine** and every app shares it. Do it, then pick an app
+and follow that README the rest of the way.
+
+| App | What it does | Model | Guide |
+|:--|:--|:--|:--|
+| [`object-detection/`](object-detection/) | Boxes, class names and confidence on every frame | YOLO26 detect | [README](object-detection/README.md) |
+| [`instance-segmentation/`](instance-segmentation/) | Per-pixel masks, and a background blur that keeps the subject sharp | YOLO26 segment | [README](instance-segmentation/README.md) |
+| [`fall-detection/`](fall-detection/) | Tracks people in a warehouse or mall and emails when one of them goes down | YOLO26 detect | [README](fall-detection/README.md) |
+
+Each app README owns its own model, video, config, overlay, tuning and errors. Nothing
+about running an app lives on this page.
+
 
 ## Contents
 
-Setup runs once per machine, about two hours and mostly downloading. Deploying and
-reviewing the result is the loop you live in after that.
+Setup runs once per machine, about two hours and mostly downloading.
 
 | Section | What it covers |
 |:--|:--|
-| [Test it in three commands](#test-it-in-three-commands) | Push, run, pull the result back |
 | [Complete workflow](#complete-workflow) | Who does what, and in which order |
 | [Cable up the DevKit](#step-1) | USB serial and Ethernet, set DHCP. 15 min |
 | [Install WSL2](#step-2) | `wsl --install -d Ubuntu`. 10 min |
@@ -60,55 +75,15 @@ reviewing the result is the loop you live in after that.
 | [Get the code and install sima-cli](#step-4) | Clone, venv, login. 5 min |
 | [Docker Engine + NFS](#step-5) | The Neat SDK is a container. 10 min |
 | [Install the Neat SDK](#step-6) | Pairs the board, 12.6 GB. 30 to 60 min |
-| [Download a model](#step-7) | A YOLO26 `.tar.gz` pack. 5 min |
-| [Deploy and run](#step-8) | `scp` the app over and run it. 2 min |
-| [See the result](#step-9) | Pull `detections.mp4` and `frames/` back. 1 min |
-| [The overlay](#the-overlay) | Every box, caption and FPS badge setting |
-| [Configuration](#configuration) | `config.yaml`, and the mistakes it catches |
-| [Daily loop](#daily-loop) | The commands you repeat after every edit |
-| [How the app works](#how-the-app-works) | Pipeline, preprocessing, decode types |
+| [Now pick an app](#now-pick-an-app) | Where setup ends and the app guides begin |
+| [Video must be raw H.264](#video-must-be-raw-h264) | The one media rule every app shares |
 | [Known issues](#known-issues) | The `.mp4` demuxer bug in Neat 0.3.0 |
 | [Reference](#reference) | Addresses, paths, five rules |
-| [Questions people ask](#questions-people-ask) | FAQ: model sizes, cameras, short runs, where output lands |
-| [Common errors](#common-errors) | One table, symptom to fix |
+| [Setup questions](#setup-questions) | FAQ for the bring-up itself |
+| [Setup errors](#setup-errors) | One table, symptom to fix |
 | [Recovery](#recovery) | Firmware mismatch, missing pyneat |
 | [License](#license) | YOLO26 under AGPL-3.0, everything else Apache-2.0 |
 | [Credits](#credits) | SiMa.ai, Ultralytics, and where to find me |
-
-## Test it in three commands
-
-**Board already paired?** This is the whole loop. Run it from the repo root in WSL:
-
-```bash
-scp -r object-detection/ sima@<devkit-ip>:~                         # 1. push the app
-
-ssh -tt sima@<devkit-ip> \
-  'source ~/pyneat/bin/activate && cd ~/object-detection && python3 src/app.py'
-
-scp sima@<devkit-ip>:~/object-detection/detections.mp4 .            # 3. pull the result
-```
-
-Play `detections.mp4`. Boxes on it means the whole chain works. Repeat after every edit.
-
-**Faster still, before you touch the board.** This parses and validates `config.yaml`
-without pyneat, a model, or any hardware, and runs anywhere:
-
-```bash
-python3 object-detection/src/app.py --validate-config
-```
-```
-config OK: object-detection/config.yaml
-  family=yolo26 -> BoxDecodeType.YoloV26
-  preprocess: kind=image enable=on in=NV12 ... resize=letterbox pad=114 | normalize=coco_yolo
-```
-
-**A short run instead of a whole clip.** Set `runtime.frames: 100` and
-`output.video.enable: false`. You get 100 annotated JPEGs in `frames/` and the app exits
-by itself.
-
-Starting from a bare machine? Work through the steps below in order.
-
----
 
 ## Complete workflow
 
@@ -135,19 +110,22 @@ Starting from a bare machine? Work through the steps below in order.
 │                        │ 6  sima-cli sdk setup ─────┼─>  pyneat + runtime     │
 │                        │      12.6 GB image         │      installed on board │
 │                        │                            │                         │
-│                        │ 7  download model          │                         │
-│                        │      yolo26m .tar.gz       │                         │
+├──────────────────────── THEN PICK AN APP · EVERY RUN ─────────────────────────┤
 │                        │                            │                         │
-├────────────────────────────── EVERY RUN, REPEAT ──────────────────────────────┤
+│                        │ 7  fetch model + video     │                         │
+│                        │      into <app>/assets/    │                         │
 │                        │                            │                         │
-│                        │ 8  scp object-detection/ ──┼─>  ~/object-detection   │
+│                        │ 8  scp -r <app>/ ──────────┼─>  ~/<app>              │
 │                        │      edit, copy, run       │      python3 src/app.py │
 │                        │                            │                         │
-│ 9  scp back  <─────────┼────────────────────────────┼────  VideoWriter        │
-│      keeps a copy      │      detections.mp4        │      every frame        │
+│ 9  scp the result back<┼────────────────────────────┼────  annotated .mp4     │
+│      keep a local copy │      and frames/           │      on the board       │
 │                        │                            │                         │
 └────────────────────────┴────────────────────────────┴─────────────────────────┘
 ```
+
+Steps 1 to 6 are **this page**. Steps 7 to 9 are **the app README you pick**, and they
+are the loop you live in afterwards.
 
 Step 3 is load-bearing. Step 6 installs onto the board over the network and fails
 silently if networking is not fixed first, which is the usual way to lose an afternoon.
@@ -167,10 +145,10 @@ ping <devkit-ip>
 > ✅ Must reply. Nothing else works until it does.
 
 > [!IMPORTANT]
-> **`<devkit-ip>` appears throughout this guide. Substitute your own.** The board gets
-> its address by DHCP, so it changes between reboots: mine has been both
-> `192.168.137.123` and `192.168.137.193`. Your PC keeps `192.168.137.1`, which is why
-> that one is written out in full.
+> **`<devkit-ip>` appears throughout this guide and every app guide. Substitute your
+> own.** The board gets its address by DHCP, so it changes between reboots: mine has been
+> both `192.168.137.123` and `192.168.137.193`. Your PC keeps `192.168.137.1`, which is
+> why that one is written out in full.
 
 <a id="step-2"></a>
 ### 2. Install WSL2
@@ -204,7 +182,7 @@ wsl -- ping -c 2 <devkit-ip>        # must reply
 ```
 
 > ✅ **Both must pass.** If they do not, check `.wslconfig` was not saved as
-> `.wslconfig.txt`, then see [Common errors](#common-errors).
+> `.wslconfig.txt`, then see [Setup errors](#setup-errors).
 
 <a id="step-4"></a>
 ### 4. Get the code and install sima-cli
@@ -227,8 +205,8 @@ pip install sima-cli
 sima-cli login                  # needs a community.sima.ai account
 ```
 
-You now have the app in [`object-detection/`](object-detection/) and the `sima` venv
-beside it. **Every command below runs from this directory.**
+You now have both apps and the `sima` venv beside them. **Every command in this repo runs
+from this directory.**
 
 <a id="step-5"></a>
 ### 5. Docker Engine + NFS
@@ -275,8 +253,7 @@ sudo systemctl enable --now docker
 sudo docker run hello-world
 ```
 
-> ✅ Must print **"Hello from Docker!"** If not, see
-> [Common errors](#common-errors).
+> ✅ Must print **"Hello from Docker!"** If not, see [Setup errors](#setup-errors).
 
 <a id="step-6"></a>
 ### 6. Install the Neat SDK
@@ -305,7 +282,7 @@ Then confirm the **board half** actually happened, because it is what fails quie
 ssh sima@<devkit-ip> "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat.__version__)'"
 ```
 
-> ✅ Prints a version → done.
+> ✅ Prints a version → setup is done.
 > ❌ `No such file or directory` → see [pyneat missing on the DevKit](#pyneat-missing).
 
 > [!NOTE]
@@ -313,388 +290,46 @@ ssh sima@<devkit-ip> "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat.__ver
 > on. The DevKit IP also changes between reboots (DHCP), so if things hang, check with
 > `arp -a | Select-String "192.168.137"`.
 
-<a id="step-7"></a>
-### 7. Download a model
+## Now pick an app
 
-```bash
-sima-cli sdk neat        # WSL, starts the container and drops you inside
+Setup is finished. **Everything from here is app-specific**, so continue in one of these
+and do not come back except for the shared reference below.
 
-# in the container
-sima-cli login
-mkdir -p /workspace/assets/models && cd /workspace/assets/models
-MODELS=https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yolo26-detection
-sima-cli download $MODELS/yolo26m-det-bf16-mla_tess-b1.tar.gz
-```
-
-Swap `yolo26m` for `n`, `s`, `l` or `x` to trade speed against accuracy.
-
-<a id="step-8"></a>
-### 8. Deploy and run
-
-The app lives in [`object-detection/`](object-detection/):
-
-```
-object-detection/
-├── config.yaml          # every setting lives here
-├── assets/
-│   ├── models/          # .tar.gz model packs  (not in git)
-│   └── videos/          # .h264 streams        (not in git)
-└── src/
-    ├── app.py           # the pipeline
-    ├── coco_labels.txt  # 80 COCO class names
-    └── requirements.txt
-```
-
-Models and video are gitignored, so after cloning you supply your own: a model from
-step 7 in `assets/models/`, and a `.h264` stream in `assets/videos/`.
-
-On the DevKit, once per board:
-
-```bash
-pip install -r ~/object-detection/src/requirements.txt
-```
-
-> [!CAUTION]
-> **Never let pip pull numpy 2.x.** `pyneat` and every `simaai-*` package need
-> `numpy<2`. The pins in `requirements.txt` handle it. If you already broke it:
-> `pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"`
-
-**One command copies everything.** Run it from the repo root in WSL, after every
-change:
-
-```bash
-scp -r object-detection/ sima@<devkit-ip>:~
-```
-
-Then on the DevKit:
-
-```bash
-ssh -tt sima@<devkit-ip>                     # two t's, see below
-source ~/pyneat/bin/activate
-cd ~/object-detection && python3 src/app.py
-```
-
-Healthy output:
-
-```
-source: type=video uri=assets/videos/video-1.h264 stream=1920x1080@24
-preprocess: ... resize=letterbox pad=114 normalize=coco_yolo
-model: ... family=yolo26 decode_type=YoloV26 labels=80
-runtime: preset=reliable overflow=block queue_depth=3
-graph built
-save: dir=frames every=1 overlay=True
-video: detections.mp4 codec=mp4v fps=24 hud=True
-running. press Ctrl-C to stop.
-[50] 24.8 fps, 6.2 detections/frame avg
-```
-
-> [!CAUTION]
-> **Use `ssh -tt`, two t's.** Without a pty, Ctrl-C never reaches the app. It keeps
-> running invisibly holding the MLA and your next run fails.
-> Rescue: `ssh sima@<devkit-ip> pkill -f src/app.py`
-
-Anything other than that output (no detections, a stall, a crash) is in
-[Common errors](#common-errors) and [Questions people ask](#questions-people-ask).
-
-<a id="step-9"></a>
-### 9. See the result
-
-Every run writes an annotated video and annotated stills on the board. Pull them across:
-
-```bash
-scp sima@<devkit-ip>:~/object-detection/detections.mp4 .
-scp -r sima@<devkit-ip>:~/object-detection/frames .
-```
-
-On exit the app says exactly what it wrote, so a short or empty file is obvious:
-
-```
-processed=3012 timeouts=0
-video: wrote 3012 frames to detections.mp4 (48.3 MB)
-```
-
-It looks like this:
-
-<div align="center">
-
-<!-- ─────────────────────────────────────────────────────────────────────────
-     Embed the demo video here.
-     GitHub accepts a drag-and-dropped .mp4 directly in the README editor,
-     or paste the user-images.githubusercontent.com URL it generates.
-     ───────────────────────────────────────────────────────────────────── -->
-
-https://github.com/user-attachments/assets/d8fbc213-dce3-4d7b-bda7-bdf643adcf4a
-
-</div>
-
-## The overlay
-
-```
-   ┌───────────────────────────────────────────────────────────┐
-   │ ┌──────────┐                                              │
-   │ │ FPS: 24.7│                                              │
-   │ └──────────┘   ┌────────────┐                             │
-   │                │ person 94% │                             │
-   │                ├────────────┴─────────┐                   │
-   │                │                      │                   │
-   │                │           •          │   centre marker   │
-   │                │                      │                   │
-   │                └──────────────────────┘                   │
-   └───────────────────────────────────────────────────────────┘
-```
-
-A rectangle in the class colour, a centre dot, and a filled caption above it carrying
-the class name and confidence. Captions flip inside the box rather than clipping off the
-top of the frame. Colours come from a 20-entry palette keyed to class id, so a class is
-always the same colour.
-
-Every part of it is config, under `visualization:` in `config.yaml`. Sizes are pixels
-**for a 1080p frame**; with `auto_scale: on` they are multiplied by
-`frame height / reference_height`, so 4K does not get hairlines and 480p does not get
-slabs. Colours are `[B, G, R]` because OpenCV is BGR, so `[0, 0, 255]` is red.
-
-```yaml
-visualization:
-  box_thickness: 3
-  text_scale: 1.0
-  text_thickness: 2
-  text_padding: 10
-
-  centre_dot: on
-  centre_dot_radius: 7
-
-  show_labels: on
-  show_scores: on
-  score_decimals: 2
-
-  text_color: [255, 255, 255]
-
-  auto_scale: on
-  reference_height: 1080
-
-  hud:
-    text_color: [104, 31, 17]
-    bg_color: [255, 255, 255]
-    text_scale: 2.0
-    text_thickness: 5
-    padding: 15
-    min_width: 0
-    min_height: 0
-```
-
-| Key | Effect |
+| Guide | Start here if you want |
 |:--|:--|
-| `box_thickness` | Detection rectangle outline weight |
-| `text_scale` | Caption font size multiplier |
-| `text_thickness` | Caption stroke weight |
-| `text_padding` | Gap between the caption text and the edge of its band |
-| `centre_dot`, `centre_dot_radius` | Filled dot at the centre of each box |
-| `show_labels`, `show_scores` | Class name and confidence in the caption |
-| `score_decimals` | `2` gives `person 0.57`, `0` gives `person 1` |
-| `text_color` | Caption text colour |
-| `auto_scale`, `reference_height` | Scale every size above with the frame height |
+| [**Object detection →**](object-detection/README.md) | Boxes, labels and confidence. The simplest thing that proves the whole chain works |
+| [**Instance segmentation →**](instance-segmentation/README.md) | Per-pixel masks and a background blur |
+| [**Fall detection →**](fall-detection/README.md) | People tracking, a fall state machine and SMTP alerts |
 
-The FPS badge in the corner is drawn when `output.video.hud` is true, and styled by the
-`hud:` block:
+Each of those covers, for its own app: fetching the model and a test video, deploying,
+running, pulling the result back, every config key, the overlay, tuning and its own error
+table.
 
-| Key | Effect |
-|:--|:--|
-| `hud.text_color`, `hud.bg_color` | Badge text and background |
-| `hud.text_scale`, `hud.text_thickness` | Badge font size and stroke. `0` follows the caption settings |
-| `hud.padding` | What actually sets the badge size. `0` follows `text_padding` |
-| `hud.min_width`, `hud.min_height` | Floor for the badge box. `0` fits the text, and the text stays centred either way |
+## Shared rules and reference
 
-Where the output goes:
+The rest of this page is what both apps rely on. You should not need it until something
+breaks.
 
-| Key | Effect |
-|:--|:--|
-| `output.video.path` | Where to write, relative to the launch directory |
-| `output.video.codec` | 4-char FourCC. `mp4v` by default, auto-falls back to `MJPG`/`.avi` |
-| `output.video.fps` | `0` matches the source rate |
-| `output.video.hud` | Draw the FPS badge. Turn off for clean footage |
-| `output.save.every` | Write every Nth frame as a JPEG. `0` disables |
-
-## Configuration
-
-Everything lives in `object-detection/config.yaml`. These settings matter:
-
-```yaml
-model:
-  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
-  family: yolo26                       # the YOLO26 detect head
-
-source:
-  type: video                          # video | rtsp | usb
-  uri: assets/videos/video-1.h264      # DevKit path, relative to ~/object-detection
-
-decode:
-  score_threshold: 0.30                # lower it if detections are missing
-
-visualization:                         # how the boxes and captions are drawn
-  box_thickness: 3
-  text_scale: 1.0
-  centre_dot: on
-  show_labels: on
-  show_scores: on
-  auto_scale: on                       # scale with the frame height
-  hud:                                 # the FPS badge
-    text_color: [104, 31, 17]
-    bg_color: [255, 255, 255]
-
-output:
-  video:
-    enable: true
-    path: detections.mp4               # annotated video, written on the DevKit
-    hud: true
-  save:
-    enable: true
-    dir: frames                        # annotated stills
-    every: 1                           # every Nth frame, 0 disables
-```
-
-Every drawing setting is tunable without touching the code, and takes effect on the
-next run: see [The overlay](#the-overlay) for the full list, what each one does, and how
-`auto_scale` keeps a 4K frame from getting hairlines.
-
-| Mistake | What happens |
-|:--|:--|
-| `uri: C:\Users\...\video.mp4` | The DevKit has no `C:` drive |
-| `uri: r"C:\path\file.mp4"` | `r"..."` is Python. YAML keeps the `r` and quotes |
-| `family` not `yolo26` | No detections, or every score near zero |
-| A `.mp4` source | Hits a demuxer bug. Convert to `.h264`, see below |
-
+<a id="video-must-be-raw-h264"></a>
 ### Video must be raw H.264
 
 The DevKit decodes H.264 in hardware, and `.mp4` containers hit a
-[known bug](#known-issues). Convert once, losslessly:
+[known bug](#known-issues). **Every app in this repo needs raw `.h264`.** Convert once,
+losslessly:
 
 ```powershell
-ffmpeg -i video-4.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 video-4.h264
+ffmpeg -i clip.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 clip.h264
 ```
 
-The app reads the real geometry out of the stream's SPS, so leave `source.fps`,
-`source.width` and `source.height` at `0`.
+Both apps read the real geometry out of the stream's SPS, so leave `source.fps`,
+`source.width` and `source.height` at `0`. Renaming an `.mp4` to `.h264` does not work
+and is caught at startup with the command above in the error message.
 
-## Daily loop
+Ready-made clips, already converted, are on the
+[releases page](https://github.com/RizwanMunawar/sima-projects/releases/tag/0.0.1). Each
+app README has the one-line `curl` that puts them in the right place.
 
-Start the SDK:
-
-```bash
-sudo su -
-cd sima-projects
-source sima/bin/activate
-sima-cli sdk neat
-```
-
-Then **edit, copy, run, review**, and repeat.
-
-| Task | Command | Run in |
-|:--|:--|:--|
-| Validate the config, no hardware | `python3 object-detection/src/app.py --validate-config` | anywhere |
-| Start the SDK container | `sima-cli sdk neat` | WSL |
-| Push the app to the board | `scp -r object-detection/ sima@<devkit-ip>:~` | WSL |
-| Pull the video back | `scp sima@<devkit-ip>:~/object-detection/detections.mp4 .` | WSL |
-| Pull the stills back | `scp -r sima@<devkit-ip>:~/object-detection/frames .` | WSL |
-| SSH to the board | `dk shell` | SDK container |
-| Check the sync method | `dk status` | SDK container |
-| Component versions | `neat` | SDK container |
-| Run the app | `python3 src/app.py` | DevKit |
-| Kill an orphaned run | `pkill -f src/app.py` | DevKit |
-
-## How the app works
-
-<details>
-<summary><b>Pipeline shape, preprocessing and decode types</b></summary>
-
-Built by following the `neat-application-builder` playbook. Every pyneat call was
-verified against the packaged core source in the SDK container, not written from
-memory:
-
-| What | Source of truth |
-|:--|:--|
-| `PreprocessOptions` fields | `include/model/PreprocessPlan.h` |
-| `ModelOptions` fields | `include/model/Model.h` |
-| `BoxDecodeType` members | `include/pipeline/BoxDecodeType.h` |
-| Preproc semantics | `docs/reference/nodes/preproc.mdx` |
-| BBOX wire payload | `docs/reference/boxdecode_decode_types.md` |
-| Python enum names | `python/src/module.cpp` |
-| Reference implementation | `apps-src/examples/object-detection/single-stream-object-detector` |
-
-All relative to `/neat-resources/core-src/` inside the container.
-
-### Pipeline
-
-The playbook's decision map puts this on `Graph` rather than `Model.run(...)`, because
-there are multiple stages, named public endpoints and a branch with a fan-in:
-
-```
-   source --> branch --> frame ----------------+
-                   |                           +--> combine("detector_output")
-                   +---> model --> detections -+
-```
-
-`detector_output` is pulled from the `Run` handle, the BBOX payload is parsed, and the
-annotated frame fans out to the video writer and the still writer.
-
-### Preprocessing
-
-The `preprocess:` block is an **intent layer**, not a set of instructions. `Model`
-resolves it against the archive's MPK contract and compiles the matching Preproc,
-Quant, Tess or QuantTess graph. Anything left on `auto` is the planner's call.
-
-| Config key | pyneat field | Notes |
-|:--|:--|:--|
-| `kind` | `preprocess.kind` | `image` for every source here |
-| `enable` | `preprocess.enable` | Master switch |
-| `input_format` | `color_convert.input_format` | **Must match what the source produces** |
-| `output_format` | `color_convert.output_format` | `auto` takes it from the model |
-| `input_max_*` | `input_max_width/height` | Buffer capacity. Defaults to 1920x1080 |
-| `resize.mode` | `resize.mode` | `letterbox` preserves aspect and pads |
-| `resize.width/height` | `resize.width/height` | `0` infers 640x640, the YOLO26 input |
-| `pad_value` | `resize.pad_value` | `114`, what YOLO26 letterboxes with |
-| `normalize.preset` | `preprocess.preset` | `coco_yolo`, what YOLO26 expects |
-| `quantize`, `tessellate` | same | Leave on `auto` |
-
-**The one that matters most is `input_format`.** Getting it wrong is the usual cause of
-"the model runs but detects nothing":
-
-| Source | `input_format` |
-|:--|:--|
-| `video`, `rtsp` (hardware H.264 decode) | `NV12` |
-| `usb` (libcamera) | `NV12` |
-| `cv2.imread` images | `BGR` |
-
-**Coordinate mapping is automatic.** Preproc writes resize and letterbox metadata onto
-the tensor, and BoxDecode reads it back, so boxes arrive in original-image pixels. Do
-not undo the letterbox yourself. Shifted boxes mean `resize.mode` or `pad_value` is
-wrong, not that inverse maths is missing.
-
-### Decoding YOLO26 boxes
-
-`model.family: yolo26` selects `BoxDecodeType.YoloV26`, and the app prints the pair it
-resolved on startup so you can see it took:
-
-```
-model: ... family=yolo26 decode_type=YoloV26 labels=80
-```
-
-YOLO26 has a **raw logit head**, so it must not be decoded as a probability-only head.
-That is what `YoloV26` handles. Uniformly near-zero scores mean the decode does not match
-the head, so check `family` before touching thresholds.
-
-### Tuning
-
-| Symptom | Setting |
-|:--|:--|
-| Missing detections | Lower `decode.score_threshold` |
-| Duplicate boxes | Lower `decode.nms_iou` |
-| Too many detections | Raise `decode.score_threshold`, lower `max_detections` |
-| Dropped frames | Raise `runtime.queue_depth` |
-| Want timings | `runtime.profile: true` |
-
-</details>
-
-## Known issues
+### Known issues
 
 <details>
 <summary><b><code>groups.video_input</code> cannot play <code>.mp4</code> · Neat 0.3.0</b></summary>
@@ -714,28 +349,27 @@ The graph then appends an instance suffix, but the renamer only rewrites `name=<
 declarations. `element_names()` reports just `{"n1_demux"}`, so the pad reference is
 never fixed. **Any non-empty suffix breaks it**, so reordering does not help.
 
-**Fix:** no container, no demuxer. `app.py` detects `.h264` / `.264` / `.avc` and
-builds the chain by hand:
+**Fix:** no container, no demuxer. Every app here detects `.h264` / `.264` / `.avc` /
+`.bin` and builds the chain by hand:
 
 ```
 FileInput → H264Parse → Queue → SimaDecode → CapsRaw
 ```
 
-Selected automatically by extension: `.h264`, `.264`, `.bin`, `.avc`. A container input
-still uses `groups.video_input` and prints the conversion command.
+A container input still uses `groups.video_input` and prints the conversion command.
 
 </details>
 
-## Reference
+### Reference
 
-### Addresses
+#### Addresses
 
 | What | Value | Notes |
 |:--|:--|:--|
 | DevKit | `<devkit-ip>`, user `sima` | DHCP, changes between reboots |
 | Your PC, as the board sees it | `192.168.137.1` | Fixed by ICS, also the board's route to the internet |
 
-### Paths
+#### Paths
 
 | What | Where | Machine |
 |:--|:--|:--|
@@ -745,13 +379,16 @@ still uses `groups.video_input` and prints the conversion command.
 | Shared workspace | `/root/workspace` | WSL |
 | SDK container name | `ghcr.io-sima-neat-sdk-latest` | WSL |
 | PyNeat venv | `~/pyneat` | DevKit |
-| App | `~/object-detection` | DevKit |
-| Output video | `~/object-detection/detections.mp4` | DevKit |
-| Output stills | `~/object-detection/frames/` | DevKit |
+| An app, once deployed | `~/<app-name>` | DevKit |
 | Playbooks | `/neat-resources/apps-src/skills/` | SDK container |
 | Neat source | `/neat-resources/core-src/` | SDK container |
 
-### Five rules that prevent most problems
+> [!IMPORTANT]
+> **`/workspace` in the container is `/root/workspace` in WSL, not the repo.** Anything
+> downloaded there is not in `/root/sima-projects` and no app will find it. Both app
+> READMEs download straight into the repo for exactly this reason.
+
+#### Five rules that prevent most problems
 
 | # | Rule | Because |
 |:--|:--|:--|
@@ -761,106 +398,21 @@ still uses `groups.video_input` and prints the conversion command.
 | 4 | Raw `.h264`, never `.mp4` | Containers hit a demuxer bug in Neat 0.3.0 |
 | 5 | Always `ssh -tt` | Ctrl-C needs a pty to reach the app and release the MLA |
 
-
-## Tips, FAQ and fixes
-
-The warnings inside each step are the ones that cost an afternoon if you skip them.
-Everything else lives here.
-
-### Questions people ask
+### Setup questions
 
 <details>
 <summary><b>Can I try anything without a DevKit?</b></summary>
 
-Yes, the config half:
+Yes, the config half of either app:
 
 ```bash
 python3 object-detection/src/app.py --validate-config
+python3 instance-segmentation/src/app.py --validate-config
 ```
 
-It needs only `pyyaml`, runs on Windows or WSL, and checks that the model family resolves
-to a real `BoxDecodeType`, that every path exists, and what the preprocess plan will be.
-Inference itself needs the board, because it runs on the MLA.
-
-</details>
-
-<details>
-<summary><b>Can I use a different YOLO26 size?</b></summary>
-
-Yes. Download the pack you want in [step 7](#step-7), drop it in
-`object-detection/assets/models/`, and point `model.path` at it:
-
-```yaml
-model:
-  path: assets/models/yolo26s-det-bf16-mla_tess-b1.tar.gz
-  family: yolo26
-```
-
-`n`, `s`, `m`, `l` and `x` trade speed against accuracy. `family` stays `yolo26`, since
-they all share the same detect head.
-
-</details>
-
-<details>
-<summary><b>How do I use a camera or an RTSP stream instead of a file?</b></summary>
-
-```yaml
-source:
-  type: usb            # or rtsp
-  uri: ""              # rtsp://... for rtsp, empty for the default camera
-  rtsp:
-    codec: h264
-    tcp: true
-    latency_ms: 100
-  usb:
-    camera_name: ""    # "" = DevKit default camera
-```
-
-Leave `preprocess.input_format: NV12`; all three sources produce NV12. Leave
-`runtime.preset` and `runtime.overflow_policy` on `auto` too, which switches a live
-source to keep-latest so it stays current instead of falling behind.
-
-</details>
-
-<details>
-<summary><b>How do I make a test run short?</b></summary>
-
-```yaml
-runtime: { frames: 100 }
-output:
-  video: { enable: false }
-  save:  { enable: true, every: 10 }
-```
-
-The app stops itself after 100 frames and leaves annotated JPEGs in `frames/`. Good for
-checking a new model or clip without waiting out a whole video.
-
-</details>
-
-<details>
-<summary><b>Where do the outputs go?</b></summary>
-
-Onto the **board**, relative to wherever you launched `app.py`, which is normally
-`~/object-detection`. So `detections.mp4` and `frames/` sit next to `config.yaml` on the
-DevKit. Pull them back with `scp`; nothing is written on your PC by the run itself.
-
-</details>
-
-<details>
-<summary><b>How do I restyle the boxes and captions?</b></summary>
-
-Every part of the overlay is config, see [The overlay](#the-overlay). Sizes are tuned
-for 1080p and scale with the frame when `auto_scale: on`, and colours are `[B, G, R]`
-because OpenCV is BGR.
-
-</details>
-
-<details>
-<summary><b>Do I have to re-run the setup after every code change?</b></summary>
-
-No. Steps 1–7 are once per machine. After an edit it is `scp -r object-detection/` and
-run again. You only re-pair (step 6) if the board's home directory is wiped, which a
-firmware update can do.
+Both need only `pyyaml`, run on Windows or WSL, and check that the model family resolves
+to a real `BoxDecodeType` and that every setting is in range. Inference itself needs the
+board, because it runs on the MLA.
 
 </details>
 
@@ -879,40 +431,69 @@ address: `ssh-keygen -R <ip>`.
 </details>
 
 <details>
-<summary><b>Why must the video be raw .h264 rather than .mp4?</b></summary>
+<summary><b>Do I have to re-run the setup after every code change?</b></summary>
 
-A demuxer bug in Neat 0.3.0, written up under [Known issues](#known-issues). Convert
-once, losslessly, and keep the `.h264`:
-
-```powershell
-ffmpeg -i clip.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 clip.h264
-```
+No. Steps 1 to 6 are once per machine. After an edit it is `scp -r <app>/` and run again.
+You only re-pair (step 6) if the board's home directory is wiped, which a firmware update
+can do.
 
 </details>
 
 <details>
-<summary><b>The recording is shorter than the input and plays too fast</b></summary>
+<summary><b>Can I run both apps on the same board?</b></summary>
 
-Frames are being dropped, because inference is slower than decoding and the survivors
-are still written at the source rate. Leave `runtime.overflow_policy: auto`, which picks
-`block` for a file so every frame is kept. The run then takes longer than the clip.
+Yes. They deploy to separate directories (`~/object-detection` and
+`~/instance-segmentation`) and never share state. Run them one at a time: both want the
+MLA, and the second one will fail with a busy device if the first is still alive.
+
+```bash
+ssh sima@<devkit-ip> pkill -f src/app.py     # before switching apps
+```
 
 </details>
 
 <details>
 <summary><b>Can I just use numpy 2?</b></summary>
 
-No. `pyneat` and every `simaai-*` package on the board need `numpy<2`, which is why
-`requirements.txt` pins it. If pip has already upgraded you:
+No. `pyneat` and every `simaai-*` package on the board need `numpy<2`, which is why every
+`requirements.txt` here pins it. If pip has already upgraded you:
 `pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"`
 
 </details>
 
-### Common errors
+<details>
+<summary><b>Where does the SDK container fit in day to day?</b></summary>
+
+Start it from the repo root when you need `dk` or `neat`:
+
+```bash
+sudo su -
+cd sima-projects
+source sima/bin/activate
+sima-cli sdk neat
+```
+
+| Task | Command | Run in |
+|:--|:--|:--|
+| SSH to the board | `dk shell` | SDK container |
+| Check the sync method | `dk status` | SDK container |
+| Component versions | `neat` | SDK container |
+
+Deploying and running an app does **not** need the container. That is plain `scp` and
+`ssh` from WSL, and it is written out in each app README.
+
+</details>
+
+### Setup errors
+
+Bring-up problems only. Anything about a running app is in that app's own error table:
+[object detection](object-detection/README.md#common-errors) ·
+[instance segmentation](instance-segmentation/README.md#common-errors) ·
+[fall detection](fall-detection/README.md#common-errors).
 
 | Symptom | Fix |
 |:--|:--|
-| `sima-cli: command not found` | Venv not active: `sudo su -`, `cd`, `source sima/bin/activate` |
+| `sima-cli: command not found` | Venv not active: `sudo su -`, `cd sima-projects`, `source sima/bin/activate` |
 | Venv landed in `/root/sima` | You ran `cd` before `sudo su -` |
 | `externally-managed-environment` | Create the venv first |
 | `Error: No such command 'sdk'` | You ran it on the board. `sdk` is PC-side |
@@ -922,20 +503,11 @@ No. `pyneat` and every `simaai-*` package on the board need `numpy<2`, which is 
 | `ssh: Could not resolve hostname d:` | Windows path used in Linux. `scp` read `D:` as a hostname |
 | `scp: Connection closed` | Usually follows the above |
 | Copy hangs | IP changed. `arp -a \| Select-String "192.168.137"` |
-| `model archive not found` | Run from `~/object-detection`, and check `find assets -type f` |
-| `source file not found` | The path is relative to where you launch `app.py`. The error lists what is actually in the folder |
-| `is not a raw H.264 elementary stream` | You renamed a `.mp4` instead of converting it. Use the ffmpeg command in the error |
+| `ModuleNotFoundError: pyneat` | You are on the PC, or pairing never ran. See [below](#pyneat-missing) |
 | `pyneat requires numpy<2` | `pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"` |
-| `No src-element named "nN_demux"` | `.mp4` demuxer bug. Convert to `.h264` |
-| `ModuleNotFoundError: pyneat` | You are on the PC, or pairing never ran |
+| `No src-element named "nN_demux"` | `.mp4` demuxer bug. Convert to [`.h264`](#video-must-be-raw-h264) |
 | Device busy | Orphaned run: `ssh sima@<ip> pkill -f src/app.py` |
-| Stuck after `loading model` | First load unpacks the archive. Give it a minute |
-| No detections at all | Check `model.family` is `yolo26`, then lower `decode.score_threshold` |
-| Boxes in the wrong place | `resize.mode: letterbox`, `pad_value: 114`. Do not add your own maths |
-| Scores all near zero | `model.family` is not `yolo26`, so the raw-logit head is being decoded wrong |
-| Output video shorter than the input, and plays fast | Frames are being dropped. Set `runtime.overflow_policy: auto`, which picks `block` for a file so every frame is kept |
-| `processed=0` and a 20 s timeout | The source caps filter is not negotiating. Leave `source.width`, `source.height` and `source.fps` at 0 |
-| Dropped frames on a live source | Raise `runtime.queue_depth`, keep `overflow_policy: auto` |
+| DevKit/SDK version mismatch | [Firmware recovery](#recovery) below |
 
 ### Recovery
 
@@ -996,12 +568,10 @@ sima-cli neat install core@v0.3.0
 
 </details>
 
----
-
 ## License
 
-The object detection model used here for testing is **Ultralytics YOLO26**, released
-under **AGPL-3.0**. All other parts of this code are released under **Apache-2.0**.
+The models used here for testing are **Ultralytics YOLO26**, released under **AGPL-3.0**.
+All other parts of this code are released under **Apache-2.0**.
 
 ## Credits
 

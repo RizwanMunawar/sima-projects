@@ -1,6 +1,6 @@
-# SiMa Neat object detection
+# SiMa Neat fall detection with SMTP alerts
 #
-# Paths are DevKit paths, relative to where you launch app.py (~/object-detection).
+# Paths are DevKit paths, relative to where you launch app.py (~/fall-detection).
 # Windows paths (C:\ D:\) cannot work: the app runs on Linux.
 
 model:
@@ -18,8 +18,8 @@ model:
 
 source:
   type: video                          # video | rtsp | usb
-  # Fetched by step 7 of the README. .h264 only, see note below.
-  uri: assets/videos/people-walking-outside-mall.h264
+  # Fetched by "Get a model and a test video" in the README. .h264 only.
+  uri: assets/videos/people-walking-inside-mall.h264
 
   # Leave these at 0. For .h264 the app reads the real geometry out of the
   # stream's SPS, and the stream always wins over anything set here.
@@ -77,9 +77,84 @@ preprocess:
     slice_shape: []          # empty = use the contract geometry
 
 decode:
-  score_threshold: 0.30      # minimum confidence, 0.0 keeps the packaged value
+  score_threshold: 0.35      # minimum confidence. Raise it to cut false tracks
   nms_iou: 0.60              # overlap threshold for non-max suppression
   max_detections: 50         # top-K cap per frame
+
+# Who gets followed from frame to frame.
+#
+# A fall is a change over time, so the same person has to stay recognisable
+# between frames before "they were upright and now they are not" means
+# anything. This is greedy IoU association: cheap, and good enough for people
+# walking around a warehouse.
+tracking:
+  # Only these classes can fall. Names from the labels file, or bare ids.
+  # Leaving this empty tracks all 80 COCO classes, which is never what you want.
+  classes: [person]
+
+  iou_threshold: 0.30        # minimum overlap to call two boxes the same person
+  max_age: 30                # frames a track survives unseen. Carries an occlusion
+  min_hits: 3                # frames before a track is trusted. Kills one-frame blips
+  history_seconds: 3.0       # per-track history kept. Must be >= fall.descent_window
+  upright_aspect: 0.70       # at or below this, the person is learning their own height
+
+# When a tracked person counts as fallen.
+#
+# Three signals, all from the bounding box:
+#   aspect    standing is tall and narrow, fallen is wide and short
+#   collapse  the box is far shorter than this person's own learned height
+#   descent   the box centre drops fast, which is what separates a fall from
+#             lying down on purpose
+#
+# Any one can fire spuriously for a frame or two, so nothing is reported until
+# it has held for confirm_seconds. That delay is the difference between a
+# useful alert and one nobody reads.
+fall:
+  enable: on                 # off = plain person tracking, useful while tuning
+
+  aspect_ratio: 1.20         # width/height at or above which the box reads as lying down
+  height_drop: 0.55          # fallen if height <= 55% of this person's upright height
+  descent_rate: 0.55         # downward speed as a fraction of frame height per second
+  descent_window: 0.7        # seconds over which that speed is measured
+
+  confirm_seconds: 1.5       # how long a signal must hold. THE knob to tune first
+  recover_seconds: 3.0       # upright for this long before the track re-arms
+
+  min_box_height: 0.08       # ignore people shorter than 8% of the frame
+
+# Email when a fall is confirmed.
+#
+# There is no password key here on purpose: this file is committed to git, and
+# a password in it is a password on GitHub. Export it instead:
+#
+#   export FALL_ALERT_SMTP_PASSWORD='your-app-password'
+#
+# Sending runs on a background thread, so a slow or dead mail server can never
+# stall the pipeline. Check the wiring without waiting for a fall:
+#
+#   python3 src/app.py --test-alert
+alerts:
+  enable: off                # master switch
+  dry_run: on                # compose and log, connect to nothing. Turn off to really send
+
+  site: "Warehouse camera 1" # where this camera is. Goes in the subject and body
+  from: ""                   # e.g. alerts@example.com
+  to: []                     # e.g. [safety@example.com, shift-lead@example.com]
+  subject: "[{site}] Fall detected - track #{track_id} at {time}"
+
+  cooldown_seconds: 60       # minimum gap between alerts, across every track
+  attach_snapshot: on        # attach the annotated frame
+  snapshot_dir: alerts       # where those snapshots are written on the DevKit
+  queue_depth: 8             # pending alerts. Beyond this they are dropped, never blocked
+
+  smtp:
+    host: smtp.gmail.com
+    port: 587                # 587 with starttls, 465 with ssl, 25 for a plain relay
+    starttls: on
+    ssl: off                 # implicit TLS instead of starttls. Never both
+    username: ""             # empty = unauthenticated relay
+    password_env: FALL_ALERT_SMTP_PASSWORD
+    timeout: 20
 
 runtime:
   frames: 0                  # 0 = run until interrupted
@@ -125,8 +200,20 @@ visualization:
   centre_dot: on             # filled dot at the centre of each box
   centre_dot_radius: 7
 
-  show_labels: on            # class name in the caption
+  show_track_ids: on         # "#7" in the caption, so you can follow one person
+  show_labels: on            # the fall state in the caption: upright/falling/fallen
   show_scores: on            # confidence in the caption
+
+  # Full-width strip across the bottom while anyone is down. A red box around
+  # one person is easy to miss on a wall of camera tiles; a band is not.
+  banner:
+    enable: on
+    text_scale: 0.0          # 0 = follow text_scale above
+    text_thickness: 0        # 0 = follow text_thickness above
+    padding: 18
+    alpha: 0.75              # strip opacity, 0.0 to 1.0
+    bg_color: [56, 56, 255]  # red
+    text_color: [255, 255, 255]
   score_decimals: 2          # 2 gives "person 0.57", 0 gives "person 1"
 
   text_color: [255, 255, 255]   # caption text, white
@@ -166,7 +253,7 @@ output:
   # Survives the run, unlike the UDP feed.
   video:
     enable: true
-    path: detections.mp4
+    path: falls.mp4
     codec: mp4v              # 4-char FourCC, falls back to MJPG/.avi automatically
     fps: 0                   # 0 = match the source
     hud: true                # small FPS badge in the top-left corner

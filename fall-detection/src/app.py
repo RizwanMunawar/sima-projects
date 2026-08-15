@@ -31,11 +31,16 @@ import argparse
 import glob
 import json
 import os
+import queue
 import signal
+import smtplib
 import struct
 import subprocess
 import sys
+import threading
 import time
+from email.message import EmailMessage
+import dataclasses
 from dataclasses import dataclass, field
 from fractions import Fraction
 from pathlib import Path
@@ -148,6 +153,14 @@ class DrawConfig:
             1 gives ``FPS: 24.8``.
         hud_min_width: Floor on badge width in pixels. 0 fits the text.
         hud_min_height: Floor on badge height in pixels. 0 fits the text.
+        show_track_ids: Whether captions carry the track id.
+        banner: Whether to draw the full-width alert strip.
+        banner_text_scale: Banner font scale. 0 follows ``text_scale``.
+        banner_text_thickness: Banner stroke. 0 follows ``text_thickness``.
+        banner_padding: Gap between banner text and the strip edge.
+        banner_alpha: Strip opacity, 0.0 to 1.0.
+        banner_bg_color: Strip fill, BGR.
+        banner_text_color: Strip text, BGR.
         auto_scale: Whether sizes scale with frame height.
         reference_height: The frame height the sizes above are tuned for.
     """
@@ -174,8 +187,132 @@ class DrawConfig:
     hud_fps_decimals: int = 0
     hud_min_width: int = 0
     hud_min_height: int = 0
+    show_track_ids: bool = True
+    banner: bool = True
+    banner_text_scale: float = 0.0
+    banner_text_thickness: int = 0
+    banner_padding: int = 18
+    banner_alpha: float = 0.75
+    banner_bg_color: tuple[int, int, int] = (56, 56, 255)
+    banner_text_color: tuple[int, int, int] = (255, 255, 255)
     auto_scale: bool = True
     reference_height: float = 1080.0
+
+
+@dataclass(frozen=True)
+class TrackConfig:
+    """How detections are followed from frame to frame.
+
+    Attributes:
+        classes: Class names or ids that can fall. Empty means every class,
+            which is almost never what you want in a warehouse.
+        iou_threshold: Minimum overlap to call two boxes the same person.
+            Lower it for a low frame rate, where boxes move further per frame.
+        max_age: Frames a track survives with no detection before it is dropped.
+            This is what carries someone through a brief occlusion.
+        min_hits: Frames a track must be seen on before it is reported at all,
+            which suppresses one-frame false positives.
+        history_seconds: How much per-track history to keep. Must be at least
+            ``fall.descent_window``.
+        upright_aspect: Aspect ratio at or below which a person counts as
+            upright for the purpose of learning their reference height.
+    """
+
+    classes: tuple[str, ...] = ("person",)
+    iou_threshold: float = 0.30
+    max_age: int = 30
+    min_hits: int = 3
+    history_seconds: float = 3.0
+    upright_aspect: float = 0.70
+
+
+@dataclass(frozen=True)
+class FallConfig:
+    """When a tracked person counts as fallen.
+
+    Attributes:
+        enable: Whether to evaluate falls at all. ``off`` leaves a plain
+            person tracker, which is a useful way to tune the tracking first.
+        aspect_ratio: Width over height at or above which the box reads as
+            lying down. 1.0 is square; 1.2 gives a little margin against a
+            crouch or a wide-armed gesture.
+        height_drop: Fraction of this person's own learned upright height at or
+            below which they count as collapsed. 0.55 means "less than 55% as
+            tall as they were".
+        descent_rate: Downward speed of the box centre that reads as a fall,
+            as a fraction of frame height per second. 0.55 is roughly half the
+            frame in one second.
+        descent_window: How far back to measure that speed, in seconds.
+        confirm_seconds: How long a signal must hold before an alert fires.
+            The single most important knob here: too low and a bending forklift
+            driver pages someone, too high and the alert is late.
+        recover_seconds: How long someone must look upright again before the
+            track is re-armed for another alert.
+        min_box_height: Ignore boxes shorter than this fraction of the frame,
+            which drops distant figures too small to judge.
+    """
+
+    enable: bool = True
+    aspect_ratio: float = 1.20
+    height_drop: float = 0.55
+    descent_rate: float = 0.55
+    descent_window: float = 0.7
+    confirm_seconds: float = 1.5
+    recover_seconds: float = 3.0
+    min_box_height: float = 0.08
+
+
+@dataclass(frozen=True)
+class AlertConfig:
+    """SMTP notification settings.
+
+    There is no password field on purpose. ``config.yaml`` is committed, so a
+    password in it is a password on GitHub. The password is read from the
+    environment variable named by ``password_env`` instead.
+
+    Attributes:
+        enable: Whether to send anything at all.
+        dry_run: Compose and log the message without connecting to a server.
+            The way to check subject, recipients and attachment wiring.
+        host: SMTP server hostname.
+        port: SMTP port. 587 for STARTTLS, 465 for implicit SSL, 25 for a relay.
+        ssl: Connect with implicit TLS, for port 465.
+        starttls: Upgrade a plaintext connection, for port 587.
+        username: SMTP login. Empty means an unauthenticated relay.
+        password_env: Environment variable holding the password.
+        sender: ``From`` address.
+        recipients: ``To`` addresses.
+        subject: Subject template. ``{label}``, ``{track_id}``, ``{time}`` and
+            ``{site}`` are substituted.
+        site: A human name for this camera or building, put in the subject and
+            the body so an alert says where to go.
+        cooldown_seconds: Minimum gap between alerts, across every track. A
+            person falling usually produces one event; a camera pointed at a
+            busy aisle should not produce forty.
+        attach_snapshot: Whether to attach the annotated frame.
+        snapshot_dir: Where snapshots are written on the DevKit.
+        queue_depth: Pending alerts held for the sender thread. Beyond this,
+            alerts are dropped rather than blocking the pipeline.
+        timeout: SMTP socket timeout in seconds.
+    """
+
+    enable: bool = False
+    dry_run: bool = True
+    host: str = "smtp.gmail.com"
+    port: int = 587
+    ssl: bool = False
+    starttls: bool = True
+    username: str = ""
+    password_env: str = "FALL_ALERT_SMTP_PASSWORD"
+    sender: str = ""
+    recipients: tuple[str, ...] = ()
+    subject: str = "[{site}] Fall detected - track #{track_id} at {time}"
+    site: str = "Warehouse camera 1"
+    cooldown_seconds: float = 60.0
+    attach_snapshot: bool = True
+    snapshot_dir: str = "alerts"
+    queue_depth: int = 8
+    timeout: float = 20.0
 
 
 @dataclass(frozen=True)
@@ -290,6 +427,9 @@ class AppConfig:
     metadata_port_base: int
     bitrate_kbps: int
 
+    track: TrackConfig
+    fall: FallConfig
+    alerts: AlertConfig
     draw: DrawConfig
 
 
@@ -370,6 +510,18 @@ def _color(raw: dict, key: str, default: tuple[int, int, int]) -> tuple[int, int
     return (channels[0], channels[1], channels[2])
 
 
+def _str_list(raw: dict, key: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    """Read a list of names or ids. A bare scalar is accepted as one item."""
+    value = raw.get(key)
+    if value is None:
+        return default
+    if isinstance(value, (str, int)) and not isinstance(value, bool):
+        return (str(value),)
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"config key `{key}` must be a list")
+    return tuple(str(item) for item in value)
+
+
 def load_draw_config(raw: dict) -> DrawConfig:
     """Build a :class:`DrawConfig` from the ``visualization`` config section.
 
@@ -382,6 +534,7 @@ def load_draw_config(raw: dict) -> DrawConfig:
     """
     section = _section(raw, "visualization")
     hud = _section(section, "hud")
+    banner_sec = _section(section, "banner")
     default = DrawConfig()
     return DrawConfig(
         box_thickness=_int(section, "box_thickness", default.box_thickness),
@@ -406,6 +559,14 @@ def load_draw_config(raw: dict) -> DrawConfig:
         hud_fps_decimals=_int(hud, "fps_decimals", default.hud_fps_decimals),
         hud_min_width=_int(hud, "min_width", default.hud_min_width),
         hud_min_height=_int(hud, "min_height", default.hud_min_height),
+        show_track_ids=_flag(section, "show_track_ids", "on") == "on",
+        banner=_flag(banner_sec, "enable", "on") == "on",
+        banner_text_scale=_float(banner_sec, "text_scale", default.banner_text_scale),
+        banner_text_thickness=_int(banner_sec, "text_thickness", default.banner_text_thickness),
+        banner_padding=_int(banner_sec, "padding", default.banner_padding),
+        banner_alpha=_float(banner_sec, "alpha", default.banner_alpha),
+        banner_bg_color=_color(banner_sec, "bg_color", default.banner_bg_color),
+        banner_text_color=_color(banner_sec, "text_color", default.banner_text_color),
         auto_scale=_flag(section, "auto_scale", "on") == "on",
         reference_height=_float(section, "reference_height", default.reference_height),
     )
@@ -418,6 +579,59 @@ def _triple(raw: dict, key: str, default: tuple[float, float, float]) -> tuple[f
     if not isinstance(value, (list, tuple)) or len(value) != 3:
         raise ValueError(f"config key `{key}` must be a list of 3 numbers")
     return (float(value[0]), float(value[1]), float(value[2]))
+
+
+def load_track_config(raw: dict) -> TrackConfig:
+    section = _section(raw, "tracking")
+    d = TrackConfig()
+    return TrackConfig(
+        classes=_str_list(section, "classes", d.classes),
+        iou_threshold=_float(section, "iou_threshold", d.iou_threshold),
+        max_age=_int(section, "max_age", d.max_age),
+        min_hits=_int(section, "min_hits", d.min_hits),
+        history_seconds=_float(section, "history_seconds", d.history_seconds),
+        upright_aspect=_float(section, "upright_aspect", d.upright_aspect),
+    )
+
+
+def load_fall_config(raw: dict) -> FallConfig:
+    section = _section(raw, "fall")
+    d = FallConfig()
+    return FallConfig(
+        enable=_flag(section, "enable", "on") == "on",
+        aspect_ratio=_float(section, "aspect_ratio", d.aspect_ratio),
+        height_drop=_float(section, "height_drop", d.height_drop),
+        descent_rate=_float(section, "descent_rate", d.descent_rate),
+        descent_window=_float(section, "descent_window", d.descent_window),
+        confirm_seconds=_float(section, "confirm_seconds", d.confirm_seconds),
+        recover_seconds=_float(section, "recover_seconds", d.recover_seconds),
+        min_box_height=_float(section, "min_box_height", d.min_box_height),
+    )
+
+
+def load_alert_config(raw: dict) -> AlertConfig:
+    section = _section(raw, "alerts")
+    smtp = _section(section, "smtp")
+    d = AlertConfig()
+    return AlertConfig(
+        enable=_flag(section, "enable", "off") == "on",
+        dry_run=_flag(section, "dry_run", "on") == "on",
+        host=_str(smtp, "host", d.host),
+        port=_int(smtp, "port", d.port),
+        ssl=_flag(smtp, "ssl", "off") == "on",
+        starttls=_flag(smtp, "starttls", "on") == "on",
+        username=_str(smtp, "username", d.username),
+        password_env=_str(smtp, "password_env", d.password_env),
+        timeout=_float(smtp, "timeout", d.timeout),
+        sender=_str(section, "from", d.sender),
+        recipients=_str_list(section, "to", d.recipients),
+        subject=_str(section, "subject", d.subject),
+        site=_str(section, "site", d.site),
+        cooldown_seconds=_float(section, "cooldown_seconds", d.cooldown_seconds),
+        attach_snapshot=_flag(section, "attach_snapshot", "on") == "on",
+        snapshot_dir=_str(section, "snapshot_dir", d.snapshot_dir),
+        queue_depth=_int(section, "queue_depth", d.queue_depth),
+    )
 
 
 def load_preprocess_config(raw: dict) -> PreprocessConfig:
@@ -541,6 +755,9 @@ def load_app_config(path: Path) -> AppConfig:
         video_port_base=_int(insight, "video_port_base", 9000),
         metadata_port_base=_int(insight, "metadata_port_base", 9100),
         bitrate_kbps=_int(insight, "bitrate_kbps", 2000),
+        track=load_track_config(raw),
+        fall=load_fall_config(raw),
+        alerts=load_alert_config(raw),
         draw=load_draw_config(raw),
     )
     validate_config(cfg)
@@ -623,6 +840,50 @@ def validate_config(cfg: AppConfig) -> None:
             "output.insight port base 9900 is the Neat Insight web UI port, not a "
             "stream port.\n  Use video_port_base: 9000 and metadata_port_base: 9100."
         )
+    if not 0.0 <= cfg.track.iou_threshold <= 1.0:
+        raise ValueError("tracking.iou_threshold must be in [0.0, 1.0]")
+    if cfg.track.max_age < 0:
+        raise ValueError("tracking.max_age must be >= 0")
+    if cfg.track.min_hits < 1:
+        raise ValueError("tracking.min_hits must be >= 1")
+    if cfg.track.history_seconds < cfg.fall.descent_window:
+        raise ValueError(
+            f"tracking.history_seconds ({cfg.track.history_seconds}) is shorter than "
+            f"fall.descent_window ({cfg.fall.descent_window}), so the descent test "
+            f"would never see far enough back to fire."
+        )
+    if cfg.fall.aspect_ratio <= 0:
+        raise ValueError("fall.aspect_ratio must be > 0")
+    if not 0.0 < cfg.fall.height_drop <= 1.0:
+        raise ValueError("fall.height_drop must be in (0.0, 1.0]")
+    if cfg.fall.descent_rate < 0:
+        raise ValueError("fall.descent_rate must be >= 0")
+    if cfg.fall.descent_window <= 0:
+        raise ValueError("fall.descent_window must be > 0")
+    if cfg.fall.confirm_seconds < 0:
+        raise ValueError("fall.confirm_seconds must be >= 0")
+    if cfg.fall.recover_seconds < 0:
+        raise ValueError("fall.recover_seconds must be >= 0")
+    if not 0.0 <= cfg.fall.min_box_height < 1.0:
+        raise ValueError("fall.min_box_height must be in [0.0, 1.0)")
+    if cfg.alerts.enable and not cfg.alerts.dry_run:
+        if not cfg.alerts.host:
+            raise ValueError("alerts.smtp.host must be set when alerts are enabled")
+        if not cfg.alerts.sender:
+            raise ValueError("alerts.from must be set when alerts are enabled")
+        if not cfg.alerts.recipients:
+            raise ValueError("alerts.to must list at least one recipient")
+        if cfg.alerts.ssl and cfg.alerts.starttls:
+            raise ValueError(
+                "alerts.smtp.ssl and starttls are both on. Use ssl for port 465 "
+                "or starttls for port 587, not both."
+            )
+        if not cfg.alerts.password_env:
+            raise ValueError("alerts.smtp.password_env must name an environment variable")
+    if cfg.alerts.queue_depth < 1:
+        raise ValueError("alerts.queue_depth must be >= 1")
+    if cfg.alerts.cooldown_seconds < 0:
+        raise ValueError("alerts.cooldown_seconds must be >= 0")
     if not (cfg.save_enable or cfg.insight_enable or cfg.video_enable):
         raise ValueError(
             "enable at least one of output.save, output.video or output.insight"
@@ -1420,6 +1681,10 @@ class Pipeline:
         writer_path: Path the writer actually opened, after any fallback.
         writer_frames: Frames written so far.
         video_dropped: Preview frames the Insight feed refused.
+        tracker: The :class:`Tracker` following people across frames.
+        alerts: The :class:`AlertSender` owning the SMTP thread.
+        fall_class_ids: Class ids that can fall, or None for every class.
+        falls: Confirmed falls so far this run.
     """
 
     model: object
@@ -1437,8 +1702,25 @@ class Pipeline:
     writer_path: str = ""
     writer_frames: int = 0
     video_dropped: int = 0
+    tracker: object = None
+    alerts: object = None
+    fall_class_ids: object = None
+    falls: int = 0
 
     def close(self) -> None:
+        if self.alerts is not None:
+            # Drain first: an alert queued microseconds before Ctrl-C is still
+            # a fall that happened, and the thread is a daemon so nothing else
+            # would wait for it.
+            self.alerts.close()
+            stats = self.alerts
+            if stats.sent or stats.failed or stats.dropped or stats.suppressed:
+                print(
+                    f"alerts: sent={stats.sent} failed={stats.failed} "
+                    f"dropped={stats.dropped} suppressed_by_cooldown={stats.suppressed}",
+                    flush=True,
+                )
+            self.alerts = None
         if self.writer is not None:
             try:
                 self.writer.release()
@@ -1503,6 +1785,40 @@ def load_labels(path: Path) -> list[str]:
     if not labels:
         raise RuntimeError(f"labels file is empty: {path}")
     return labels
+
+
+def resolve_fall_classes(cfg: AppConfig, labels: list[str]):
+    """Turn ``tracking.classes`` into a set of class ids.
+
+    Accepts names as they appear in the labels file or bare ids. An unknown
+    name is a config error rather than a silently empty filter: the alternative
+    is an app that tracks nothing and never explains why.
+    """
+    if not cfg.track.classes:
+        return None
+    lookup = {name.lower(): i for i, name in enumerate(labels)}
+    ids = set()
+    for token in cfg.track.classes:
+        text = token.strip()
+        if text.isdigit():
+            index = int(text)
+            if not 0 <= index < len(labels):
+                raise ValueError(
+                    f"tracking.classes has class id {index}, but the labels file "
+                    f"only has {len(labels)} classes (0 to {len(labels) - 1})"
+                )
+            ids.add(index)
+            continue
+        index = lookup.get(text.lower())
+        if index is None:
+            near = [n for n in labels if text.lower() in n.lower()][:5]
+            hint = f" Did you mean: {', '.join(near)}?" if near else ""
+            raise ValueError(
+                f"tracking.classes has unknown class {text!r}, which is not in "
+                f"{cfg.labels_path}.{hint}"
+            )
+        ids.add(index)
+    return ids
 
 
 def resolve_flow_control(cfg: AppConfig) -> tuple[str, str]:
@@ -1637,6 +1953,34 @@ def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
     return graph, graph.build([seed]), sender_options.video_port
 
 
+def describe_fall(cfg: AppConfig, labels: list[str]) -> str:
+    watched = ", ".join(cfg.track.classes) if cfg.track.classes else "every class"
+    if not cfg.fall.enable:
+        return f"fall: off, tracking {watched} only"
+    return (
+        f"fall: watching {watched} | aspect>={cfg.fall.aspect_ratio} "
+        f"height<={cfg.fall.height_drop:.0%} descent>={cfg.fall.descent_rate:.0%}/s "
+        f"| confirm={cfg.fall.confirm_seconds}s recover={cfg.fall.recover_seconds}s"
+    )
+
+
+def describe_alerts(cfg: AppConfig) -> str:
+    a = cfg.alerts
+    if not a.enable:
+        return "alerts: off"
+    if a.dry_run:
+        return (
+            f"alerts: DRY RUN, nothing is sent | would mail {len(a.recipients)} "
+            f"recipient(s) | cooldown={a.cooldown_seconds}s"
+        )
+    mode = "ssl" if a.ssl else ("starttls" if a.starttls else "plain")
+    return (
+        f"alerts: {a.host}:{a.port} {mode} as {a.username or '<anonymous>'} "
+        f"-> {', '.join(a.recipients)} | cooldown={a.cooldown_seconds}s "
+        f"snapshot={'on' if a.attach_snapshot else 'off'}"
+    )
+
+
 def build_pipeline(cfg: AppConfig) -> Pipeline:
     step = lambda msg: print(msg, flush=True)
 
@@ -1653,6 +1997,9 @@ def build_pipeline(cfg: AppConfig) -> Pipeline:
         f"model: {cfg.model_path} family={cfg.family} "
         f"decode_type={FAMILY_DECODE_TOKENS[cfg.family]} labels={len(labels)}"
     )
+
+    step(describe_fall(cfg, labels))
+    step(describe_alerts(cfg))
 
     preset, policy = resolve_flow_control(cfg)
     step(f"runtime: preset={preset} overflow={policy} queue_depth={cfg.queue_depth} "
@@ -1679,6 +2026,9 @@ def build_pipeline(cfg: AppConfig) -> Pipeline:
     pipeline = Pipeline(
         model=model, graph=graph, run=run, labels=labels,
         frame_w=width, frame_h=height, fps=fps,
+        tracker=Tracker(cfg.track),
+        alerts=AlertSender(cfg.alerts),
+        fall_class_ids=resolve_fall_classes(cfg, labels),
     )
 
     if cfg.insight_enable:
@@ -1783,6 +2133,445 @@ def parse_boxes(payload: bytes, img_w: int, img_h: int, expected_topk: int) -> l
             }
         )
     return boxes
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tracking
+#
+# A fall is a change over time, so a per-frame detection is not enough: the same
+# person has to be recognisable from one frame to the next before "they were
+# upright and now they are not" means anything. This is greedy IoU association,
+# which is the cheapest thing that works when people are walking rather than
+# crossing at speed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+UPRIGHT, FALLING, FALLEN, RECOVERING = "upright", "falling", "fallen", "recovering"
+
+
+@dataclass
+class Track:
+    """One person followed across frames, with just enough history to judge them.
+
+    Attributes:
+        track_id: Stable id, assigned once and never reused within a run.
+        box: Most recent detection, in source-image pixels.
+        hits: How many frames this track has been matched on.
+        misses: Consecutive frames with no match. Drops the track past a limit.
+        history: Recent ``(timestamp_s, centre_y, height, aspect)`` samples,
+            oldest first, trimmed to the window the fall rules need.
+        upright_height: Rolling reference height from frames where the person
+            looked upright. A fallen box is short as well as wide, but only
+            relative to how tall *that* person was, which is why this is
+            per-track rather than a constant.
+        state: One of ``upright``, ``falling``, ``fallen`` or ``recovering``.
+        state_since: Timestamp the current state began.
+        alerted_at: When an alert was last raised for this track, or 0.0.
+    """
+
+    track_id: int
+    box: dict
+    # 0, not 1: the frame that creates a track also runs it through _advance,
+    # so counting it here too would make min_hits mean one frame fewer than it
+    # says.
+    hits: int = 0
+    misses: int = 0
+    history: list = field(default_factory=list)
+    upright_height: float = 0.0
+    state: str = UPRIGHT
+    state_since: float = 0.0
+    alerted_at: float = 0.0
+
+    @property
+    def width(self) -> float:
+        return max(1.0, self.box["x2"] - self.box["x1"])
+
+    @property
+    def height(self) -> float:
+        return max(1.0, self.box["y2"] - self.box["y1"])
+
+    @property
+    def aspect(self) -> float:
+        """Width over height. Standing is well under 1; lying down is over it."""
+        return self.width / self.height
+
+    @property
+    def centre(self) -> tuple[float, float]:
+        return ((self.box["x1"] + self.box["x2"]) / 2.0,
+                (self.box["y1"] + self.box["y2"]) / 2.0)
+
+
+def box_iou(a: dict, b: dict) -> float:
+    ix1, iy1 = max(a["x1"], b["x1"]), max(a["y1"], b["y1"])
+    ix2, iy2 = min(a["x2"], b["x2"]), min(a["y2"], b["y2"])
+    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    if inter <= 0.0:
+        return 0.0
+    area_a = max(0.0, a["x2"] - a["x1"]) * max(0.0, a["y2"] - a["y1"])
+    area_b = max(0.0, b["x2"] - b["x1"]) * max(0.0, b["y2"] - b["y1"])
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+class Tracker:
+    """Greedy IoU tracker with stable ids.
+
+    Deliberately simple. It has no motion model, so it will swap ids when two
+    people cross while overlapping heavily. That costs a duplicate alert at
+    worst, which is the right way round for a safety feature: a Kalman filter
+    would be more correct and considerably more to get wrong.
+
+    Attributes:
+        cfg: Tracking settings.
+        tracks: Live tracks.
+    """
+
+    def __init__(self, cfg: "TrackConfig") -> None:
+        self.cfg = cfg
+        self.tracks: list[Track] = []
+        self._next_id = 1
+
+    def update(self, boxes: list[dict], now: float) -> list[Track]:
+        """Associate this frame's boxes with existing tracks.
+
+        Args:
+            boxes: Detections for this frame, already filtered to the classes
+                that count as people.
+            now: Monotonic timestamp in seconds.
+
+        Returns:
+            Every live track seen often enough to be trusted.
+        """
+        pairs = sorted(
+            (
+                (box_iou(t.box, b), ti, bi)
+                for ti, t in enumerate(self.tracks)
+                for bi, b in enumerate(boxes)
+            ),
+            key=lambda p: p[0],
+            reverse=True,
+        )
+        used_t: set[int] = set()
+        used_b: set[int] = set()
+        for score, ti, bi in pairs:
+            if score < self.cfg.iou_threshold:
+                break
+            if ti in used_t or bi in used_b:
+                continue
+            used_t.add(ti)
+            used_b.add(bi)
+            self._advance(self.tracks[ti], boxes[bi], now)
+
+        for ti, track in enumerate(self.tracks):
+            if ti not in used_t:
+                track.misses += 1
+
+        for bi, box in enumerate(boxes):
+            if bi not in used_b:
+                track = Track(track_id=self._next_id, box=box, state_since=now)
+                self._next_id += 1
+                self._advance(track, box, now)
+                self.tracks.append(track)
+
+        self.tracks = [t for t in self.tracks if t.misses <= self.cfg.max_age]
+        return [t for t in self.tracks if t.hits >= self.cfg.min_hits and t.misses == 0]
+
+    def _advance(self, track: Track, box: dict, now: float) -> None:
+        track.box = box
+        track.misses = 0
+        track.hits += 1
+        _, cy = track.centre
+        track.history.append((now, cy, track.height, track.aspect))
+        # Keep only what the rules can still look at, so a long run does not
+        # accumulate a per-track list the length of the video.
+        cutoff = now - self.cfg.history_seconds
+        while len(track.history) > 2 and track.history[0][0] < cutoff:
+            track.history.pop(0)
+        if track.aspect <= self.cfg.upright_aspect:
+            # An exponential rather than a max: someone briefly clipped by the
+            # frame edge should not raise the bar for the rest of the run.
+            track.upright_height = (
+                track.height
+                if track.upright_height <= 0
+                else 0.9 * track.upright_height + 0.1 * track.height
+            )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fall rules
+#
+# Three signals, all available from a plain bounding box:
+#
+#   aspect    a standing person is tall and narrow, a fallen one is wide and
+#             short. The box aspect ratio crossing 1.0 is the strongest single
+#             indicator there is without pose keypoints.
+#   collapse  the box height drops well below what this person's own upright
+#             height has been, which separates lying down from crouching.
+#   descent   the centre of the box moves down fast. This is what distinguishes
+#             a fall from someone lying down deliberately.
+#
+# Any one of them can fire spuriously for a frame or two, so nothing is reported
+# until the condition has held for `confirm_seconds`. That delay is the whole
+# difference between a useful alert and one nobody reads.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def descent_rate(track: Track, window: float) -> float:
+    """Downward speed of the box centre, in pixels per second.
+
+    Args:
+        track: The track to measure.
+        window: How far back to look, in seconds.
+
+    Returns:
+        Pixels per second, positive downwards. 0.0 when there is too little
+        history to say.
+    """
+    if len(track.history) < 2:
+        return 0.0
+    now = track.history[-1][0]
+    oldest = track.history[0]
+    for sample in track.history:
+        if now - sample[0] <= window:
+            oldest = sample
+            break
+    dt = now - oldest[0]
+    if dt <= 1e-3:
+        return 0.0
+    return (track.history[-1][1] - oldest[1]) / dt
+
+
+def fall_signals(track: Track, fall: "FallConfig", frame_h: int) -> dict:
+    """Evaluate all three signals for one track, for judging and for reporting."""
+    collapsed = (
+        track.upright_height > 0
+        and track.height <= track.upright_height * fall.height_drop
+    )
+    rate = descent_rate(track, fall.descent_window)
+    return {
+        "aspect": track.aspect >= fall.aspect_ratio,
+        "collapse": bool(collapsed),
+        "descent": rate >= fall.descent_rate * frame_h,
+        "aspect_value": round(track.aspect, 2),
+        "descent_value": round(rate, 1),
+    }
+
+
+def looks_fallen(track: Track, fall: "FallConfig", frame_h: int) -> bool:
+    """Whether this track currently satisfies any of the fall signals."""
+    s = fall_signals(track, fall, frame_h)
+    return s["aspect"] or s["collapse"] or s["descent"]
+
+
+def update_fall_states(
+    tracks: list[Track], fall: "FallConfig", frame_h: int, now: float
+) -> list[Track]:
+    """Advance every track's state machine and return the ones that just fell.
+
+    The machine is::
+
+        upright ──looks_fallen──> falling ──held confirm_seconds──> fallen
+           ^                         |                                 |
+           |                     recovered                         recovered
+           |                         v                                 v
+           └──── held recover_seconds ──── recovering <────────────────┘
+
+    Args:
+        tracks: Live, confirmed tracks.
+        fall: Fall rule settings.
+        frame_h: Frame height, so descent thresholds stay resolution independent.
+        now: Monotonic timestamp in seconds.
+
+    Returns:
+        Tracks that transitioned into ``fallen`` on this frame.
+    """
+    newly = []
+    for track in tracks:
+        down = looks_fallen(track, fall, frame_h)
+        if track.state in (UPRIGHT, RECOVERING):
+            if down:
+                track.state, track.state_since = FALLING, now
+            elif (
+                track.state == RECOVERING
+                and now - track.state_since >= fall.recover_seconds
+            ):
+                track.state, track.state_since = UPRIGHT, now
+        elif track.state == FALLING:
+            if not down:
+                track.state, track.state_since = RECOVERING, now
+            elif now - track.state_since >= fall.confirm_seconds:
+                track.state, track.state_since = FALLEN, now
+                newly.append(track)
+        elif track.state == FALLEN:
+            if not down:
+                track.state, track.state_since = RECOVERING, now
+    return newly
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SMTP alerts
+#
+# Sending mail takes anything from tens of milliseconds to a TCP timeout, and
+# the run loop cannot afford either. Alerts are handed to a background thread
+# through a bounded queue: if the queue is full the alert is dropped and
+# counted, which is the correct trade. A stalled pipeline stops detecting the
+# next fall, and that is worse than missing one notification.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class Alert:
+    """One pending notification."""
+
+    track_id: int
+    when: float
+    label: str
+    box: tuple[int, int, int, int]
+    signals: dict
+    frame_index: int
+    snapshot_path: str = ""
+
+
+class AlertSender:
+    """Queues fall alerts and sends them as email from a background thread.
+
+    Attributes:
+        cfg: Alert settings.
+        sent: Successful sends.
+        failed: Sends that raised.
+        dropped: Alerts discarded because the queue was full.
+        suppressed: Alerts skipped by the cooldown.
+    """
+
+    def __init__(self, cfg: "AlertConfig") -> None:
+        self.cfg = cfg
+        self.sent = 0
+        self.failed = 0
+        self.dropped = 0
+        self.suppressed = 0
+        self._queue: "queue.Queue[Alert | None]" = queue.Queue(maxsize=cfg.queue_depth)
+        self._last_global = 0.0
+        self._thread = None
+        if cfg.enable:
+            self._thread = threading.Thread(target=self._worker, daemon=True)
+            self._thread.start()
+
+    # ── producer side, called from the run loop ──
+    def offer(self, alert: Alert, now: float) -> bool:
+        """Queue an alert unless the cooldown or a full queue says otherwise."""
+        if not self.cfg.enable:
+            return False
+        if now - self._last_global < self.cfg.cooldown_seconds:
+            self.suppressed += 1
+            return False
+        try:
+            self._queue.put_nowait(alert)
+        except queue.Full:
+            self.dropped += 1
+            return False
+        self._last_global = now
+        return True
+
+    def close(self, timeout: float = 10.0) -> None:
+        """Drain the queue and stop the worker."""
+        if self._thread is None:
+            return
+        try:
+            self._queue.put_nowait(None)
+        except queue.Full:
+            pass
+        self._thread.join(timeout)
+
+    # ── consumer side ──
+    def _worker(self) -> None:
+        while True:
+            alert = self._queue.get()
+            if alert is None:
+                return
+            try:
+                self.send_now(alert)
+                self.sent += 1
+            except Exception as exc:  # pragma: no cover - depends on the network
+                self.failed += 1
+                print(f"[warn] alert send failed: {exc}", file=sys.stderr, flush=True)
+
+    def build_message(self, alert: Alert):
+        """Compose the email, attaching the snapshot when there is one."""
+        msg = EmailMessage()
+        when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        msg["Subject"] = self.cfg.subject.format(
+            label=alert.label, track_id=alert.track_id, time=when, site=self.cfg.site
+        )
+        msg["From"] = self.cfg.sender
+        msg["To"] = ", ".join(self.cfg.recipients)
+        x1, y1, x2, y2 = alert.box
+        msg.set_content(
+            f"A fall was detected.\n\n"
+            f"  site      : {self.cfg.site}\n"
+            f"  time      : {when}\n"
+            f"  track     : #{alert.track_id} ({alert.label})\n"
+            f"  frame     : {alert.frame_index}\n"
+            f"  box       : x={x1} y={y1} w={x2 - x1} h={y2 - y1}\n"
+            f"  aspect    : {alert.signals.get('aspect_value')} "
+            f"(triggered: {alert.signals.get('aspect')})\n"
+            f"  collapsed : {alert.signals.get('collapse')}\n"
+            f"  descent   : {alert.signals.get('descent_value')} px/s "
+            f"(triggered: {alert.signals.get('descent')})\n\n"
+            f"Sent by the SiMa Modalix fall-detection app.\n"
+        )
+        if alert.snapshot_path and Path(alert.snapshot_path).is_file():
+            data = Path(alert.snapshot_path).read_bytes()
+            msg.add_attachment(
+                data, maintype="image", subtype="jpeg",
+                filename=Path(alert.snapshot_path).name,
+            )
+        return msg
+
+    def send_now(self, alert: Alert) -> None:
+        """Send one alert synchronously. Raises on any SMTP failure."""
+        msg = self.build_message(alert)
+        if self.cfg.dry_run:
+            print(
+                f"[alert:dry-run] would email {len(self.cfg.recipients)} recipient(s): "
+                f"{msg['Subject']}",
+                flush=True,
+            )
+            return
+        password = alert_password(self.cfg)
+        if self.cfg.ssl:
+            server = smtplib.SMTP_SSL(self.cfg.host, self.cfg.port, timeout=self.cfg.timeout)
+        else:
+            server = smtplib.SMTP(self.cfg.host, self.cfg.port, timeout=self.cfg.timeout)
+        try:
+            if self.cfg.starttls and not self.cfg.ssl:
+                server.starttls()
+            if self.cfg.username:
+                server.login(self.cfg.username, password)
+            server.send_message(msg)
+        finally:
+            try:
+                server.quit()
+            except Exception:
+                pass
+
+
+def alert_password(cfg: "AlertConfig") -> str:
+    """Read the SMTP password from the environment.
+
+    Deliberately not a config key. ``config.yaml`` is committed to the repo, and
+    a password in it is a password on GitHub. The variable is read at send time
+    so rotating it does not need a restart.
+    """
+    if not cfg.username:
+        return ""
+    password = os.environ.get(cfg.password_env, "")
+    if not password:
+        raise RuntimeError(
+            f"alerts.username is set but ${cfg.password_env} is empty.\n"
+            f"  export {cfg.password_env}='...' before running, or set "
+            f"alerts.dry_run: true to test without sending."
+        )
+    return password
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2051,6 +2840,125 @@ def draw_boxes(frame, boxes: list[dict], labels: list[str], draw: DrawConfig) ->
         )
 
 
+# Per-state colours, BGR. Deliberately traffic-light rather than the class
+# palette: on this app the state is the information, not which class it is.
+STATE_COLORS = {
+    UPRIGHT: (98, 205, 0),       # green, nothing to see
+    FALLING: (0, 194, 255),      # amber, the timer is running
+    FALLEN: (56, 56, 255),       # red, alert raised
+    RECOVERING: (227, 195, 0),   # cyan, back up but still being watched
+}
+
+
+def state_color(state: str) -> tuple[int, int, int]:
+    return STATE_COLORS.get(state, (200, 200, 200))
+
+
+def track_caption(track: Track, draw: DrawConfig) -> str:
+    """Build the caption for one tracked person."""
+    parts = []
+    if draw.show_track_ids:
+        parts.append(f"#{track.track_id}")
+    if draw.show_labels:
+        parts.append(track.state)
+    if draw.show_scores:
+        parts.append(f"{track.box['score']:.{max(0, draw.score_decimals)}f}")
+    return " ".join(parts)
+
+
+def draw_tracks(frame, tracks: list[Track], draw: DrawConfig, fall: FallConfig) -> None:
+    """Draw every tracked person, coloured by state, in place.
+
+    Args:
+        frame: BGR image, modified in place.
+        tracks: Live tracks with their fall state already resolved.
+        draw: Visualization settings.
+        fall: Fall settings, for the countdown readout on a pending fall.
+    """
+    height, width = frame.shape[:2]
+    scale = draw_scale(frame, draw)
+    thickness = max(1, int(round(draw.box_thickness * scale)))
+    text_scale = draw.text_scale * scale
+    text_thickness = max(1, int(round(draw.text_thickness * scale)))
+    pad = max(2, int(round(draw.text_padding * scale)))
+    radius = max(2, int(round(draw.centre_dot_radius * scale)))
+
+    # Paint larger boxes first, so a small figure in front stays legible.
+    ordered = sorted(tracks, key=lambda t: t.width * t.height, reverse=True)
+    for track in ordered:
+        x1 = max(0, int(round(track.box["x1"])))
+        y1 = max(0, int(round(track.box["y1"])))
+        x2 = min(width - 1, int(round(track.box["x2"])))
+        y2 = min(height - 1, int(round(track.box["y2"])))
+        if x2 <= x1 or y2 <= y1:
+            continue
+
+        color = state_color(track.state)
+        # A fallen person gets a heavier box, so the frame reads correctly even
+        # in a thumbnail or a greyscale printout.
+        weight = thickness * 2 if track.state == FALLEN else thickness
+        if draw.centre_dot:
+            cv2.circle(frame, ((x1 + x2) // 2, (y1 + y2) // 2), radius, color, -1)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, weight)
+
+        label = track_caption(track, draw)
+        if track.state == FALLING and fall.confirm_seconds > 0:
+            held = max(0.0, time_ms() / 1000.0 - track.state_since)
+            label = f"{label} {min(held, fall.confirm_seconds):.1f}/{fall.confirm_seconds:.1f}s"
+        if not label:
+            continue
+
+        (text_w, _), _ = cv2.getTextSize(label, FONT, text_scale, text_thickness)
+        above, below = text_ink_extent(label, text_scale, text_thickness)
+        band_w = text_w + pad * 2
+        band_h = above + below + pad * 2
+
+        top = y1 - band_h
+        if top < 0:
+            top = y1
+        left = max(0, min(x1, width - band_w))
+
+        cv2.rectangle(frame, (left, top), (left + band_w, top + band_h), color, -1)
+        cv2.putText(
+            frame, label, (left + pad, top + pad + above), FONT, text_scale,
+            draw.text_color, text_thickness, cv2.LINE_AA,
+        )
+
+
+def draw_banner(frame, text: str, draw: DrawConfig) -> None:
+    """Draw a full-width alert strip across the bottom of the frame.
+
+    A red box around one person is easy to miss on a wall of camera tiles. A
+    band across the whole frame is not, which is the point of it.
+
+    Args:
+        frame: BGR image, modified in place.
+        text: Banner text.
+        draw: Visualization settings.
+    """
+    height, width = frame.shape[:2]
+    scale = draw_scale(frame, draw)
+    text_scale = (draw.banner_text_scale or draw.text_scale) * scale
+    text_thickness = max(1, int(round((draw.banner_text_thickness or draw.text_thickness) * scale)))
+    pad = max(4, int(round(draw.banner_padding * scale)))
+
+    (text_w, _), _ = cv2.getTextSize(text, FONT, text_scale, text_thickness)
+    above, below = text_ink_extent(text, text_scale, text_thickness)
+    band_h = above + below + pad * 2
+    top = height - band_h
+
+    strip = frame[top:height, 0:width]
+    tint = np.empty_like(strip)
+    tint[:] = draw.banner_bg_color
+    # Translucent rather than solid, so the band never hides the thing it is
+    # drawing attention to.
+    cv2.addWeighted(tint, draw.banner_alpha, strip, 1.0 - draw.banner_alpha, 0.0, dst=strip)
+    cv2.putText(
+        frame, text, (max(pad, (width - text_w) // 2), top + pad + above),
+        FONT, text_scale, draw.banner_text_color, text_thickness, cv2.LINE_AA,
+    )
+
+
 def draw_fps(frame, fps: float, draw: DrawConfig) -> None:
     """Draw the frame rate centred in a filled badge at the top left.
 
@@ -2126,15 +3034,36 @@ def metadata_objects(boxes: list[dict], labels: list[str], w: int, h: int) -> li
     return objects
 
 
-def send_metadata(pipeline: Pipeline, stamp: FrameStamp, boxes: list[dict]) -> None:
+def track_objects(tracks, labels: list[str]) -> list[dict]:
+    objects = []
+    for track in tracks:
+        class_id = int(track.box["class_id"])
+        objects.append(
+            {
+                "id": f"track_{track.track_id}",
+                "label": labels[class_id] if 0 <= class_id < len(labels) else "unknown",
+                "confidence": float(track.box["score"]),
+                "bbox": [
+                    float(track.box["x1"]), float(track.box["y1"]),
+                    float(track.box["x2"] - track.box["x1"]),
+                    float(track.box["y2"] - track.box["y1"]),
+                ],
+                "state": track.state,
+                "aspect": round(track.aspect, 2),
+            }
+        )
+    return objects
+
+
+def send_metadata(pipeline: Pipeline, sample, boxes: list[dict]) -> None:
     if pipeline.metadata_sender is None:
         return
     timestamp_ms = int(stamp.pts_ns // 1_000_000) if stamp.pts_ns >= 0 else -1
     frame_id = str(stamp.frame_id) if stamp.frame_id >= 0 else ""
     pipeline.metadata_sender.send_metadata(
-        "object-detection",
+        "fall-detection",
         json.dumps(
-            {"objects": metadata_objects(boxes, pipeline.labels, pipeline.frame_w, pipeline.frame_h)},
+            {"objects": track_objects(boxes, pipeline.labels)},
             separators=(",", ":"),
         ),
         timestamp_ms,
@@ -2180,13 +3109,49 @@ def wants_jpeg(cfg: AppConfig, index: int) -> bool:
     return cfg.save_enable and cfg.save_every > 0 and index % cfg.save_every == 0
 
 
-def render_annotated(cfg: AppConfig, pipeline: Pipeline, frame, boxes: list[dict], fps: float):
+def person_boxes(cfg: AppConfig, pipeline: Pipeline, boxes: list[dict], frame_h: int):
+    """Keep only the classes that can fall, and only boxes big enough to judge."""
+    floor = cfg.fall.min_box_height * frame_h
+    kept = []
+    for box in boxes:
+        if pipeline.fall_class_ids is not None:
+            if int(box["class_id"]) not in pipeline.fall_class_ids:
+                continue
+        if (box["y2"] - box["y1"]) < floor:
+            continue
+        kept.append(box)
+    return kept
+
+
+def write_snapshot(cfg: AppConfig, track, frame_index: int, frame) -> str:
+    """Write the annotated frame that an alert refers to. Returns the path."""
+    if frame is None or not cfg.alerts.attach_snapshot:
+        return ""
+    directory = Path(cfg.alerts.snapshot_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    out = directory / f"fall_track{track.track_id:03d}_frame{frame_index:06d}.jpg"
+    if not cv2.imwrite(str(out), frame):
+        print(f"[warn] failed to write snapshot {out}", file=sys.stderr)
+        return ""
+    return str(out)
+
+
+def render_annotated(cfg: AppConfig, pipeline: Pipeline, frame, tracks, fps: float):
     """Draw once per frame and share the result between the video and JPEG sinks."""
     annotated = frame.copy()
-    # FPS first, so a detection in the top-left corner is never hidden by it.
+    # FPS first, so a person in the top-left corner is never hidden by it.
     if cfg.video_hud:
         draw_fps(annotated, fps, cfg.draw)
-    draw_boxes(annotated, boxes, pipeline.labels, cfg.draw)
+    draw_tracks(annotated, tracks, cfg.draw, cfg.fall)
+    down = [t for t in tracks if t.state == FALLEN]
+    if cfg.draw.banner and down:
+        ids = ", ".join(f"#{t.track_id}" for t in down[:6])
+        more = "" if len(down) <= 6 else f" +{len(down) - 6}"
+        draw_banner(
+            annotated,
+            f"FALL DETECTED  {ids}{more}  -  {cfg.alerts.site}",
+            cfg.draw,
+        )
     return annotated
 
 
@@ -2341,6 +3306,20 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
         sample = None
         decode_end = time_ms()
 
+        # Track, then judge. Both need a clock, and the source's own timestamps
+        # are the honest one: with overflow_policy block the run is slower than
+        # realtime, so wall-clock seconds would make every descent look slow.
+        now = (
+            stamp.pts_ns / 1e9 if stamp.pts_ns >= 0
+            else processed / float(pipeline.fps or 25)
+        )
+        people = person_boxes(cfg, pipeline, boxes, pipeline.frame_h)
+        tracks = pipeline.tracker.update(people, now)
+        fallen_now = (
+            update_fall_states(tracks, cfg.fall, pipeline.frame_h, now)
+            if cfg.fall.enable else []
+        )
+
         processed += 1
         need_jpeg = wants_jpeg(cfg, processed)
         need_annotated = (
@@ -2349,12 +3328,41 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
             or (need_jpeg and cfg.save_overlay)
         )
 
+        # A confirmed fall always needs a rendered frame, whatever the sinks
+        # asked for: it is what gets attached to the alert.
+        need_annotated = need_annotated or bool(fallen_now)
+
         # Render once, then share the result across every sink that wants it.
         annotated = (
-            render_annotated(cfg, pipeline, frame, boxes, live_fps)
+            render_annotated(cfg, pipeline, frame, tracks, live_fps)
             if need_annotated
             else None
         )
+
+        for track in fallen_now:
+            pipeline.falls += 1
+            signals = fall_signals(track, cfg.fall, pipeline.frame_h)
+            snapshot = write_snapshot(cfg, track, processed, annotated)
+            label = (
+                pipeline.labels[int(track.box["class_id"])]
+                if 0 <= int(track.box["class_id"]) < len(pipeline.labels) else "person"
+            )
+            print(
+                f"[FALL] track #{track.track_id} ({label}) at frame {processed} "
+                f"aspect={signals['aspect_value']} descent={signals['descent_value']}px/s"
+                + (f" snapshot={snapshot}" if snapshot else ""),
+                flush=True,
+            )
+            queued = pipeline.alerts.offer(
+                Alert(
+                    track_id=track.track_id, when=now, label=label,
+                    box=(int(track.box["x1"]), int(track.box["y1"]),
+                         int(track.box["x2"]), int(track.box["y2"])),
+                    signals=signals, frame_index=processed, snapshot_path=snapshot,
+                ),
+                now,
+            )
+            track.alerted_at = now if queued else track.alerted_at
 
         # With insight_annotated the viewer shows our overlay. Without it,
         # Insight receives the raw frame and draws its own from the metadata.
@@ -2362,7 +3370,7 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
             pipeline, stamp,
             annotated if (cfg.insight_annotated and annotated is not None) else frame,
         )
-        send_metadata(pipeline, stamp, boxes)
+        send_metadata(pipeline, stamp, tracks)
 
         if pipeline.writer is not None:
             pipeline.writer.write(annotated)
@@ -2376,21 +3384,22 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
         )
 
         # Heartbeat, so a healthy run does not look identical to a stalled one.
-        heartbeat_boxes += len(boxes)
+        heartbeat_boxes += len(tracks)
         if processed % HEARTBEAT_EVERY == 0:
             elapsed = time_ms() - heartbeat_start
             rate = HEARTBEAT_EVERY * 1000.0 / elapsed if elapsed > 0 else 0.0
             live_fps = rate or live_fps
             print(
                 f"[{processed}] {rate:.1f} fps, "
-                f"{heartbeat_boxes / HEARTBEAT_EVERY:.1f} detections/frame avg",
+                f"{heartbeat_boxes / HEARTBEAT_EVERY:.1f} people/frame avg, "
+                f"{pipeline.falls} fall(s) so far",
                 flush=True,
             )
             heartbeat_start = time_ms()
             heartbeat_boxes = 0
 
     profile.flush()
-    print(f"processed={processed} timeouts={timeouts}")
+    print(f"processed={processed} timeouts={timeouts} falls={pipeline.falls}")
 
     # A recording that is over almost before it starts is the most commonly
     # reported symptom, and it has three quite different causes. Rank them here
@@ -2435,22 +3444,57 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="SiMa Neat YOLO object detector")
+    parser = argparse.ArgumentParser(
+        description="SiMa Neat fall detection with SMTP alerts"
+    )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument(
         "--validate-config",
         action="store_true",
         help="Parse and validate the config without loading pyneat or the model.",
     )
+    parser.add_argument(
+        "--test-alert",
+        action="store_true",
+        help="Send one fake alert and exit. Proves the SMTP settings and the "
+             "password environment variable work, without waiting for a fall.",
+    )
     args = parser.parse_args(argv)
 
     pipeline = None
     try:
         cfg = load_app_config(args.config)
+        labels = load_labels(cfg.labels_path)
         if args.validate_config:
+            watched = resolve_fall_classes(cfg, labels)
             print(f"config OK: {args.config}")
             print(f"  family={cfg.family} -> BoxDecodeType.{FAMILY_DECODE_TOKENS[cfg.family]}")
             print(f"  {describe_preprocess(cfg, cfg.source_width, cfg.source_height)}")
+            print(f"  {describe_fall(cfg, labels)}")
+            print(f"  {describe_alerts(cfg)}")
+            if watched is not None:
+                print(f"  watched class ids: {sorted(watched)}")
+            return 0
+
+        if args.test_alert:
+            # Deliberately synchronous and outside the pipeline: this is the
+            # command you run when mail is not arriving, so it must report the
+            # real exception rather than queue the work and return 0.
+            if not cfg.alerts.enable:
+                print("[ERR] alerts.enable is off, so there is nothing to test.",
+                      file=sys.stderr)
+                return 1
+            sender = AlertSender(dataclasses.replace(cfg.alerts, enable=False))
+            probe = Alert(
+                track_id=0, when=0.0, label="person", box=(100, 100, 400, 700),
+                signals={"aspect": True, "collapse": False, "descent": False,
+                         "aspect_value": 1.35, "descent_value": 0.0},
+                frame_index=0,
+            )
+            print(describe_alerts(cfg))
+            sender.send_now(probe)
+            print("test alert sent." if not cfg.alerts.dry_run
+                  else "test alert composed (dry_run is on, nothing left the board).")
             return 0
 
         load_runtime_dependencies()

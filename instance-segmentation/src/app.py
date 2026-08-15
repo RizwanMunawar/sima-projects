@@ -1,8 +1,10 @@
-"""Object detection on the SiMa Modalix DevKit.
+"""Instance segmentation with a background blur on the SiMa Modalix DevKit.
 
-Reads a video file, RTSP stream or camera, runs a YOLO model on the MLA
-accelerator, and publishes results three ways: an annotated video and stills on
-the DevKit, plus a live Neat Insight feed over UDP.
+Reads a video file, RTSP stream or camera, runs a YOLO segmentation model on the
+MLA accelerator, rebuilds a per-instance mask for every detection, and composites
+the frame so the instances stay sharp while everything behind them is blurred.
+Results are published three ways: an annotated video and stills on the DevKit,
+plus a live Neat Insight feed over UDP.
 
 Built against the Neat Library public Python API (pyneat) as packaged in
 2.1.2_Palette_SDK. Runs on the DevKit, not in the x86 SDK container, because
@@ -11,13 +13,20 @@ pyneat is compiled for aarch64.
 The pipeline is a Graph rather than a single Model.run call, because it has
 multiple stages, named public endpoints and a branch with a fan-in::
 
-    source --> branch --> frame ----------------+
-                    |                           +--> combine("detector_output")
-                    +---> model --> detections -+
+    source --> branch --> frame ---------------+
+                    |                          +--> combine("segmenter_output")
+                    +---> model --> instances -+
 
-    detector_output --> BBOX parse --> overlay --> video file + stills
-                                   +-> MetadataSender  (JSON over UDP)
-                                   +-> VideoSender     (H.264 RTP over UDP)
+    segmenter_output --> BBOX + mask parse --> foreground mask
+                                           --> blur composite --> video + stills
+                                                              +-> MetadataSender
+                                                              +-> VideoSender
+
+The compositing half is the part that is specific to this app::
+
+    frame ──┬─────────────────────────────► kept where mask == 1 ──┐
+            │                                                      ├──► output
+            └─► gaussian / pixelate ──────► kept where mask == 0 ──┘
 
 Typical usage::
 
@@ -30,12 +39,14 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import math
 import os
 import signal
 import struct
 import subprocess
 import sys
 import time
+import dataclasses
 from dataclasses import dataclass, field
 from fractions import Fraction
 from pathlib import Path
@@ -112,6 +123,141 @@ class PreprocessConfig:
 
 
 @dataclass(frozen=True)
+class SegmentConfig:
+    """How per-instance masks are recovered from the model output.
+
+    A detect head emits one BBOX tensor and nothing else. A segment head emits
+    mask data as well, and there are three shapes it comes in:
+
+    * **packed** - what SiMa's ``neatobjectdecode`` actually produces: a single
+      UInt8 tensor whose head is the ordinary BBOX array and whose tail is one
+      finished mask per *box slot*. There are ``top_k`` slots, not ``count``, so
+      the buffer is a fixed size every frame::
+
+          [uint32 count][RawBox 24B * top_k][mask side*side uint8 * top_k]
+
+      With ``top_k=50`` and a 640-input model that is
+      ``4 + 50*24 + 50*160*160 = 1,281,204`` bytes.
+    * **planes** - the same finished masks, but in a tensor of their own,
+      ``N x mh x mw``.
+    * **proto** - the Ultralytics YOLO-seg encoding. A bank of ``C`` prototype
+      planes shared by the whole frame, ``C x mh x mw``, plus ``C`` coefficients
+      per instance. An instance's mask is the coefficient-weighted sum of the
+      prototypes, so it costs one matmul per frame.
+
+    ``auto`` tries packed first, because it is the layout the shipped model
+    packs use, then falls back to looking at any separate tensors. ``describe``
+    prints what actually arrived on the first frame, so pinning ``source``
+    afterwards is a one-line change.
+
+    Attributes:
+        masks: Master switch. ``off`` skips mask decoding entirely and blurs
+            around plain bounding boxes, which needs no segment head at all.
+        source: ``auto``, ``packed``, ``proto`` or ``planes``.
+        space: Which coordinate space a mask lives in. ``net`` means the
+            model's own letterboxed input space, which is the YOLO convention
+            and needs the letterbox undone. ``box`` means the mask is already
+            cropped to its own detection and only needs scaling. ``auto``
+            decides on the first frame by checking whether the mask's occupied
+            region lands where its box says it should, and prints the verdict.
+        threshold: Mask cut-off as a probability, so 0.5 is the YOLO default.
+            Lower it to grow instances, raise it to tighten them.
+        stride: Model input pixels per mask pixel, used to infer the network
+            input size when ``preprocess.resize`` is left at 0. 4 for YOLO-seg,
+            whose 640x640 input gives 160x160 prototypes.
+        net_width: Model input width. 0 derives it, see ``stride``.
+        net_height: Model input height. 0 derives it.
+        coeff_counts: Prototype bank sizes to recognise while auto-detecting.
+        mask_sides: Mask edge lengths to try when solving a packed buffer whose
+            slot count cannot be taken from ``decode.max_detections``.
+        fallback_to_boxes: Whether to fall back to box-shaped regions when no
+            mask data can be found, rather than failing the run. The app says so
+            once, loudly, and keeps going.
+        describe: Whether to print every tensor in the first frame's output,
+            with its tag, dtype and shape. This is how you learn what your model
+            pack emits without reading any SDK source.
+        dilate: Grow the finished mask by this many pixels, expressed for a
+            1080p frame. Small positive values cover the halo a tight mask
+            leaves around hair and limbs.
+        blur_mask: Smooth the mask over this many pixels before it is used, also
+            expressed for a 1080p frame. Takes the staircase off the edge that a
+            160x160 mask shows once it is scaled up. 0 disables.
+    """
+
+    masks: str = "on"
+    source: str = "auto"
+    space: str = "auto"
+    threshold: float = 0.5
+    stride: int = 4
+    net_width: int = 0
+    net_height: int = 0
+    coeff_counts: tuple[int, ...] = (16, 32, 64)
+    mask_sides: tuple[int, ...] = (
+        64, 80, 88, 96, 104, 112, 120, 128, 144, 152, 160, 176, 192, 208, 224, 240, 256, 320
+    )
+    fallback_to_boxes: bool = True
+    describe: bool = True
+    dilate: int = 0
+    blur_mask: int = 0
+
+
+@dataclass(frozen=True)
+class BlurConfig:
+    """The background treatment, straight from the ``blur`` config section.
+
+    Pixel sizes here are expressed for a 1080p frame and follow
+    ``visualization.auto_scale``, so a kernel that looks right on a test clip
+    still looks right at 4K.
+
+    This whole block is **optional**. The app is a segmenter: it finds instances
+    and draws their masks whatever happens here. ``enable: off`` turns the
+    background treatment off and leaves a plain segmentation overlay, and
+    ``opacity`` is the dial between the two rather than an on/off switch.
+
+    Attributes:
+        enable: Whether to composite at all. ``off`` leaves the frame untouched
+            and the app becomes a plain segmentation overlay.
+        opacity: How much of the treated background to keep, 0.0 to 1.0. 1.0 is
+            a full-strength blur, 0.4 is a hint of one, 0.0 is indistinguishable
+            from ``enable: off``. Applied after the method, so it dials
+            ``grayscale`` and ``dim`` down too.
+        method: ``gaussian``, ``pixelate`` or ``none``. ``none`` still applies
+            ``dim`` and ``grayscale``, which is how you get a darkened rather
+            than blurred background.
+        kernel: Gaussian kernel width in pixels. Forced odd. Bigger is blurrier
+            and slower, though ``downscale`` absorbs most of the cost.
+        sigma: Gaussian sigma. 0 derives it from ``kernel``, which is what you
+            want almost always.
+        downscale: Blur at 1/N resolution and scale back up. The dominant speed
+            knob: at 1080p, 2 roughly quarters the work and is visually free,
+            because the result is a blur either way.
+        pixel_size: Mosaic block size for ``pixelate``, in pixels.
+        dim: Darken the background, 0.0 to 1.0. 0 leaves brightness alone.
+        grayscale: Whether to desaturate the background.
+        feather: Soften the mask edge over this many pixels. 0 gives a hard
+            cut, which is faster but shows every jag in the mask.
+        invert: Blur the instances instead of the background. This is the
+            anonymiser: ``keep_classes: [person]`` plus ``invert: on`` blurs
+            people and leaves the scene sharp.
+        keep_classes: Class names or ids that count as foreground. Empty keeps
+            every detected class.
+    """
+
+    enable: bool = True
+    opacity: float = 1.0
+    method: str = "gaussian"
+    kernel: int = 41
+    sigma: float = 0.0
+    downscale: int = 2
+    pixel_size: int = 24
+    dim: float = 0.0
+    grayscale: bool = False
+    feather: int = 9
+    invert: bool = False
+    keep_classes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class DrawConfig:
     """Overlay appearance, straight from the ``visualization`` config section.
 
@@ -121,12 +267,18 @@ class DrawConfig:
     slabs. Turn ``auto_scale`` off to use the numbers literally.
 
     Attributes:
-        box_thickness: Detection rectangle outline weight, in pixels.
+        mask_alpha: Strength of the class-coloured tint painted over each
+            instance, 0.0 to 1.0. 0 leaves the instance untouched, which is
+            what you want when the blur alone should carry the effect.
+        mask_outline: Whether to trace the mask edge.
+        outline_thickness: Weight of that trace, in pixels.
+        show_boxes: Whether to draw the bounding rectangle as well. Off by
+            default: the mask already shows the extent, and the box mostly adds
+            clutter.
+        box_thickness: Rectangle outline weight, in pixels.
         text_scale: OpenCV font scale for captions.
         text_thickness: Caption stroke weight, in pixels.
         text_padding: Gap between caption text and the edge of its band.
-        centre_dot: Whether to mark the centre of each box.
-        centre_dot_radius: Radius of that marker, in pixels.
         show_labels: Whether the caption carries the class name.
         show_scores: Whether the caption carries the confidence.
         score_decimals: Decimal places for the confidence, so 2 gives ``0.57``.
@@ -152,12 +304,14 @@ class DrawConfig:
         reference_height: The frame height the sizes above are tuned for.
     """
 
-    box_thickness: int = 3
+    mask_alpha: float = 0.35
+    mask_outline: bool = True
+    outline_thickness: int = 3
+    show_boxes: bool = False
+    box_thickness: int = 2
     text_scale: float = 1.0
     text_thickness: int = 2
     text_padding: int = 10
-    centre_dot: bool = True
-    centre_dot_radius: int = 7
     show_labels: bool = True
     show_scores: bool = True
     score_decimals: int = 2
@@ -189,7 +343,7 @@ class AppConfig:
     Attributes:
         model_path: Path to the compiled model archive on the DevKit.
         labels_path: Path to the newline-separated class label file.
-        family: Detection head token, mapped by ``FAMILY_DECODE_TOKENS``.
+        family: Segment head token, mapped by ``FAMILY_DECODE_TOKENS``.
         decode_type_option: Head packing override. Normally ``auto``.
         num_classes: Class count override. 0 reads it from the archive.
         source_type: One of ``video``, ``rtsp`` or ``usb``.
@@ -221,21 +375,24 @@ class AppConfig:
         save_enable: Whether to write annotated stills.
         save_dir: Directory for stills.
         save_every: Write every Nth frame. 0 disables.
-        save_overlay: Whether stills carry the overlay.
+        save_overlay: Whether stills carry the composite and overlay.
         save_format: ``jpg`` or ``png``.
         video_enable: Whether to write an annotated video on the DevKit.
         video_path: Output video path.
         video_codec: Four-character FourCC, with an MJPG fallback.
         video_fps: Output frame rate. 0 matches the source.
-        video_hud: Whether to draw the summary strip.
+        video_hud: Whether to draw the frame-rate badge.
         insight_enable: Whether to stream to Neat Insight.
-        insight_annotated: Whether Insight receives the annotated frame. False
+        insight_annotated: Whether Insight receives the composited frame. False
             sends the raw frame and lets Insight draw its own overlay.
         insight_host: Insight address as the DevKit sees it.
         insight_channel: Channel offset added to both port bases.
         video_port_base: First UDP video port.
         metadata_port_base: First UDP metadata port.
         bitrate_kbps: H.264 encoder bitrate for the Insight feed.
+        segment: Mask recovery settings. See :class:`SegmentConfig`.
+        blur: Background treatment. See :class:`BlurConfig`.
+        draw: Overlay appearance. See :class:`DrawConfig`.
     """
 
     model_path: str
@@ -290,6 +447,8 @@ class AppConfig:
     metadata_port_base: int
     bitrate_kbps: int
 
+    segment: SegmentConfig
+    blur: BlurConfig
     draw: DrawConfig
 
 
@@ -334,7 +493,7 @@ def _bool(raw: dict, key: str, default: bool) -> bool:
 
 def _flag(raw: dict, key: str, default: str) -> str:
     """
-    Read a tri-state auto/on/off knob. YAML 1.1 resolves 
+    Read a tri-state auto/on/off knob. YAML 1.1 resolves
     bare `on`/`off`/`yes`/`no` to booleans, so `enable: on`
     reaches us as True. Fold those back onto the token vocabulary.
     """
@@ -370,6 +529,41 @@ def _color(raw: dict, key: str, default: tuple[int, int, int]) -> tuple[int, int
     return (channels[0], channels[1], channels[2])
 
 
+def _triple(raw: dict, key: str, default: tuple[float, float, float]) -> tuple[float, float, float]:
+    value = raw.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        raise ValueError(f"config key `{key}` must be a list of 3 numbers")
+    return (float(value[0]), float(value[1]), float(value[2]))
+
+
+def _int_list(raw: dict, key: str, default: tuple[int, ...]) -> tuple[int, ...]:
+    value = raw.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"config key `{key}` must be a list of integers")
+    out = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            raise ValueError(f"config key `{key}` must contain integers")
+        out.append(int(item))
+    return tuple(out)
+
+
+def _str_list(raw: dict, key: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    """Read a list of class names or ids. A bare scalar is accepted as one item."""
+    value = raw.get(key)
+    if value is None:
+        return default
+    if isinstance(value, (str, int)) and not isinstance(value, bool):
+        return (str(value),)
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"config key `{key}` must be a list of class names or ids")
+    return tuple(str(item) for item in value)
+
+
 def load_draw_config(raw: dict) -> DrawConfig:
     """Build a :class:`DrawConfig` from the ``visualization`` config section.
 
@@ -384,12 +578,14 @@ def load_draw_config(raw: dict) -> DrawConfig:
     hud = _section(section, "hud")
     default = DrawConfig()
     return DrawConfig(
+        mask_alpha=_float(section, "mask_alpha", default.mask_alpha),
+        mask_outline=_flag(section, "mask_outline", "on") == "on",
+        outline_thickness=_int(section, "outline_thickness", default.outline_thickness),
+        show_boxes=_flag(section, "show_boxes", "off") == "on",
         box_thickness=_int(section, "box_thickness", default.box_thickness),
         text_scale=_float(section, "text_scale", default.text_scale),
         text_thickness=_int(section, "text_thickness", default.text_thickness),
         text_padding=_int(section, "text_padding", default.text_padding),
-        centre_dot=_flag(section, "centre_dot", "on") == "on",
-        centre_dot_radius=_int(section, "centre_dot_radius", default.centre_dot_radius),
         show_labels=_flag(section, "show_labels", "on") == "on",
         show_scores=_flag(section, "show_scores", "on") == "on",
         score_decimals=_int(section, "score_decimals", default.score_decimals),
@@ -411,13 +607,43 @@ def load_draw_config(raw: dict) -> DrawConfig:
     )
 
 
-def _triple(raw: dict, key: str, default: tuple[float, float, float]) -> tuple[float, float, float]:
-    value = raw.get(key)
-    if value is None:
-        return default
-    if not isinstance(value, (list, tuple)) or len(value) != 3:
-        raise ValueError(f"config key `{key}` must be a list of 3 numbers")
-    return (float(value[0]), float(value[1]), float(value[2]))
+def load_blur_config(raw: dict) -> BlurConfig:
+    section = _section(raw, "blur")
+    default = BlurConfig()
+    return BlurConfig(
+        enable=_flag(section, "enable", "on") == "on",
+        opacity=_float(section, "opacity", default.opacity),
+        method=_str(section, "method", default.method).lower(),
+        kernel=_int(section, "kernel", default.kernel),
+        sigma=_float(section, "sigma", default.sigma),
+        downscale=_int(section, "downscale", default.downscale),
+        pixel_size=_int(section, "pixel_size", default.pixel_size),
+        dim=_float(section, "dim", default.dim),
+        grayscale=_flag(section, "grayscale", "off") == "on",
+        feather=_int(section, "feather", default.feather),
+        invert=_flag(section, "invert", "off") == "on",
+        keep_classes=_str_list(section, "keep_classes", default.keep_classes),
+    )
+
+
+def load_segment_config(raw: dict) -> SegmentConfig:
+    section = _section(raw, "segmentation")
+    default = SegmentConfig()
+    return SegmentConfig(
+        masks=_flag(section, "masks", default.masks),
+        source=_str(section, "source", default.source).lower(),
+        space=_str(section, "space", default.space).lower(),
+        threshold=_float(section, "threshold", default.threshold),
+        stride=_int(section, "stride", default.stride),
+        net_width=_int(section, "net_width", default.net_width),
+        net_height=_int(section, "net_height", default.net_height),
+        coeff_counts=_int_list(section, "coeff_counts", default.coeff_counts),
+        mask_sides=_int_list(section, "mask_sides", default.mask_sides),
+        fallback_to_boxes=_flag(section, "fallback_to_boxes", "on") == "on",
+        describe=_flag(section, "describe", "on") == "on",
+        dilate=_int(section, "dilate", default.dilate),
+        blur_mask=_int(section, "blur_mask", default.blur_mask),
+    )
 
 
 def load_preprocess_config(raw: dict) -> PreprocessConfig:
@@ -499,7 +725,7 @@ def load_app_config(path: Path) -> AppConfig:
     cfg = AppConfig(
         model_path=_str(model, "path"),
         labels_path=resolve_labels_path(_str(model, "labels", str(default_labels)), path),
-        family=_str(model, "family", "yolo26").lower(),
+        family=_str(model, "family", "yolo26-seg").lower(),
         decode_type_option=_str(model, "decode_type_option", "auto").lower(),
         num_classes=_int(model, "num_classes", 0),
         source_type=_str(source, "type", "video").lower(),
@@ -520,27 +746,29 @@ def load_app_config(path: Path) -> AppConfig:
         pull_timeout_ms=_int(runtime, "pull_timeout_ms", 20000),
         queue_depth=_int(runtime, "queue_depth", 3),
         output_buffers=_int(runtime, "output_buffers", 1),
-        run_preset=_str(runtime, "preset", "realtime").lower(),
-        overflow_policy=_str(runtime, "overflow_policy", "keep_latest").lower(),
+        run_preset=_str(runtime, "preset", "auto").lower(),
+        overflow_policy=_str(runtime, "overflow_policy", "auto").lower(),
         profile=_bool(runtime, "profile", False),
         profile_interval=_int(runtime, "profile_interval", 100),
         save_enable=_bool(save, "enable", True),
-        save_dir=_str(save, "dir", "sandbox/object-detection"),
+        save_dir=_str(save, "dir", "frames"),
         save_every=_int(save, "every", 10),
         save_overlay=_bool(save, "overlay", True),
         save_format=_str(save, "format", "jpg").lower().lstrip("."),
         video_enable=_bool(video, "enable", True),
-        video_path=_str(video, "path", "sandbox/detections.mp4"),
+        video_path=_str(video, "path", "segmentation.mp4"),
         video_codec=_str(video, "codec", "mp4v"),
         video_fps=_int(video, "fps", 0),
         video_hud=_bool(video, "hud", True),
-        insight_enable=_bool(insight, "enable", True),
+        insight_enable=_bool(insight, "enable", False),
         insight_annotated=_bool(insight, "annotated", True),
         insight_host=_str(insight, "host", "127.0.0.1"),
         insight_channel=_int(insight, "channel", 0),
         video_port_base=_int(insight, "video_port_base", 9000),
         metadata_port_base=_int(insight, "metadata_port_base", 9100),
         bitrate_kbps=_int(insight, "bitrate_kbps", 2000),
+        segment=load_segment_config(raw),
+        blur=load_blur_config(raw),
         draw=load_draw_config(raw),
     )
     validate_config(cfg)
@@ -555,6 +783,48 @@ def validate_config(cfg: AppConfig) -> None:
             f"model.family `{cfg.family}` is not supported. "
             f"Choose one of: {', '.join(sorted(FAMILY_DECODE_TOKENS))}"
         )
+    # A detect head emits boxes and nothing else, so asking it for masks gives a
+    # run that starts cleanly and then blurs nothing. Catch it here rather than
+    # three minutes into a clip.
+    if cfg.segment.masks == "on" and cfg.family not in SEG_FAMILIES:
+        raise ValueError(
+            f"model.family `{cfg.family}` is a detect head, which emits no mask data.\n"
+            f"  Either point model.family at a segment head "
+            f"({', '.join(sorted(SEG_FAMILIES))}),\n"
+            f"  or set segmentation.masks: off to blur around plain bounding boxes."
+        )
+    if cfg.segment.source not in {"auto", "packed", "proto", "planes"}:
+        raise ValueError("segmentation.source must be auto, packed, proto or planes")
+    if cfg.segment.space not in {"auto", "net", "box"}:
+        raise ValueError("segmentation.space must be auto, net or box")
+    if not 0.0 < cfg.segment.threshold < 1.0:
+        raise ValueError("segmentation.threshold must be in (0.0, 1.0), exclusive")
+    if cfg.segment.stride <= 0:
+        raise ValueError("segmentation.stride must be > 0")
+    if cfg.segment.net_width < 0 or cfg.segment.net_height < 0:
+        raise ValueError("segmentation.net_width and net_height must be >= 0")
+    if cfg.segment.dilate < 0:
+        raise ValueError("segmentation.dilate must be >= 0")
+    if cfg.segment.blur_mask < 0:
+        raise ValueError("segmentation.blur_mask must be >= 0")
+    if not 0.0 <= cfg.blur.opacity <= 1.0:
+        raise ValueError("blur.opacity must be in [0.0, 1.0]")
+    if cfg.blur.method not in {"gaussian", "pixelate", "none"}:
+        raise ValueError("blur.method must be gaussian, pixelate or none")
+    if cfg.blur.kernel < 1:
+        raise ValueError("blur.kernel must be >= 1")
+    if cfg.blur.sigma < 0:
+        raise ValueError("blur.sigma must be >= 0")
+    if cfg.blur.downscale < 1:
+        raise ValueError("blur.downscale must be >= 1")
+    if cfg.blur.pixel_size < 2:
+        raise ValueError("blur.pixel_size must be >= 2")
+    if not 0.0 <= cfg.blur.dim <= 1.0:
+        raise ValueError("blur.dim must be in [0.0, 1.0]")
+    if cfg.blur.feather < 0:
+        raise ValueError("blur.feather must be >= 0")
+    if not 0.0 <= cfg.draw.mask_alpha <= 1.0:
+        raise ValueError("visualization.mask_alpha must be in [0.0, 1.0]")
     if cfg.source_type not in {"video", "rtsp", "usb"}:
         raise ValueError("source.type must be video, rtsp or usb")
     if cfg.source_type in {"video", "rtsp"} and not cfg.source_uri:
@@ -629,11 +899,11 @@ def validate_config(cfg: AppConfig) -> None:
         )
 
 
-# Config token -> pyneat enum mapping, Kept as string tokens so the tables 
-# can be validated before pyneat is imported (the wheel is aarch64-only 
-# and does not load in the SDK container). model.family -> BoxDecodeType 
-# attribute name. `yolo11` intentionally maps to YoloV8: BoxDecodeType has 
-# no YOLO11 member, and Ultralytics YOLO11 exports the same decoupled DFL detect 
+# Config token -> pyneat enum mapping, Kept as string tokens so the tables
+# can be validated before pyneat is imported (the wheel is aarch64-only
+# and does not load in the SDK container). model.family -> BoxDecodeType
+# attribute name. `yolo11` intentionally maps to YoloV8: BoxDecodeType has
+# no YOLO11 member, and Ultralytics YOLO11 exports the same decoupled DFL
 # head as YOLOv8.
 FAMILY_DECODE_TOKENS: dict[str, str] = {
     "yolo": "Yolo",
@@ -657,6 +927,10 @@ FAMILY_DECODE_TOKENS: dict[str, str] = {
     "yolo26-pose": "YoloV26Pose",
     "yolox": "YoloX",
 }
+
+# Which of those actually carry mask data. Everything else is a detect or pose
+# head, and asking it for masks is a config error rather than a runtime one.
+SEG_FAMILIES = {name for name in FAMILY_DECODE_TOKENS if name.endswith("-seg")}
 
 DECODE_TYPE_OPTIONS: dict[str, str] = {
     "auto": "Auto",
@@ -726,7 +1000,7 @@ def enum_value(enum_cls, token: str, table: dict[str, str], what: str):
 
 
 def load_runtime_dependencies() -> None:
-    global cv2, np, pyneat
+    global cv2, np, pyneat, FONT
     if pyneat is not None:
         return
     for path in glob.glob("/usr/lib/python3*/dist-packages"):
@@ -737,6 +1011,7 @@ def load_runtime_dependencies() -> None:
     import pyneat as pyneat_module
 
     cv2, np, pyneat = cv2_module, np_module, pyneat_module
+    FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
 def time_ms() -> float:
@@ -782,7 +1057,7 @@ def apply_preprocess_options(opt, pre: PreprocessConfig, frame_w: int, frame_h: 
 
     # ── Colour conversion ──
     # input_format must match what the source hands to Preproc: NV12 for the
-    # hardware H.264 decoder and libcamera, BGR for cv2.imread.
+    # hardware H.264 decoder and libcamera, BGR for cv2 images.
     p.color_convert.input_format = enum_value(
         pyneat.PreprocessColorFormat,
         pre.input_format,
@@ -874,6 +1149,32 @@ def describe_preprocess(cfg: AppConfig, frame_w: int, frame_h: int) -> str:
         f"resize={pre.resize_mode} target={target} pad={pre.pad_value} "
         f"scaler={pre.scaling_type} | normalize={norm} | "
         f"quantize={pre.quantize_enable} tessellate={pre.tessellate_enable}"
+    )
+
+
+def describe_blur(cfg: AppConfig) -> str:
+    blur = cfg.blur
+    if not blur.enable or blur.opacity <= 0.0:
+        return "blur: off, segmentation overlay only"
+    if blur.method == "gaussian":
+        shape = f"gaussian kernel={blur.kernel} sigma={blur.sigma or 'auto'} down={blur.downscale}"
+    elif blur.method == "pixelate":
+        shape = f"pixelate block={blur.pixel_size}"
+    else:
+        shape = "none"
+    extras = []
+    if blur.grayscale:
+        extras.append("grayscale")
+    if blur.dim > 0:
+        extras.append(f"dim={blur.dim}")
+    if blur.feather:
+        extras.append(f"feather={blur.feather}")
+    target = "instances" if blur.invert else "background"
+    keep = ", ".join(blur.keep_classes) if blur.keep_classes else "every class"
+    if blur.opacity < 1.0:
+        extras.append(f"opacity={blur.opacity}")
+    return f"blur: {shape} on the {target} | keep={keep}" + (
+        f" | {' '.join(extras)}" if extras else ""
     )
 
 
@@ -1406,20 +1707,27 @@ class Pipeline:
 
     Attributes:
         model: The loaded ``pyneat.Model``.
-        graph: The detector ``Graph``.
-        run: Live ``Run`` handle for the detector graph.
+        graph: The segmenter ``Graph``.
+        run: Live ``Run`` handle for the segmenter graph.
         video_graph: Separate graph that encodes frames for Insight.
         video_run: Live ``Run`` handle for the video graph.
-        metadata_sender: ``MetadataSender`` publishing detections as JSON.
+        metadata_sender: ``MetadataSender`` publishing instances as JSON.
         labels: Class names, indexed by class id.
+        keep_ids: Class ids that count as foreground, or None for every class.
         frame_w: Source frame width in pixels.
         frame_h: Source frame height in pixels.
         fps: Source frame rate.
+        net_w: Model input width, used to invert the letterbox for masks.
+        net_h: Model input height.
         video_port: Resolved UDP port for the Insight video feed.
         writer: OpenCV ``VideoWriter`` for the on-device recording.
         writer_path: Path the writer actually opened, after any fallback.
         writer_frames: Frames written so far.
         video_dropped: Preview frames the Insight feed refused.
+        mask_kind: What the mask decoder settled on: ``proto``, ``planes`` or
+            ``none``. Filled in on the first frame that carries instances.
+        described: Whether the first-frame tensor dump has already been printed.
+        warned_no_masks: Whether the "no mask data" warning has been printed.
     """
 
     model: object
@@ -1429,14 +1737,21 @@ class Pipeline:
     video_run: object = None
     metadata_sender: object = None
     labels: list[str] = field(default_factory=list)
+    keep_ids: object = None
     frame_w: int = 0
     frame_h: int = 0
     fps: int = 0
+    net_w: int = 0
+    net_h: int = 0
     video_port: int = 0
     writer: object = None
     writer_path: str = ""
     writer_frames: int = 0
     video_dropped: int = 0
+    mask_kind: str = ""
+    mask_space: str = ""
+    described: bool = False
+    warned_no_masks: bool = False
 
     def close(self) -> None:
         if self.writer is not None:
@@ -1505,6 +1820,48 @@ def load_labels(path: Path) -> list[str]:
     return labels
 
 
+def resolve_keep_classes(cfg: AppConfig, labels: list[str]):
+    """Turn ``blur.keep_classes`` into a set of class ids.
+
+    Accepts either names as they appear in the labels file or bare numeric ids,
+    so ``[person, 2]`` is valid. A name that is not in the labels file is a
+    config error, not a silently empty filter: the alternative is a run that
+    blurs the whole frame and gives no clue why.
+
+    Args:
+        cfg: Application configuration.
+        labels: Class names indexed by class id.
+
+    Returns:
+        A set of class ids, or None when every class counts as foreground.
+    """
+    if not cfg.blur.keep_classes:
+        return None
+    lookup = {name.lower(): index for index, name in enumerate(labels)}
+    ids = set()
+    for token in cfg.blur.keep_classes:
+        text = token.strip()
+        if text.isdigit():
+            index = int(text)
+            if not 0 <= index < len(labels):
+                raise ValueError(
+                    f"blur.keep_classes has class id {index}, but the labels file "
+                    f"only has {len(labels)} classes (0 to {len(labels) - 1})"
+                )
+            ids.add(index)
+            continue
+        index = lookup.get(text.lower())
+        if index is None:
+            near = [name for name in labels if text.lower() in name.lower()][:5]
+            hint = f" Did you mean: {', '.join(near)}?" if near else ""
+            raise ValueError(
+                f"blur.keep_classes has unknown class {text!r}, which is not in "
+                f"{cfg.labels_path}.{hint}"
+            )
+        ids.add(index)
+    return ids
+
+
 def resolve_flow_control(cfg: AppConfig) -> tuple[str, str]:
     """Resolve ``auto`` flow-control settings to concrete tokens.
 
@@ -1570,8 +1927,8 @@ def make_run_options(cfg: AppConfig):
     return run_options
 
 
-def build_detector_graph(cfg: AppConfig, model, width: int, height: int, fps: int):
-    """source -> branch -> {frame, model->detections} -> combine("detector_output")."""
+def build_segmenter_graph(cfg: AppConfig, model, width: int, height: int, fps: int):
+    """source -> branch -> {frame, model->instances} -> combine("segmenter_output")."""
     source = make_source_graph(cfg, width, height, fps)
     branch = pyneat.graphs.branch("source", ["frame", "model"])
 
@@ -1581,22 +1938,22 @@ def build_detector_graph(cfg: AppConfig, model, width: int, height: int, fps: in
     model_graph = pyneat.Graph("model")
     model_graph.connect(pyneat.nodes.input("model"), model)
 
-    detections_graph = pyneat.Graph("detections")
-    detections_graph.add(
-        pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(cfg.output_buffers))
+    instances_graph = pyneat.Graph("instances")
+    instances_graph.add(
+        pyneat.nodes.output("instances", pyneat.OutputOptions.every_frame(cfg.output_buffers))
     )
 
     joined = pyneat.graphs.combine(
-        ["frame", "detections"], "detector_output", pyneat.CombinePolicy.ByFrame
+        ["frame", "instances"], "segmenter_output", pyneat.CombinePolicy.ByFrame
     )
 
-    graph = pyneat.Graph("yolo_detector")
+    graph = pyneat.Graph("yolo_segmenter")
     graph.connect(source, branch)
     graph.connect(branch, frame_graph)
     graph.connect(branch, model_graph)
-    graph.connect(model_graph, detections_graph)
+    graph.connect(model_graph, instances_graph)
     graph.connect(frame_graph, joined)
-    graph.connect(detections_graph, joined)
+    graph.connect(instances_graph, joined)
     return graph
 
 
@@ -1613,7 +1970,7 @@ def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
     input_options.memory_policy = pyneat.InputMemoryPolicy.Ev74
     # Never block the caller. The default appsrc is block=true, so once the
     # encoder or UDP egress falls behind, push() stops returning, the run loop
-    # never reaches its next pull(), and the whole detector graph stalls. The
+    # never reaches its next pull(), and the whole segmenter graph stalls. The
     # Insight feed is best effort, so a dropped preview frame is the right
     # trade for keeping inference and the recording running.
     input_options.block = False
@@ -1637,6 +1994,30 @@ def build_video_graph(cfg: AppConfig, width: int, height: int, fps: int):
     return graph, graph.build([seed]), sender_options.video_port
 
 
+def resolve_net_size(cfg: AppConfig) -> tuple[int, int]:
+    """Model input geometry, needed to map a mask back onto the frame.
+
+    Boxes come back in original-image pixels because Preproc writes the resize
+    and letterbox metadata onto the tensor and BoxDecode reads it. Masks do not
+    get that treatment: they live in the network's own letterboxed space, so the
+    app has to invert the letterbox itself, and that needs the network input
+    size. ``preprocess.resize`` supplies it when set; otherwise the mask
+    geometry does, once the first frame arrives.
+
+    Args:
+        cfg: Application configuration.
+
+    Returns:
+        A ``(width, height)`` pair, or ``(0, 0)`` when it must wait for a mask.
+    """
+    if cfg.segment.net_width and cfg.segment.net_height:
+        return cfg.segment.net_width, cfg.segment.net_height
+    pre = cfg.preprocess
+    if pre.resize_width and pre.resize_height:
+        return pre.resize_width, pre.resize_height
+    return 0, 0
+
+
 def build_pipeline(cfg: AppConfig) -> Pipeline:
     step = lambda msg: print(msg, flush=True)
 
@@ -1654,6 +2035,15 @@ def build_pipeline(cfg: AppConfig) -> Pipeline:
         f"decode_type={FAMILY_DECODE_TOKENS[cfg.family]} labels={len(labels)}"
     )
 
+    keep_ids = resolve_keep_classes(cfg, labels)
+    net_w, net_h = resolve_net_size(cfg)
+    step(
+        f"segmentation: masks={cfg.segment.masks} source={cfg.segment.source} "
+        f"space={cfg.segment.space} threshold={cfg.segment.threshold} "
+        f"net={f'{net_w}x{net_h}' if net_w else '<from the first mask>'}"
+    )
+    step(describe_blur(cfg))
+
     preset, policy = resolve_flow_control(cfg)
     step(f"runtime: preset={preset} overflow={policy} queue_depth={cfg.queue_depth} "
          f"output_buffers={cfg.output_buffers} (2 outputs -> "
@@ -1670,15 +2060,15 @@ def build_pipeline(cfg: AppConfig) -> Pipeline:
         )
 
     step("building graph...")
-    graph = build_detector_graph(cfg, model, width, height, fps)
+    graph = build_segmenter_graph(cfg, model, width, height, fps)
     if cfg.profile:
         step(f"Backend:\n{graph.describe_backend()}")
     run = graph.build(make_run_options(cfg))
     step("graph built")
 
     pipeline = Pipeline(
-        model=model, graph=graph, run=run, labels=labels,
-        frame_w=width, frame_h=height, fps=fps,
+        model=model, graph=graph, run=run, labels=labels, keep_ids=keep_ids,
+        frame_w=width, frame_h=height, fps=fps, net_w=net_w, net_h=net_h,
     )
 
     if cfg.insight_enable:
@@ -1715,23 +2105,37 @@ def build_pipeline(cfg: AppConfig) -> Pipeline:
 # BoxDecode emits one UInt8 tensor tagged BBOX per frame:
 #   [uint32 N][RawBox 24B] * N ... trailing padding
 #   RawBox = <iiiifi  -> x, y, w, h, score, class_id  (source-image pixels)
+#
+# A segment head emits that same tensor plus mask data in one or more further
+# tensors, which is what the mask decoder below picks apart.
 # ─────────────────────────────────────────────────────────────────────────────
 
 BBOX_RECORD = struct.Struct("<iiiifi")
 BBOX_RECORD_SIZE = BBOX_RECORD.size  # 24
 
+# Tags a BBOX-carrying tensor is allowed to have. A segment head may label its
+# box tensor differently from a detect head, and refusing an unfamiliar-but-
+# correct tag would be worse than accepting it.
+BBOX_TAGS = {"BBOX", "BBOXSEG", "BBOX_SEG", "BBOXSEGMENT", "DETECTION", "DETECTIONS"}
+
+
+def sample_payload_tag(sample, tensor) -> str:
+    """Best-effort payload tag for one tensor, upper-cased. Empty when unknown."""
+    tag = getattr(sample, "payload_tag", "") or getattr(sample, "format", "")
+    if not tag:
+        semantic = getattr(tensor, "semantic", None)
+        tess = getattr(semantic, "tess", None)
+        if tess is not None:
+            tag = getattr(tess, "format", "")
+    return str(tag or "").upper()
+
 
 def tensor_bbox_payload(sample, tensor=None) -> bytes:
     tensor = tensor if tensor is not None else getattr(sample, "tensor", None)
     if tensor is None:
-        raise RuntimeError("detection sample carries no tensor")
-    fmt = getattr(sample, "payload_tag", "") or getattr(sample, "format", "")
-    semantic = getattr(tensor, "semantic", None)
-    tess = getattr(semantic, "tess", None)
-    if not fmt and tess is not None:
-        fmt = getattr(tess, "format", "")
-    fmt = str(fmt).upper()
-    if fmt and fmt != "BBOX":
+        raise RuntimeError("instance sample carries no tensor")
+    fmt = sample_payload_tag(sample, tensor)
+    if fmt and fmt not in BBOX_TAGS:
         raise RuntimeError(
             f"expected a BBOX tensor but got {fmt}. If this is `raw_output_heads`, "
             "the route did not include BoxDecode. Check model.family and the model archive."
@@ -1742,7 +2146,13 @@ def tensor_bbox_payload(sample, tensor=None) -> bytes:
     return payload
 
 
-def extract_bbox_payload(sample) -> bytes:
+def extract_bbox_payload(sample) -> tuple[bytes, object]:
+    """Find the BBOX tensor in a sample tree.
+
+    Returns:
+        A ``(payload, tensor)`` pair. The tensor is handed back so the mask
+        decoder can exclude it when it goes looking for mask data.
+    """
     if sample.kind == pyneat.SampleKind.Bundle:
         for candidate in sample.fields:
             try:
@@ -1751,10 +2161,18 @@ def extract_bbox_payload(sample) -> bytes:
                 continue
         raise RuntimeError("bundle has no BBOX field")
     if sample.kind == pyneat.SampleKind.TensorSet and sample.tensors:
-        return tensor_bbox_payload(sample, sample.tensors[0])
+        # A segment head packs several tensors into one set. The box tensor is
+        # normally first, but scan rather than assume: an unexpected order would
+        # otherwise be parsed as boxes and produce garbage coordinates.
+        for tensor in sample.tensors:
+            try:
+                return tensor_bbox_payload(sample, tensor), tensor
+            except RuntimeError:
+                continue
+        raise RuntimeError("tensor set has no BBOX tensor")
     if sample.kind != pyneat.SampleKind.Tensor:
         raise RuntimeError(f"unexpected sample kind {sample.kind}")
-    return tensor_bbox_payload(sample)
+    return tensor_bbox_payload(sample), sample.tensor
 
 
 def parse_boxes(payload: bytes, img_w: int, img_h: int, expected_topk: int) -> list[dict]:
@@ -1786,7 +2204,708 @@ def parse_boxes(payload: bytes, img_w: int, img_h: int, expected_topk: int) -> l
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Frames, overlay, sinks
+# Mask payload
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class MaskBundle:
+    """Mask data for one frame, already reduced to numpy.
+
+    Attributes:
+        kind: ``proto``, ``planes`` or ``none``.
+        protos: Prototype bank, ``(C, mh, mw)`` float32. Only for ``proto``.
+        coeffs: Per-instance coefficients, ``(N, C)`` float32. Only for ``proto``.
+        planes: Per-instance masks, ``(N, mh, mw)``. Only for ``planes``.
+        probabilities: Whether the values are already in 0..1 (or 0..255). When
+            False they are treated as logits and compared against
+            ``logit(threshold)``.
+        origin: Where the data came from, ``packed`` or ``tensors``. Reporting
+            only; the decode path is the same once it is in numpy.
+        peak: Largest value seen across the used planes, which separates a
+            0/1 binary mask from a 0..255 quantised one.
+    """
+
+    kind: str = "none"
+    protos: object = None
+    coeffs: object = None
+    planes: object = None
+    probabilities: bool = False
+    origin: str = ""
+    peak: int = 0
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        """Mask-space ``(height, width)``, or ``(0, 0)`` when there is no mask."""
+        if self.kind == "proto":
+            return int(self.protos.shape[1]), int(self.protos.shape[2])
+        if self.kind == "planes":
+            return int(self.planes.shape[1]), int(self.planes.shape[2])
+        return 0, 0
+
+
+def iter_tensors(sample):
+    """Yield every ``(sample, tensor)`` pair in a sample tree, depth first."""
+    kind = getattr(sample, "kind", None)
+    if kind == pyneat.SampleKind.Tensor and sample.tensor is not None:
+        yield sample, sample.tensor
+    elif kind == pyneat.SampleKind.TensorSet:
+        for tensor in sample.tensors or []:
+            yield sample, tensor
+    for candidate in getattr(sample, "fields", []) or []:
+        yield from iter_tensors(candidate)
+
+
+def describe_tensors(sample) -> str:
+    """One line per tensor: tag, dtype, shape and byte length.
+
+    Printed once, on the first frame that carries instances. Which tensors a
+    segment head emits, and in what shape, is the one thing this app cannot know
+    ahead of time, so it reports what actually arrived instead of guessing
+    silently. Everything the mask decoder needs to be pinned in ``config.yaml``
+    is visible in this dump.
+    """
+    lines = []
+    for index, (owner, tensor) in enumerate(iter_tensors(sample)):
+        tag = sample_payload_tag(owner, tensor) or "<untagged>"
+        label = getattr(owner, "stream_label", "") or "<unlabelled>"
+        try:
+            array = np.asarray(tensor.to_numpy(copy=False))
+            shape, dtype = tuple(int(d) for d in array.shape), str(array.dtype)
+        except Exception as exc:
+            shape, dtype = f"<to_numpy failed: {exc}>", "?"
+        try:
+            nbytes = len(tensor.copy_payload_bytes())
+        except Exception:
+            nbytes = -1
+        lines.append(
+            f"  [{index}] stream={label} tag={tag} dtype={dtype} shape={shape} bytes={nbytes}"
+        )
+    return "\n".join(lines) or "  <no tensors>"
+
+
+def squeeze_leading(array):
+    """Drop leading length-1 axes, so ``(1, 32, 160, 160)`` becomes ``(32, 160, 160)``."""
+    while array.ndim > 2 and array.shape[0] == 1:
+        array = array[0]
+    return array
+
+
+def classify_mask_tensors(arrays, count: int, seg: SegmentConfig) -> MaskBundle:
+    """Work out which of the leftover tensors are protos, coefficients or planes.
+
+    Args:
+        arrays: Every non-BBOX tensor from the instances field, as numpy arrays.
+        count: How many instances the BBOX tensor reported.
+        seg: Segmentation settings, for ``source`` and ``coeff_counts``.
+
+    Returns:
+        A populated :class:`MaskBundle`, or one with ``kind="none"`` when
+        nothing recognisable was found.
+    """
+    planes = protos = coeffs = None
+    for array in arrays:
+        array = squeeze_leading(array)
+        if array.ndim == 3:
+            # A plane bank has one plane per instance; a prototype bank has one
+            # per prototype, and those counts only collide by coincidence. When
+            # they do, the configured coeff_counts breaks the tie.
+            if count > 0 and array.shape[0] == count and array.shape[0] not in seg.coeff_counts:
+                planes = array
+            elif array.shape[0] in seg.coeff_counts:
+                protos = array
+            elif count > 0 and array.shape[0] == count:
+                planes = array
+        elif array.ndim == 2:
+            if count > 0 and array.shape == (count, count):
+                continue  # ambiguous, and no real model emits this
+            if count > 0 and array.shape[0] == count and array.shape[1] in seg.coeff_counts:
+                coeffs = array
+            elif count > 0 and array.shape[1] == count and array.shape[0] in seg.coeff_counts:
+                coeffs = array.T
+
+    if seg.source in {"auto", "planes"} and planes is not None:
+        planes = np.ascontiguousarray(planes)
+        return MaskBundle(
+            kind="planes",
+            planes=np.array(planes, copy=True),
+            probabilities=plane_values_are_probabilities(planes),
+            origin="tensors",
+            # Same 0/1-versus-0..255 question as the packed path, so answer it
+            # the same way rather than defaulting and thresholding to nothing.
+            peak=int(planes[:count].max()) if count and planes.shape[0] >= count else 0,
+        )
+    if seg.source in {"auto", "proto"} and protos is not None and coeffs is not None:
+        return MaskBundle(
+            kind="proto",
+            protos=np.array(protos, dtype=np.float32, copy=True),
+            coeffs=np.array(coeffs, dtype=np.float32, copy=True),
+            probabilities=False,
+            origin="tensors",
+        )
+    return MaskBundle()
+
+
+def plane_values_are_probabilities(planes) -> bool:
+    """Whether a plane bank is already 0..1 (or 0..255) rather than raw logits.
+
+    Sampling the first plane is enough: a bank is homogeneous, and reducing over
+    all of them every frame would cost more than the masks themselves.
+    """
+    if planes.dtype == np.uint8:
+        return True
+    sample = planes[0] if planes.shape[0] else planes
+    return bool(sample.min() >= 0.0 and sample.max() <= 1.0)
+
+
+MIN_MASK_SIDE = 16
+MAX_MASK_SIDE = 1024
+
+
+def packed_mask_layout(payload_len: int, top_k: int, seg: SegmentConfig):
+    """Solve a BBOX buffer that carries its masks in its own tail.
+
+    ``neatobjectdecode`` emits one UInt8 tensor per frame for a segment head::
+
+        [uint32 count][RawBox 24B * slots][mask side*side uint8 * slots]
+
+    ``slots`` is the top-K capacity rather than the number of detections, so the
+    buffer is the same size on every frame and the arithmetic below is exact
+    rather than a guess. With ``top_k=50`` and a 640-input model:
+    ``4 + 50*24 + 50*160*160 = 1281204``.
+
+    Args:
+        payload_len: Total bytes in the BBOX tensor.
+        top_k: The configured ``decode.max_detections``, or 0 when the archive's
+            own value is in force and we do not know it.
+        seg: Segmentation settings, for ``mask_sides``.
+
+    Returns:
+        A ``(slots, side)`` pair, or None when the length does not decompose.
+    """
+    # The top-K we asked for is the answer whenever it was honoured, so try it
+    # before searching. One exact hit beats a table of plausible ones.
+    if top_k > 0:
+        tail = payload_len - 4 - top_k * BBOX_RECORD_SIZE
+        if tail > 0 and tail % top_k == 0:
+            per = tail // top_k
+            side = math.isqrt(per)
+            if side * side == per and MIN_MASK_SIDE <= side <= MAX_MASK_SIDE:
+                return top_k, side
+
+    # top_k unknown, or the decoder used its own. Solve for the slot count from
+    # each plausible mask edge instead; a wrong side almost never divides.
+    for side in seg.mask_sides:
+        per = side * side + BBOX_RECORD_SIZE
+        if (payload_len - 4) % per == 0:
+            slots = (payload_len - 4) // per
+            if slots > 0:
+                return slots, side
+    return None
+
+
+def masks_from_packed_payload(payload: bytes, count: int, top_k: int, seg: SegmentConfig):
+    """Read per-instance masks out of the tail of the BBOX buffer."""
+    layout = packed_mask_layout(len(payload), top_k, seg)
+    if layout is None:
+        return MaskBundle()
+    slots, side = layout
+    if slots < count:
+        return MaskBundle()
+    offset = 4 + slots * BBOX_RECORD_SIZE
+    planes = np.frombuffer(
+        payload, dtype=np.uint8, count=slots * side * side, offset=offset
+    ).reshape(slots, side, side)
+    # Only the first `count` slots hold a detection; the rest are unwritten
+    # capacity, so peak is measured over the used ones alone.
+    peak = int(planes[:count].max()) if count else 0
+    return MaskBundle(
+        kind="planes", planes=planes, probabilities=True, origin="packed", peak=peak
+    )
+
+
+def extract_masks(
+    sample, bbox_tensor, payload: bytes, count: int, seg: SegmentConfig, top_k: int
+) -> MaskBundle:
+    """Pull mask data out of the instances field of one joined sample.
+
+    Packed first, because that is what the shipped SiMa model packs emit and it
+    needs no tensor sniffing at all: the byte length either decomposes or it
+    does not. Separate tensors are the fallback.
+    """
+    if seg.masks != "on" or count <= 0:
+        return MaskBundle()
+
+    if seg.source in {"auto", "packed"}:
+        bundle = masks_from_packed_payload(payload, count, top_k, seg)
+        if bundle.kind != "none":
+            return bundle
+        if seg.source == "packed":
+            return MaskBundle()
+
+    arrays = []
+    for owner, tensor in iter_tensors(sample):
+        if tensor is bbox_tensor:
+            continue
+        try:
+            arrays.append(np.asarray(tensor.to_numpy(copy=False)))
+        except Exception:
+            # A tessellated or otherwise opaque tensor cannot become an array.
+            # It is not mask data we can use, so skip it rather than fail.
+            continue
+    return classify_mask_tensors(arrays, count, seg)
+
+
+@dataclass(frozen=True)
+class Letterbox:
+    """Affine map from frame pixels to network pixels.
+
+    ``nx = fx * sx + pad_x`` and ``ny = fy * sy + pad_y``. Letterbox and crop
+    share one scale; stretch has a different one per axis and no padding.
+    """
+
+    sx: float
+    sy: float
+    pad_x: float
+    pad_y: float
+
+
+def letterbox_transform(frame_w: int, frame_h: int, net_w: int, net_h: int, mode: str) -> Letterbox:
+    """Recreate what Preproc did to the frame before the model saw it.
+
+    Boxes need none of this: Preproc records the transform on the tensor and
+    BoxDecode undoes it, which is why detections arrive in source-image pixels.
+    Masks are produced in the network's own coordinate space, so this rebuilds
+    the same transform in order to invert it.
+
+    Args:
+        frame_w: Source frame width.
+        frame_h: Source frame height.
+        net_w: Model input width.
+        net_h: Model input height.
+        mode: ``letterbox``, ``stretch`` or ``crop``, from ``preprocess.resize``.
+
+    Returns:
+        A :class:`Letterbox` mapping frame pixels to network pixels.
+    """
+    if mode == "stretch":
+        return Letterbox(net_w / frame_w, net_h / frame_h, 0.0, 0.0)
+    # letterbox fits the whole frame inside the net and pads the shortfall;
+    # crop fills the net and spills over the edges. Same formula, min vs max,
+    # and crop simply produces negative padding.
+    pick = max if mode == "crop" else min
+    scale = pick(net_w / frame_w, net_h / frame_h)
+    return Letterbox(
+        scale,
+        scale,
+        (net_w - frame_w * scale) / 2.0,
+        (net_h - frame_h * scale) / 2.0,
+    )
+
+
+def instance_plane(bundle: MaskBundle, index: int):
+    """The mask-space plane for one instance, as float32.
+
+    For ``proto`` this is the coefficient-weighted sum of the prototype bank,
+    left as logits. Thresholding a logit at ``logit(t)`` is the same decision as
+    thresholding its sigmoid at ``t``, and sigmoid over every prototype-sized
+    plane, every frame, is real work for no change in the result.
+    """
+    if bundle.kind == "planes":
+        return bundle.planes[index]
+    protos = bundle.protos
+    channels, mask_h, mask_w = protos.shape
+    flat = protos.reshape(channels, mask_h * mask_w)
+    return (bundle.coeffs[index] @ flat).reshape(mask_h, mask_w)
+
+
+def plane_cutoff(bundle: MaskBundle, threshold: float) -> float:
+    """The value to compare a plane against, in that plane's own units.
+
+    A uint8 plane is either a 0/1 binary mask or a 0..255 quantised
+    probability, and the two need cut-offs 255x apart. The observed peak tells
+    them apart, so a binary mask is not silently thresholded away to nothing.
+    """
+    if not bundle.probabilities:
+        return math.log(threshold / (1.0 - threshold))     # logit
+    if bundle.kind == "planes" and bundle.planes.dtype == np.uint8:
+        return threshold * (255.0 if bundle.peak > 1 else 1.0)
+    return threshold
+
+
+def warp_plane_to_box(plane, lb: Letterbox, net_w: int, net_h: int, box: tuple[int, int, int, int]):
+    """Scale one mask-space plane into a box-sized crop in frame pixels.
+
+    Resampling only the box region rather than the whole frame is what keeps
+    this affordable: a 1080p frame with 20 instances would otherwise mean 20
+    full-frame resizes per frame, and every one of them would be almost entirely
+    empty. The composed map is a pure scale plus translation, so a single
+    inverse-mapped affine warp is exact.
+
+    Args:
+        plane: ``(mh, mw)`` float32 mask-space plane.
+        lb: Frame-to-network transform.
+        net_w: Model input width.
+        net_h: Model input height.
+        box: ``(x1, y1, x2, y2)`` in frame pixels.
+
+    Returns:
+        A ``(y2 - y1, x2 - x1)`` float32 array in the plane's own units.
+    """
+    x1, y1, x2, y2 = box
+    mask_h, mask_w = plane.shape
+    # frame px -> network px -> mask px, then shift by half a pixel because
+    # OpenCV samples at pixel centres.
+    ax = lb.sx * mask_w / net_w
+    ay = lb.sy * mask_h / net_h
+    bx = ((x1 + 0.5) * lb.sx + lb.pad_x) * mask_w / net_w - 0.5
+    by = ((y1 + 0.5) * lb.sy + lb.pad_y) * mask_h / net_h - 0.5
+    matrix = np.array([[ax, 0.0, bx], [0.0, ay, by]], dtype=np.float32)
+    return cv2.warpAffine(
+        np.ascontiguousarray(plane, dtype=np.float32),
+        matrix,
+        (x2 - x1, y2 - y1),
+        flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+
+
+def resize_plane_to_box(plane, box: tuple[int, int, int, int]):
+    """Scale a whole plane into the box, for masks already cropped to it."""
+    x1, y1, x2, y2 = box
+    return cv2.resize(
+        np.ascontiguousarray(plane, dtype=np.float32),
+        (x2 - x1, y2 - y1),
+        interpolation=cv2.INTER_LINEAR,
+    )
+
+
+def _iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
+    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    if inter <= 0:
+        return 0.0
+    area_a = max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
+    area_b = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+def detect_mask_space(plane, cutoff: float, lb: Letterbox, net_w: int, net_h: int,
+                      box: tuple[int, int, int, int]) -> str:
+    """Work out whether a plane covers the whole network input or just its box.
+
+    Both conventions exist and they are indistinguishable from shape alone, but
+    not from content: map the detection's own box into the plane and compare it
+    with where the ink actually is. A network-space mask lines up; a
+    box-cropped one fills the plane no matter where its box sits.
+
+    Args:
+        plane: One mask-space plane.
+        cutoff: Threshold in the plane's own units.
+        lb: Frame-to-network transform.
+        net_w: Model input width.
+        net_h: Model input height.
+        box: ``(x1, y1, x2, y2)`` in frame pixels.
+
+    Returns:
+        ``net``, ``box``, or ``""`` when the plane is empty and tells us nothing.
+    """
+    rows = np.nonzero((plane > cutoff).any(axis=1))[0]
+    cols = np.nonzero((plane > cutoff).any(axis=0))[0]
+    if rows.size == 0 or cols.size == 0:
+        return ""
+    mask_h, mask_w = plane.shape
+    seen = (
+        cols[0] / mask_w, rows[0] / mask_h,
+        (cols[-1] + 1) / mask_w, (rows[-1] + 1) / mask_h,
+    )
+    x1, y1, x2, y2 = box
+    expected = (
+        (x1 * lb.sx + lb.pad_x) / net_w, (y1 * lb.sy + lb.pad_y) / net_h,
+        (x2 * lb.sx + lb.pad_x) / net_w, (y2 * lb.sy + lb.pad_y) / net_h,
+    )
+    return "net" if _iou(seen, expected) >= 0.30 else "box"
+
+
+@dataclass
+class Instance:
+    """One detected object, with its mask already in frame coordinates.
+
+    Attributes:
+        box: The raw detection dict, for captions and metadata.
+        x1: Left edge in frame pixels, clipped to the frame.
+        y1: Top edge.
+        x2: Right edge, exclusive.
+        y2: Bottom edge, exclusive.
+        mask: Boolean ``(y2 - y1, x2 - x1)`` array, or None when the run is
+            falling back to box-shaped regions.
+        keep: Whether this instance counts as foreground for the blur.
+    """
+
+    box: dict
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+    mask: object = None
+    keep: bool = True
+
+    @property
+    def area(self) -> int:
+        return max(0, self.x2 - self.x1) * max(0, self.y2 - self.y1)
+
+    @property
+    def mask_area(self) -> int:
+        return int(self.mask.sum()) if self.mask is not None else self.area
+
+
+def as_cv_mask(mask):
+    """View a boolean mask as the uint8 mask OpenCV wants, without copying.
+
+    ``np.bool_`` is one byte holding 0 or 1, and every OpenCV mask argument
+    treats non-zero as set, so the view is free and the values already mean the
+    right thing.
+    """
+    return mask.view(np.uint8) if mask.flags["C_CONTIGUOUS"] else mask.astype(np.uint8)
+
+
+def refine_mask(mask, seg: SegmentConfig, scale: float):
+    """Smooth and grow a boolean mask according to the ``segmentation`` settings."""
+    if seg.blur_mask > 0:
+        k = max(3, int(round(seg.blur_mask * scale))) | 1
+        smoothed = cv2.GaussianBlur(mask.astype(np.uint8) * 255, (k, k), 0)
+        mask = smoothed > 127
+    if seg.dilate > 0:
+        radius = max(1, int(round(seg.dilate * scale)))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+        mask = cv2.dilate(mask.astype(np.uint8), kernel).astype(bool)
+    return mask
+
+
+def build_instances(
+    pipeline: Pipeline,
+    cfg: AppConfig,
+    boxes: list[dict],
+    bundle: MaskBundle,
+    frame_shape,
+    scale: float,
+) -> list[Instance]:
+    """Turn boxes plus mask data into per-instance masks in frame coordinates.
+
+    Args:
+        pipeline: Live pipeline, for the frame geometry, the class filter and
+            the one-shot fallback warning.
+        cfg: Application configuration.
+        boxes: Parsed detections, in source-image pixels.
+        bundle: Mask data for this frame, possibly empty.
+        frame_shape: The frame's ``(h, w, c)``.
+        scale: Overlay scale factor for this frame.
+
+    Returns:
+        One :class:`Instance` per usable box, in input order.
+    """
+    height, width = frame_shape[:2]
+    lb = None
+    cutoff = 0.0
+    if bundle.kind != "none":
+        mask_h, mask_w = bundle.shape
+        # A model pack that does not state its input size still tells us
+        # indirectly: the mask is the input divided by the head's stride.
+        net_w = pipeline.net_w or mask_w * cfg.segment.stride
+        net_h = pipeline.net_h or mask_h * cfg.segment.stride
+        pipeline.net_w, pipeline.net_h = net_w, net_h
+        lb = letterbox_transform(width, height, net_w, net_h, cfg.preprocess.resize_mode)
+        cutoff = plane_cutoff(bundle, cfg.segment.threshold)
+    elif boxes and cfg.segment.masks == "on" and not pipeline.warned_no_masks:
+        pipeline.warned_no_masks = True
+        if cfg.segment.fallback_to_boxes:
+            print(
+                "[warn] no mask data in the model output, falling back to box-shaped\n"
+                "       regions. The blur still works, the edges are just rectangles.\n"
+                "       Set segmentation.describe: on and check the tensor dump above\n"
+                "       against segmentation.source / coeff_counts.",
+                file=sys.stderr, flush=True,
+            )
+        else:
+            raise RuntimeError(
+                "no mask data in the model output. Check model.family is a -seg head "
+                "and segmentation.source, or set segmentation.fallback_to_boxes: on."
+            )
+
+    instances = []
+    for index, box in enumerate(boxes):
+        x1 = max(0, int(round(box["x1"])))
+        y1 = max(0, int(round(box["y1"])))
+        x2 = min(width, int(round(box["x2"])))
+        y2 = min(height, int(round(box["y2"])))
+        if x2 <= x1 or y2 <= y1:
+            continue
+
+        mask = None
+        if lb is not None and index < instance_count(bundle):
+            plane = instance_plane(bundle, index)
+            if not pipeline.mask_space:
+                # Decided once, from the first instance that has any ink in it.
+                space = cfg.segment.space
+                if space == "auto":
+                    space = detect_mask_space(
+                        plane, cutoff, lb, pipeline.net_w, pipeline.net_h, (x1, y1, x2, y2)
+                    )
+                if space:
+                    pipeline.mask_space = space
+                    print(f"masks: space={space}", flush=True)
+            local = (
+                resize_plane_to_box(plane, (x1, y1, x2, y2))
+                if pipeline.mask_space == "box"
+                else warp_plane_to_box(
+                    plane, lb, pipeline.net_w, pipeline.net_h, (x1, y1, x2, y2)
+                )
+            )
+            mask = refine_mask(local > cutoff, cfg.segment, scale)
+            if not mask.any():
+                # A mask that thresholds to nothing would silently remove the
+                # instance from the composite. The box is a worse answer than a
+                # mask but a much better one than a hole.
+                mask = None
+
+        class_id = int(box["class_id"])
+        keep = pipeline.keep_ids is None or class_id in pipeline.keep_ids
+        instances.append(Instance(box=box, x1=x1, y1=y1, x2=x2, y2=y2, mask=mask, keep=keep))
+    return instances
+
+
+def instance_count(bundle: MaskBundle) -> int:
+    if bundle.kind == "planes":
+        return int(bundle.planes.shape[0])
+    if bundle.kind == "proto":
+        return int(bundle.coeffs.shape[0])
+    return 0
+
+
+def foreground_mask(instances: list[Instance], frame_shape):
+    """Union of every kept instance, as a full-frame uint8 mask of 0 and 255."""
+    height, width = frame_shape[:2]
+    mask = np.zeros((height, width), dtype=np.uint8)
+    for inst in instances:
+        if not inst.keep:
+            continue
+        region = mask[inst.y1 : inst.y2, inst.x1 : inst.x2]
+        if inst.mask is None:
+            region[:] = 255
+        else:
+            # Union rather than assignment: overlapping instances must not
+            # punch each other's pixels back out of the foreground.
+            cv2.bitwise_or(region, 255, dst=region, mask=as_cv_mask(inst.mask))
+    return mask
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Compositing
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def blurred_background(frame, blur: BlurConfig, scale: float):
+    """Build the treated copy of the frame that shows through outside the mask.
+
+    Always returns a new array, never a view of ``frame``, because the caller
+    writes the sharp pixels back into it.
+
+    Args:
+        frame: BGR source frame.
+        blur: Background settings.
+        scale: Overlay scale factor, so sizes tuned at 1080p hold at any height.
+
+    Returns:
+        A BGR image the same size as ``frame``.
+    """
+    height, width = frame.shape[:2]
+
+    if blur.method == "pixelate":
+        block = max(2, int(round(blur.pixel_size * scale)))
+        small = cv2.resize(
+            frame,
+            (max(1, width // block), max(1, height // block)),
+            interpolation=cv2.INTER_AREA,
+        )
+        out = cv2.resize(small, (width, height), interpolation=cv2.INTER_NEAREST)
+    elif blur.method == "gaussian":
+        # Blurring at 1/N resolution is the whole reason this runs at frame
+        # rate on 1080p. The downscale is itself a low-pass, so what comes back
+        # is a blur either way; the kernel just has less area to cover.
+        down = max(1, blur.downscale)
+        small = (
+            cv2.resize(
+                frame,
+                (max(1, width // down), max(1, height // down)),
+                interpolation=cv2.INTER_AREA,
+            )
+            if down > 1
+            else frame
+        )
+        kernel = max(1, int(round(blur.kernel * scale / down))) | 1
+        small = cv2.GaussianBlur(small, (kernel, kernel), blur.sigma * scale / down)
+        out = (
+            cv2.resize(small, (width, height), interpolation=cv2.INTER_LINEAR)
+            if down > 1
+            else small
+        )
+    else:
+        out = frame.copy()
+
+    if blur.grayscale:
+        out = cv2.cvtColor(cv2.cvtColor(out, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
+    if blur.dim > 0:
+        out = cv2.convertScaleAbs(out, alpha=1.0 - blur.dim, beta=0.0)
+
+    # Opacity last, so one dial covers the blur, the desaturation and the
+    # dimming together instead of needing three of them turned down in step.
+    if blur.opacity < 1.0:
+        out = cv2.addWeighted(out, blur.opacity, frame, 1.0 - blur.opacity, 0.0)
+    return out
+
+
+def composite(frame, mask, blur: BlurConfig, scale: float):
+    """Keep the frame where the mask is set and the treated copy everywhere else.
+
+    Args:
+        frame: BGR source frame, left unmodified.
+        mask: Full-frame uint8 foreground mask, 0 or 255.
+        blur: Background settings.
+        scale: Overlay scale factor.
+
+    Returns:
+        A new BGR image.
+    """
+    background = blurred_background(frame, blur, scale)
+    if blur.invert:
+        # Blur the instances instead: same composite, opposite mask.
+        mask = cv2.bitwise_not(mask)
+
+    feather = int(round(blur.feather * scale))
+    if feather > 0:
+        # A hard cut shows every jag a 160x160 mask has after scaling to 1080p.
+        # Blurring the mask turns that edge into a short cross-fade, which is
+        # both cheaper and better looking than trying to refine the mask itself.
+        kernel = max(3, feather) | 1
+        alpha = cv2.cvtColor(cv2.GaussianBlur(mask, (kernel, kernel), 0), cv2.COLOR_GRAY2BGR)
+        # Blend in uint8 through OpenCV rather than promoting two 1080p frames
+        # to float32 and back. The arithmetic is identical to within a rounding
+        # step, and the float path costs more than the blur, the mask decode and
+        # every other sink put together.
+        return cv2.add(
+            cv2.multiply(frame, alpha, scale=1.0 / 255.0),
+            cv2.multiply(background, cv2.bitwise_not(alpha), scale=1.0 / 255.0),
+        )
+
+    # copyTo writes only where the mask is set and leaves the rest of the
+    # background untouched, which boolean fancy indexing does far more slowly.
+    return cv2.copyTo(frame, mask, background)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Frames and overlay
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -1885,14 +3004,14 @@ def frame_to_bgr(tensor):
 # A 20-colour palette with even hue spacing and consistent saturation, so
 # neighbouring classes stay distinguishable and nothing vanishes against a
 # bright or dark frame. BGR, because that is what OpenCV expects.
-BOX_COLORS = [
+MASK_COLORS = [
     (56, 56, 255), (49, 210, 207), (10, 249, 72), (227, 195, 0), (255, 112, 132),
     (144, 31, 255), (29, 178, 255), (49, 121, 255), (0, 194, 255), (98, 205, 0),
     (185, 243, 52), (255, 156, 87), (255, 88, 178), (184, 61, 245), (86, 96, 255),
     (0, 151, 255), (0, 229, 178), (146, 255, 51), (255, 194, 26), (255, 92, 92),
 ]
 
-FONT = cv2.FONT_HERSHEY_SIMPLEX if cv2 is not None else 0
+FONT = 0  # replaced with cv2.FONT_HERSHEY_SIMPLEX by load_runtime_dependencies()
 
 # All digits share one vertical extent in this font, so folding them to a single
 # digit keeps the cache to one entry per distinct caption rather than one per
@@ -1951,7 +3070,7 @@ def class_color(class_id: int) -> tuple[int, int, int]:
     Returns:
         A BGR tuple, repeating every 20 classes.
     """
-    return BOX_COLORS[class_id % len(BOX_COLORS)]
+    return MASK_COLORS[class_id % len(MASK_COLORS)]
 
 
 def draw_scale(frame, draw: DrawConfig) -> float:
@@ -1971,7 +3090,7 @@ def draw_scale(frame, draw: DrawConfig) -> float:
 
 
 def caption_text(box: dict, labels: list[str], draw: DrawConfig) -> str:
-    """Build the caption for one detection.
+    """Build the caption for one instance.
 
     Args:
         box: A single detection.
@@ -1990,47 +3109,54 @@ def caption_text(box: dict, labels: list[str], draw: DrawConfig) -> str:
     return " ".join(parts)
 
 
-def draw_boxes(frame, boxes: list[dict], labels: list[str], draw: DrawConfig) -> None:
-    """Draw detection boxes, centre markers and labelled captions in place.
+def draw_instances(frame, instances: list[Instance], labels: list[str], draw: DrawConfig) -> None:
+    """Tint, outline and caption every instance in place.
 
-    Each box is a plain rectangle in the class colour, with a centre dot and a
-    filled caption sitting directly above it. The caption flips below the box
-    when it would otherwise clip off the top of the frame.
+    Each instance gets a translucent fill in its class colour, a traced edge and
+    a filled caption sitting directly above its box. The caption flips inside
+    the box when it would otherwise clip off the top of the frame.
 
     Args:
         frame: BGR image, modified in place.
-        boxes: Detections with ``x1``, ``y1``, ``x2``, ``y2``, ``score`` and
-            ``class_id`` keys, in original-image pixels.
+        instances: Instances with masks already in frame coordinates.
         labels: Class names indexed by class id.
         draw: Visualization settings, from the ``visualization`` config section.
     """
-    h, w = frame.shape[:2]
+    height, width = frame.shape[:2]
     scale = draw_scale(frame, draw)
-    thickness = max(1, int(round(draw.box_thickness * scale)))
+    box_thickness = max(1, int(round(draw.box_thickness * scale)))
+    outline_thickness = max(1, int(round(draw.outline_thickness * scale)))
     text_scale = draw.text_scale * scale
     text_thickness = max(1, int(round(draw.text_thickness * scale)))
     pad = max(2, int(round(draw.text_padding * scale)))
-    radius = max(2, int(round(draw.centre_dot_radius * scale)))
 
-    # Paint larger boxes first, so small foreground objects stay legible.
-    ordered = sorted(
-        boxes, key=lambda b: (b["x2"] - b["x1"]) * (b["y2"] - b["y1"]), reverse=True
-    )
-    for box in ordered:
-        x1 = max(0, int(round(box["x1"])))
-        y1 = max(0, int(round(box["y1"])))
-        x2 = min(w - 1, int(round(box["x2"])))
-        y2 = min(h - 1, int(round(box["y2"])))
-        if x2 <= x1 or y2 <= y1:
-            continue
+    # Paint larger instances first, so small foreground objects stay legible.
+    for inst in sorted(instances, key=lambda i: i.area, reverse=True):
+        color = class_color(int(inst.box["class_id"]))
+        region = frame[inst.y1 : inst.y2, inst.x1 : inst.x2]
 
-        color = class_color(int(box["class_id"]))
+        if draw.mask_alpha > 0 and region.size:
+            alpha = draw.mask_alpha
+            tinted = cv2.addWeighted(
+                region, 1.0 - alpha, np.full_like(region, color, dtype=np.uint8), alpha, 0.0
+            )
+            if inst.mask is None:
+                region[:] = tinted
+            else:
+                cv2.copyTo(tinted, as_cv_mask(inst.mask), region)
 
-        if draw.centre_dot:
-            cv2.circle(frame, ((x1 + x2) // 2, (y1 + y2) // 2), radius, color, -1)
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+        if draw.mask_outline and inst.mask is not None:
+            contours, _ = cv2.findContours(
+                as_cv_mask(inst.mask), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+            cv2.drawContours(
+                frame, contours, -1, color, outline_thickness, cv2.LINE_AA,
+                offset=(inst.x1, inst.y1),
+            )
+        if draw.show_boxes or inst.mask is None:
+            cv2.rectangle(frame, (inst.x1, inst.y1), (inst.x2, inst.y2), color, box_thickness)
 
-        label = caption_text(box, labels, draw)
+        label = caption_text(inst.box, labels, draw)
         if not label:
             continue
 
@@ -2039,10 +3165,10 @@ def draw_boxes(frame, boxes: list[dict], labels: list[str], draw: DrawConfig) ->
         band_w = text_w + pad * 2
         band_h = above + below + pad * 2
 
-        top = y1 - band_h
+        top = inst.y1 - band_h
         if top < 0:                      # would clip off the top, so sit inside
-            top = y1
-        left = max(0, min(x1, w - band_w))
+            top = inst.y1
+        left = max(0, min(inst.x1, width - band_w))
 
         cv2.rectangle(frame, (left, top), (left + band_w, top + band_h), color, -1)
         cv2.putText(
@@ -2105,36 +3231,44 @@ def draw_fps(frame, fps: float, draw: DrawConfig) -> None:
     )
 
 
-def metadata_objects(boxes: list[dict], labels: list[str], w: int, h: int) -> list[dict]:
+# ─────────────────────────────────────────────────────────────────────────────
+# Sinks
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def metadata_objects(instances: list[Instance], labels: list[str]) -> list[dict]:
     objects = []
-    for index, box in enumerate(boxes, start=1):
-        x = max(0, int(box["x1"]))
-        y = max(0, int(box["y1"]))
-        bw = max(0, int(box["x2"] - box["x1"]))
-        bh = max(0, int(box["y2"] - box["y1"]))
-        bw = min(bw, w - x)
-        bh = min(bh, h - y)
-        class_id = int(box["class_id"])
+    for index, inst in enumerate(instances, start=1):
+        class_id = int(inst.box["class_id"])
         objects.append(
             {
                 "id": f"obj_{index}",
                 "label": labels[class_id] if 0 <= class_id < len(labels) else "unknown",
-                "confidence": float(box["score"]),
-                "bbox": [float(x), float(y), float(max(0, bw)), float(max(0, bh))],
+                "confidence": float(inst.box["score"]),
+                "bbox": [
+                    float(inst.x1),
+                    float(inst.y1),
+                    float(inst.x2 - inst.x1),
+                    float(inst.y2 - inst.y1),
+                ],
+                # Pixels the mask actually covers, which is what separates a
+                # thin diagonal object from the box that contains it.
+                "mask_area": inst.mask_area,
+                "foreground": bool(inst.keep),
             }
         )
     return objects
 
 
-def send_metadata(pipeline: Pipeline, stamp: FrameStamp, boxes: list[dict]) -> None:
+def send_metadata(pipeline: Pipeline, stamp: FrameStamp, instances: list[Instance]) -> None:
     if pipeline.metadata_sender is None:
         return
     timestamp_ms = int(stamp.pts_ns // 1_000_000) if stamp.pts_ns >= 0 else -1
     frame_id = str(stamp.frame_id) if stamp.frame_id >= 0 else ""
     pipeline.metadata_sender.send_metadata(
-        "object-detection",
+        "instance-segmentation",
         json.dumps(
-            {"objects": metadata_objects(boxes, pipeline.labels, pipeline.frame_w, pipeline.frame_h)},
+            {"objects": metadata_objects(instances, pipeline.labels)},
             separators=(",", ":"),
         ),
         timestamp_ms,
@@ -2180,13 +3314,17 @@ def wants_jpeg(cfg: AppConfig, index: int) -> bool:
     return cfg.save_enable and cfg.save_every > 0 and index % cfg.save_every == 0
 
 
-def render_annotated(cfg: AppConfig, pipeline: Pipeline, frame, boxes: list[dict], fps: float):
-    """Draw once per frame and share the result between the video and JPEG sinks."""
-    annotated = frame.copy()
-    # FPS first, so a detection in the top-left corner is never hidden by it.
+def render_annotated(cfg: AppConfig, pipeline: Pipeline, frame, instances, fps: float):
+    """Composite the blur, then draw over it, once per frame for every sink."""
+    scale = draw_scale(frame, cfg.draw)
+    if cfg.blur.enable:
+        annotated = composite(frame, foreground_mask(instances, frame.shape), cfg.blur, scale)
+    else:
+        annotated = frame.copy()
+    # FPS first, so an instance in the top-left corner is never hidden by it.
     if cfg.video_hud:
         draw_fps(annotated, fps, cfg.draw)
-    draw_boxes(annotated, boxes, pipeline.labels, cfg.draw)
+    draw_instances(annotated, instances, pipeline.labels, cfg.draw)
     return annotated
 
 
@@ -2230,8 +3368,8 @@ class Stopper:
 class ProfileWindow:
     """Rolling per-stage timing accumulator.
 
-    Sums pull, decode and sink latencies over a fixed number of frames, then
-    prints one averaged line and resets. Averaging avoids the noise of
+    Sums pull, decode, mask and sink latencies over a fixed number of frames,
+    then prints one averaged line and resets. Averaging avoids the noise of
     per-frame timings without needing to keep every sample.
 
     Attributes:
@@ -2252,21 +3390,30 @@ class ProfileWindow:
 
     def reset(self) -> None:
         self.frames = 0
-        self.boxes = 0
+        self.instances = 0
         self.start_ms = 0.0
         self.pull_ms = 0.0
         self.decode_ms = 0.0
+        self.mask_ms = 0.0
         self.sink_ms = 0.0
 
-    def add(self, pull_ms: float, decode_ms: float, sink_ms: float, box_count: int) -> None:
+    def add(
+        self,
+        pull_ms: float,
+        decode_ms: float,
+        mask_ms: float,
+        sink_ms: float,
+        instance_count: int,
+    ) -> None:
         if not self.enabled:
             return
         if self.frames == 0:
             self.start_ms = time_ms()
         self.frames += 1
-        self.boxes += box_count
+        self.instances += instance_count
         self.pull_ms += pull_ms
         self.decode_ms += decode_ms
+        self.mask_ms += mask_ms
         self.sink_ms += sink_ms
         if self.frames >= self.interval:
             self.flush()
@@ -2280,8 +3427,9 @@ class ProfileWindow:
             f"[profile] frames={self.frames} fps={fps:.1f} "
             f"pull={self.pull_ms / self.frames:.1f}ms "
             f"decode={self.decode_ms / self.frames:.1f}ms "
+            f"masks={self.mask_ms / self.frames:.1f}ms "
             f"sinks={self.sink_ms / self.frames:.1f}ms "
-            f"boxes={self.boxes / self.frames:.1f}",
+            f"instances={self.instances / self.frames:.1f}",
             flush=True,
         )
         self.reset()
@@ -2295,18 +3443,18 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
     processed = 0
     timeouts = 0
     heartbeat_start = time_ms()
-    heartbeat_boxes = 0
+    heartbeat_instances = 0
     live_fps = float(pipeline.fps or 25)   # HUD value, refreshed each heartbeat
 
     while not stopper.stop and (cfg.frames <= 0 or processed < cfg.frames):
         pull_start = time_ms()
-        sample = pipeline.run.pull("detector_output", cfg.pull_timeout_ms)
+        sample = pipeline.run.pull("segmenter_output", cfg.pull_timeout_ms)
         pull_end = time_ms()
 
         if sample is None:
             timeouts += 1
             print(
-                f"[warn] timed out waiting for detections ({timeouts})",
+                f"[warn] timed out waiting for instances ({timeouts})",
                 file=sys.stderr, flush=True,
             )
             if cfg.source_type == "video":
@@ -2329,17 +3477,58 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
             continue
 
         stamp = FrameStamp.of(sample)
-        boxes = parse_boxes(
-            extract_bbox_payload(sample),
-            pipeline.frame_w,
-            pipeline.frame_h,
-            cfg.max_detections,
-        )
+        instances_field = joined_field(sample, "instances", 1)
+        payload, bbox_tensor = extract_bbox_payload(instances_field)
+        boxes = parse_boxes(payload, pipeline.frame_w, pipeline.frame_h, cfg.max_detections)
         frame = frame_to_bgr(first_tensor(joined_field(sample, "frame", 0)))
-        # `boxes` and `frame` are copies, so give the decoder its buffer back
-        # before the sinks rather than after. See FrameStamp for why.
-        sample = None
         decode_end = time_ms()
+
+        if cfg.segment.describe and not pipeline.described and boxes:
+            pipeline.described = True
+            layout = packed_mask_layout(len(payload), cfg.max_detections, cfg.segment)
+            if layout is None:
+                solved = (
+                    f"  packed layout: {len(payload)} bytes does not decompose into "
+                    f"4 + slots*{BBOX_RECORD_SIZE} + slots*side*side"
+                )
+            else:
+                slots, side = layout
+                solved = (
+                    f"  packed layout: 4 + {slots}*{BBOX_RECORD_SIZE} + "
+                    f"{slots}*{side}*{side} = "
+                    f"{4 + slots * BBOX_RECORD_SIZE + slots * side * side} bytes"
+                )
+            print(
+                "model output tensors (first frame with instances):\n"
+                f"{describe_tensors(instances_field)}\n{solved}",
+                flush=True,
+            )
+
+        bundle = extract_masks(
+            instances_field, bbox_tensor, payload, len(boxes), cfg.segment, cfg.max_detections
+        )
+        if bundle.kind != "none" and not pipeline.mask_kind:
+            pipeline.mask_kind = bundle.origin or bundle.kind
+            mask_h, mask_w = bundle.shape
+            if bundle.probabilities:
+                values = "0/1 binary" if bundle.peak <= 1 else f"0..{bundle.peak}"
+            else:
+                values = "logits"
+            print(
+                f"masks: source={pipeline.mask_kind} layout={bundle.kind} "
+                f"{mask_w}x{mask_h} slots={instance_count(bundle)} values={values}",
+                flush=True,
+            )
+        instances = build_instances(
+            pipeline, cfg, boxes, bundle, frame.shape, draw_scale(frame, cfg.draw)
+        )
+
+        # Everything from here on works on plain numpy and Python objects, so
+        # give the decoder its buffer back before compositing rather than after.
+        # `frame` and `payload` are already copies; `bundle` is either a view on
+        # `payload` or an explicit copy. Nothing below touches pyneat.
+        sample = instances_field = bbox_tensor = bundle = None
+        mask_end = time_ms()
 
         processed += 1
         need_jpeg = wants_jpeg(cfg, processed)
@@ -2351,18 +3540,19 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
 
         # Render once, then share the result across every sink that wants it.
         annotated = (
-            render_annotated(cfg, pipeline, frame, boxes, live_fps)
+            render_annotated(cfg, pipeline, frame, instances, live_fps)
             if need_annotated
             else None
         )
 
-        # With insight_annotated the viewer shows our overlay. Without it,
-        # Insight receives the raw frame and draws its own from the metadata.
+        # With insight_annotated the viewer shows our composite. Without it,
+        # Insight receives the raw frame and draws its own overlay from the
+        # metadata, which has boxes but no masks.
         push_video(
             pipeline, stamp,
             annotated if (cfg.insight_annotated and annotated is not None) else frame,
         )
-        send_metadata(pipeline, stamp, boxes)
+        send_metadata(pipeline, stamp, instances)
 
         if pipeline.writer is not None:
             pipeline.writer.write(annotated)
@@ -2372,25 +3562,29 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
         sink_end = time_ms()
 
         profile.add(
-            pull_end - pull_start, decode_end - pull_end, sink_end - decode_end, len(boxes)
+            pull_end - pull_start,
+            decode_end - pull_end,
+            mask_end - decode_end,
+            sink_end - mask_end,
+            len(instances),
         )
 
         # Heartbeat, so a healthy run does not look identical to a stalled one.
-        heartbeat_boxes += len(boxes)
+        heartbeat_instances += len(instances)
         if processed % HEARTBEAT_EVERY == 0:
             elapsed = time_ms() - heartbeat_start
             rate = HEARTBEAT_EVERY * 1000.0 / elapsed if elapsed > 0 else 0.0
             live_fps = rate or live_fps
             print(
                 f"[{processed}] {rate:.1f} fps, "
-                f"{heartbeat_boxes / HEARTBEAT_EVERY:.1f} detections/frame avg",
+                f"{heartbeat_instances / HEARTBEAT_EVERY:.1f} instances/frame avg",
                 flush=True,
             )
             heartbeat_start = time_ms()
-            heartbeat_boxes = 0
+            heartbeat_instances = 0
 
     profile.flush()
-    print(f"processed={processed} timeouts={timeouts}")
+    print(f"processed={processed} timeouts={timeouts} masks={pipeline.mask_kind or 'none'}")
 
     # A recording that is over almost before it starts is the most commonly
     # reported symptom, and it has three quite different causes. Rank them here
@@ -2435,12 +3629,22 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="SiMa Neat YOLO object detector")
+    parser = argparse.ArgumentParser(
+        description="SiMa Neat YOLO instance segmentation with a background blur"
+    )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument(
         "--validate-config",
         action="store_true",
         help="Parse and validate the config without loading pyneat or the model.",
+    )
+    parser.add_argument(
+        "--minimal",
+        action="store_true",
+        help="Pull frames and do nothing else: no masks, no blur, no overlay, no "
+             "video, no stills, no Insight. If a run that stalls part-way through "
+             "completes with this, the cause is how much work the app does per "
+             "frame; if it stalls at the same frame, the cause is the graph.",
     )
     args = parser.parse_args(argv)
 
@@ -2448,10 +3652,39 @@ def main(argv: list[str] | None = None) -> int:
     try:
         cfg = load_app_config(args.config)
         if args.validate_config:
+            net_w, net_h = resolve_net_size(cfg)
+            # Needs the labels file, not the board, so a typo in
+            # blur.keep_classes is caught here rather than on the DevKit.
+            keep_ids = resolve_keep_classes(cfg, load_labels(cfg.labels_path))
             print(f"config OK: {args.config}")
             print(f"  family={cfg.family} -> BoxDecodeType.{FAMILY_DECODE_TOKENS[cfg.family]}")
             print(f"  {describe_preprocess(cfg, cfg.source_width, cfg.source_height)}")
+            print(
+                f"  segmentation: masks={cfg.segment.masks} source={cfg.segment.source} "
+                f"space={cfg.segment.space} threshold={cfg.segment.threshold} "
+                f"net={f'{net_w}x{net_h}' if net_w else '<from the first mask>'}"
+            )
+            print(f"  {describe_blur(cfg)}")
+            if keep_ids is not None:
+                print(f"  foreground class ids: {sorted(keep_ids)}")
             return 0
+
+        if args.minimal:
+            # Strip the consumer back to a bare pull loop. Nothing here changes
+            # the graph, so it isolates "we are too slow" from "the graph is
+            # wrong" in a single run.
+            cfg = dataclasses.replace(
+                cfg,
+                segment=dataclasses.replace(cfg.segment, masks="off", describe=False),
+                blur=dataclasses.replace(cfg.blur, enable=False),
+                save_enable=False, video_enable=False, insight_enable=False,
+            )
+            print(
+                "[minimal] masks, blur, overlay, video, stills and Insight are all "
+                "off.\n          Reaching the end of the clip means the graph is fine "
+                "and the app was\n          simply holding buffers too long.",
+                flush=True,
+            )
 
         load_runtime_dependencies()
         if cfg.profile:
