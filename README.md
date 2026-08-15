@@ -61,7 +61,6 @@ and follow that README the rest of the way.
 Each app README owns its own model, video, config, overlay, tuning and errors. Nothing
 about running an app lives on this page.
 
----
 
 ## Contents
 
@@ -291,8 +290,6 @@ ssh sima@<devkit-ip> "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat.__ver
 > on. The DevKit IP also changes between reboots (DHCP), so if things hang, check with
 > `arp -a | Select-String "192.168.137"`.
 
----
-
 ## Now pick an app
 
 Setup is finished. **Everything from here is app-specific**, so continue in one of these
@@ -307,8 +304,6 @@ and do not come back except for the shared reference below.
 Each of those covers, for its own app: fetching the model and a test video, deploying,
 running, pulling the result back, every config key, the overlay, tuning and its own error
 table.
-
----
 
 ## Shared rules and reference
 
@@ -572,8 +567,6 @@ sima-cli neat install core@v0.3.0
 > `-t pyneat` fetches only the wheel, which is not enough to run an app.
 
 </details>
-
----
 
 ## License
 

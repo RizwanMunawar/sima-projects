@@ -48,8 +48,6 @@ three commands away.
 > ssh sima@<devkit-ip> "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat.__version__)'"
 > ```
 
----
-
 ## Contents
 
 Everything on this page is specific to segmentation and the blur. The one-time DevKit
@@ -945,8 +943,6 @@ Problems with a **running segmenter**. Bring-up problems are in the
 | Masks in the wrong place | `resize.mode: letterbox`, `pad_value: 114`. Do not add your own maths |
 | Output shorter than the input, plays fast | Frames dropped. Set `runtime.overflow_policy: auto` |
 | `processed=0` and a 20 s timeout | Leave `source.width`, `source.height` and `source.fps` at 0 |
-
----
 
 ## License
 

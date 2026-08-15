@@ -43,8 +43,6 @@ the app draws a box, a centre marker and a labelled caption on every frame.
 > ssh sima@<devkit-ip> "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat.__version__)'"
 > ```
 
----
-
 ## Contents
 
 | Section | What it covers |
@@ -273,12 +271,6 @@ video: wrote 3012 frames to detections.mp4 (48.3 MB)
 It looks like this:
 
 <div align="center">
-
-<!-- ─────────────────────────────────────────────────────────────────────────
-     Embed the demo video here.
-     GitHub accepts a drag-and-dropped .mp4 directly in the README editor,
-     or paste the user-images.githubusercontent.com URL it generates.
-     ───────────────────────────────────────────────────────────────────── -->
 
 https://github.com/user-attachments/assets/d8fbc213-dce3-4d7b-bda7-bdf643adcf4a
 
@@ -689,8 +681,6 @@ Problems with a **running detector**. Bring-up problems are in the
 | Output video shorter than the input, and plays fast | Frames are being dropped. Set `runtime.overflow_policy: auto` |
 | `processed=0` and a 20 s timeout | The source caps filter is not negotiating. Leave `source.width`, `source.height` and `source.fps` at 0 |
 | Dropped frames on a live source | Raise `runtime.queue_depth`, keep `overflow_policy: auto` |
-
----
 
 ## License
 
