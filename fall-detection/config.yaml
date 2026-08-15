@@ -1,0 +1,283 @@
+# SiMa Neat fall detection with SMTP alerts
+#
+# Paths are DevKit paths, relative to where you launch app.py (~/fall-detection).
+# Windows paths (C:\ D:\) cannot work: the app runs on Linux.
+
+model:
+  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
+  labels: src/coco_labels.txt
+
+  # Detection head. Must match your model or you get no detections.
+  # yolo | yolov5 | yolov6 | yolov7 | yolov8 | yolov9 | yolov10 
+  # | yolo11 | yolo26 | yolox
+  # Add -seg or -pose for those variants. yolo11 maps to the YOLOv8 head.
+  family: yolo26
+
+  decode_type_option: auto            # head packing override, leave auto for SiMa model packs
+  num_classes: 0                      # 0 = read from the model archive
+
+source:
+  type: video                          # video | rtsp | usb
+  # Fetched by "Get a model and a test video" in the README. .h264 only.
+  uri: assets/videos/people-walking-inside-mall.h264
+
+  # Leave these at 0. For .h264 the app reads the real geometry out of the
+  # stream's SPS, and the stream always wins over anything set here.
+  fps: 0
+  width: 0
+  height: 0
+
+  rtsp:
+    codec: h264                        # h264 | mjpeg
+    tcp: true
+    latency_ms: 100
+
+  usb:
+    camera_name: ""                    # "" = DevKit default camera
+    format: NV12
+
+# Use a raw H.264 elementary stream, not .mp4. Containers hit a demuxer bug in
+# Neat 0.3.0. Convert losslessly:
+#   ffmpeg -i clip.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 clip.h264
+
+preprocess:
+  # What the app asks for. The route planner resolves it against the model
+  # archive and compiles the matching graph. `auto` means "planner decides".
+  kind: image                # image | tensor | auto
+  enable: on                 # on | off | auto
+
+  input_format: NV12         # what the source produces: NV12 for video/rtsp/usb, BGR for images
+  output_format: auto        # auto = take it from the model contract
+
+  input_max_width: 0         # 0 = use the probed source size
+  input_max_height: 0
+
+  resize:
+    enable: on
+    width: 0                 # 0 = infer from the model (640x640 for most YOLO)
+    height: 0
+    mode: letterbox          # letterbox (YOLO default) | stretch | crop
+    pad_value: 114
+    scaling_type: BILINEAR   # BILINEAR | NEAREST_NEIGHBOUR | BICUBIC | INTERAREA | NO_SCALING
+
+  normalize:
+    enable: on
+    preset: coco_yolo        # coco_yolo (all YOLO) | imagenet | none
+    mean: [0.0, 0.0, 0.0]    # only read when preset is none
+    stddev: [1.0, 1.0, 1.0]
+
+  # Leave both auto. The model pack's dtype contract decides whether these run
+  # in the preprocess graph or inside the MLA.
+  quantize:
+    enable: auto
+    zero_point: 0
+    scale: 0.0               # 0.0 = use the model's calibration
+  tessellate:
+    enable: auto
+    slice_shape: []          # empty = use the contract geometry
+
+decode:
+  score_threshold: 0.35      # minimum confidence. Raise it to cut false tracks
+  nms_iou: 0.60              # overlap threshold for non-max suppression
+  max_detections: 50         # top-K cap per frame
+
+# Who gets followed from frame to frame.
+#
+# A fall is a change over time, so the same person has to stay recognisable
+# between frames before "they were upright and now they are not" means
+# anything. This is greedy IoU association: cheap, and good enough for people
+# walking around a warehouse.
+tracking:
+  # Only these classes can fall. Names from the labels file, or bare ids.
+  # Leaving this empty tracks all 80 COCO classes, which is never what you want.
+  classes: [person]
+
+  iou_threshold: 0.30        # minimum overlap to call two boxes the same person
+  max_age: 30                # frames a track survives unseen. Carries an occlusion
+  min_hits: 3                # frames before a track is trusted. Kills one-frame blips
+  history_seconds: 3.0       # per-track history kept. Must be >= fall.descent_window
+  upright_aspect: 0.70       # at or below this, the person is learning their own height
+
+# When a tracked person counts as fallen.
+#
+# Three signals, all from the bounding box:
+#   aspect    standing is tall and narrow, fallen is wide and short
+#   collapse  the box is far shorter than this person's own learned height
+#   descent   the box centre drops fast, which is what separates a fall from
+#             lying down on purpose
+#
+# Any one can fire spuriously for a frame or two, so nothing is reported until
+# it has held for confirm_seconds. That delay is the difference between a
+# useful alert and one nobody reads.
+fall:
+  enable: on                 # off = plain person tracking, useful while tuning
+
+  aspect_ratio: 1.20         # width/height at or above which the box reads as lying down
+  height_drop: 0.55          # fallen if height <= 55% of this person's upright height
+  descent_rate: 0.55         # downward speed as a fraction of frame height per second
+  descent_window: 0.7        # seconds over which that speed is measured
+
+  confirm_seconds: 1.5       # how long a signal must hold. THE knob to tune first
+  recover_seconds: 3.0       # upright for this long before the track re-arms
+
+  min_box_height: 0.08       # ignore people shorter than 8% of the frame
+
+# Email when a fall is confirmed.
+#
+# There is no password key here on purpose: this file is committed to git, and
+# a password in it is a password on GitHub. Export it instead:
+#
+#   export FALL_ALERT_SMTP_PASSWORD='your-app-password'
+#
+# Sending runs on a background thread, so a slow or dead mail server can never
+# stall the pipeline. Check the wiring without waiting for a fall:
+#
+#   python3 src/app.py --test-alert
+alerts:
+  enable: off                # master switch
+  dry_run: on                # compose and log, connect to nothing. Turn off to really send
+
+  site: "Warehouse camera 1" # where this camera is. Goes in the subject and body
+  from: ""                   # e.g. alerts@example.com
+  to: []                     # e.g. [safety@example.com, shift-lead@example.com]
+  subject: "[{site}] Fall detected - track #{track_id} at {time}"
+
+  cooldown_seconds: 60       # minimum gap between alerts, across every track
+  attach_snapshot: on        # attach the annotated frame
+  snapshot_dir: alerts       # where those snapshots are written on the DevKit
+  queue_depth: 8             # pending alerts. Beyond this they are dropped, never blocked
+
+  smtp:
+    host: smtp.gmail.com
+    port: 587                # 587 with starttls, 465 with ssl, 25 for a plain relay
+    starttls: on
+    ssl: off                 # implicit TLS instead of starttls. Never both
+    username: ""             # empty = unauthenticated relay
+    password_env: FALL_ALERT_SMTP_PASSWORD
+    timeout: 20
+
+runtime:
+  frames: 0                  # 0 = run until interrupted
+  pull_timeout_ms: 20000     # how long to wait for a frame before giving up
+  queue_depth: 3
+
+  # Buffers each public output may hold. THE knob for "the run stops after N
+  # frames and then times out".
+  #
+  # Every buffer here is a frame checked out of the hardware decoder's pool, and
+  # that pool is small: the boot log prints `BufferNum=8` on this board. There
+  # are two public outputs, so this number is doubled, and the source appsink
+  # holds up to 4 more. At 4 that is 4*2 + 4 = 12 against a pool of 8, which
+  # only survives because a fast consumer drains it before both fill. A slower
+  # one (segmentation, a big model, JPEGs every frame) deadlocks the decoder:
+  # it cannot produce, so the app cannot consume, so nothing is ever released.
+  #
+  # Observed on a Modalix DevKit with the yolo26m-seg pack: 4 -> stalls at 8
+  # frames, 2 -> stalls at 25, 1 -> the lowest pressure this knob allows.
+  # Raise it only if a run completes and you want more headroom.
+  output_buffers: 1
+  # auto splits on source type, because a file and a camera want opposites:
+  #   file        -> reliable + block       every frame is kept, no deadline
+  #   rtsp / usb  -> realtime + keep_latest stay current, a camera cannot pause
+  # Forcing keep_latest on a file is what makes the recording short and fast:
+  # inference is slower than decoding, the surplus frames are discarded, and the
+  # survivors are still written at the source rate.
+  preset: auto               # auto | realtime | balanced | reliable
+  overflow_policy: auto      # auto | block | keep_latest | drop_incoming
+  profile: false             # per-stage timings
+  profile_interval: 100
+
+# How the overlay looks. Sizes are in pixels for a 1080p frame; with
+# auto_scale on they are multiplied by (frame height / reference_height), so 4K
+# does not get hairlines and 480p does not get slabs. Colours are [B, G, R]
+# because OpenCV is BGR, so [0, 0, 255] is red.
+visualization:
+  box_thickness: 3           # detection rectangle outline weight
+  text_scale: 1.0            # caption font size multiplier
+  text_thickness: 2          # caption stroke weight
+  text_padding: 10           # gap between caption text and the edge of its band
+
+  centre_dot: on             # filled dot at the centre of each box
+  centre_dot_radius: 7
+
+  show_track_ids: on         # "#7" in the caption, so you can follow one person
+  show_labels: on            # the fall state in the caption: upright/falling/fallen
+  show_scores: on            # confidence in the caption
+
+  # Full-width strip across the bottom while anyone is down. A red box around
+  # one person is easy to miss on a wall of camera tiles; a band is not.
+  banner:
+    enable: on
+    text_scale: 0.0          # 0 = follow text_scale above
+    text_thickness: 0        # 0 = follow text_thickness above
+    padding: 18
+    alpha: 0.75              # strip opacity, 0.0 to 1.0
+    bg_color: [56, 56, 255]  # red
+    text_color: [255, 255, 255]
+  score_decimals: 2          # 2 gives "person 0.57", 0 gives "person 1"
+
+  text_color: [255, 255, 255]   # caption text, white
+
+  auto_scale: on             # scale every size above with the frame height
+  reference_height: 1080     # the height those sizes are tuned for
+
+  # The FPS badge in the corner, drawn when output.video.hud is true.
+  # text_scale, text_thickness and padding follow the caption settings above
+  # when left at 0. Padding is what sets the badge size; the two minimums can
+  # only make it bigger, and the text stays centred either way.
+  hud:
+    text_color: [104, 31, 17]
+    bg_color: [255, 255, 255]
+    text_scale: 2.0          # 0 = follow text_scale above
+    text_thickness: 5        # 0 = follow text_thickness above
+
+    # Breathing room inside the badge, between the text and the badge edge.
+    # `padding` sets all four sides; padding_x / padding_y override the
+    # horizontal and vertical pair independently. 0 on either follows `padding`.
+    padding: 22              # 0 = follow text_padding above
+    padding_x: 34            # left and right gap
+    padding_y: 24            # top and bottom gap
+
+    # Gap between the badge and the top-left corner of the frame.
+    # 0 on either follows the matching padding.
+    margin_x: 28
+    margin_y: 24
+
+    fps_decimals: 0          # 0 gives "FPS: 25", 1 gives "FPS: 24.8"
+    min_width: 0             # 0 = fit the text
+    min_height: 0            # 0 = fit the text
+
+output:
+
+  # Annotated video written on the DevKit, one entry per processed frame.
+  # Survives the run, unlike the UDP feed.
+  video:
+    enable: true
+    path: falls.mp4
+    codec: mp4v              # 4-char FourCC, falls back to MJPG/.avi automatically
+    fps: 0                   # 0 = match the source
+    hud: true                # small FPS badge in the top-left corner
+
+  # Annotated stills. `every` below skips STILLS only. The video above always
+  # gets every processed frame; there is no frame-skip setting for it.
+  save:
+    enable: true
+    dir: frames
+    # Write every Nth frame, 0 disables. A 1080p JPEG per frame is real work on
+    # the board; 10 gives you plenty to look at and keeps the pipeline ahead of
+    # the decoder.
+    every: 10
+    overlay: true
+    format: jpg              # jpg | png
+
+  # Optional live UDP feed to Neat Insight. Off by default: everything you need
+  # is the annotated video and stills above, which survive the run. Turning this
+  # on also needs inbound UDP 9000-9079 / 9100-9179 opened on the Hyper-V firewall.
+  insight:
+    enable: false
+    annotated: true           # send our overlay. false sends raw and lets Insight draw
+    host: 192.168.137.1       # your PC ip address as the DevKit sees it, NOT 127.0.0.1
+    channel: 0                # video port = video_port_base + channel
+    video_port_base: 9000
+    metadata_port_base: 9100
+    bitrate_kbps: 2000
