@@ -135,9 +135,17 @@ class DrawConfig:
         hud_bg_color: Frame-rate badge fill colour, BGR.
         hud_text_scale: Badge font scale. 0 follows ``text_scale``.
         hud_text_thickness: Badge stroke weight. 0 follows ``text_thickness``.
-        hud_padding: Gap between badge text and badge edge. 0 follows
-            ``text_padding``. This is what sets the badge size when no minimum
-            is given.
+        hud_padding: Gap between badge text and badge edge, on every side. 0
+            follows ``text_padding``. This is what sets the badge size when no
+            minimum is given.
+        hud_padding_x: Left/right gap. 0 follows ``hud_padding``.
+        hud_padding_y: Top/bottom gap. 0 follows ``hud_padding``.
+        hud_margin_x: Gap between the badge and the left frame edge. 0 follows
+            the resolved horizontal padding.
+        hud_margin_y: Gap between the badge and the top frame edge. 0 follows
+            the resolved vertical padding.
+        hud_fps_decimals: Decimal places on the frame rate. 0 gives ``FPS: 25``,
+            1 gives ``FPS: 24.8``.
         hud_min_width: Floor on badge width in pixels. 0 fits the text.
         hud_min_height: Floor on badge height in pixels. 0 fits the text.
         auto_scale: Whether sizes scale with frame height.
@@ -159,6 +167,11 @@ class DrawConfig:
     hud_text_scale: float = 0.0
     hud_text_thickness: int = 0
     hud_padding: int = 0
+    hud_padding_x: int = 0
+    hud_padding_y: int = 0
+    hud_margin_x: int = 0
+    hud_margin_y: int = 0
+    hud_fps_decimals: int = 0
     hud_min_width: int = 0
     hud_min_height: int = 0
     auto_scale: bool = True
@@ -196,6 +209,11 @@ class AppConfig:
         frames: Frame limit. 0 runs until interrupted.
         pull_timeout_ms: How long to wait for a frame before giving up.
         queue_depth: Runtime queue depth.
+        output_buffers: Buffers each public output may hold. Every one of
+            them is a frame checked out of the hardware decoder's pool, and
+            that pool is small (the boot log prints ``BufferNum=8``). Two
+            outputs at 4 is already the whole pool, so a slow consumer
+            deadlocks the decoder. Keep the product well under BufferNum.
         run_preset: One of ``realtime``, ``balanced`` or ``reliable``.
         overflow_policy: One of ``keep_latest``, ``block`` or ``drop_incoming``.
         profile: Whether to print per-stage timings.
@@ -246,6 +264,7 @@ class AppConfig:
     frames: int
     pull_timeout_ms: int
     queue_depth: int
+    output_buffers: int
     run_preset: str
     overflow_policy: str
     profile: bool
@@ -380,6 +399,11 @@ def load_draw_config(raw: dict) -> DrawConfig:
         hud_text_scale=_float(hud, "text_scale", default.hud_text_scale),
         hud_text_thickness=_int(hud, "text_thickness", default.hud_text_thickness),
         hud_padding=_int(hud, "padding", default.hud_padding),
+        hud_padding_x=_int(hud, "padding_x", default.hud_padding_x),
+        hud_padding_y=_int(hud, "padding_y", default.hud_padding_y),
+        hud_margin_x=_int(hud, "margin_x", default.hud_margin_x),
+        hud_margin_y=_int(hud, "margin_y", default.hud_margin_y),
+        hud_fps_decimals=_int(hud, "fps_decimals", default.hud_fps_decimals),
         hud_min_width=_int(hud, "min_width", default.hud_min_width),
         hud_min_height=_int(hud, "min_height", default.hud_min_height),
         auto_scale=_flag(section, "auto_scale", "on") == "on",
@@ -428,6 +452,32 @@ def load_preprocess_config(raw: dict) -> PreprocessConfig:
     )
 
 
+def resolve_labels_path(value: str, config_path: Path) -> Path:
+    """Find the labels file, tolerating where the app was launched from.
+
+    ``model.labels`` is written relative to the app directory, because that is
+    where the DevKit launches from. Validating a config off-board is normally
+    done from the repo root instead, and failing there would make
+    ``--validate-config`` useless in exactly the place it is most useful. So try
+    the literal path first, then beside ``config.yaml``, then the copy packaged
+    next to this file.
+
+    Args:
+        value: The raw ``model.labels`` string.
+        config_path: Path to the config file being loaded.
+
+    Returns:
+        The first candidate that exists, or the literal path so the caller still
+        reports the name the user actually wrote.
+    """
+    given = Path(value)
+    for candidate in (given, config_path.resolve().parent / value):
+        if candidate.is_file():
+            return candidate
+    packaged = Path(__file__).resolve().parent / "coco_labels.txt"
+    return packaged if packaged.is_file() else given
+
+
 def load_app_config(path: Path) -> AppConfig:
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
@@ -448,7 +498,7 @@ def load_app_config(path: Path) -> AppConfig:
 
     cfg = AppConfig(
         model_path=_str(model, "path"),
-        labels_path=Path(_str(model, "labels", str(default_labels))),
+        labels_path=resolve_labels_path(_str(model, "labels", str(default_labels)), path),
         family=_str(model, "family", "yolo26").lower(),
         decode_type_option=_str(model, "decode_type_option", "auto").lower(),
         num_classes=_int(model, "num_classes", 0),
@@ -469,6 +519,7 @@ def load_app_config(path: Path) -> AppConfig:
         frames=_int(runtime, "frames", 0),
         pull_timeout_ms=_int(runtime, "pull_timeout_ms", 20000),
         queue_depth=_int(runtime, "queue_depth", 3),
+        output_buffers=_int(runtime, "output_buffers", 1),
         run_preset=_str(runtime, "preset", "realtime").lower(),
         overflow_policy=_str(runtime, "overflow_policy", "keep_latest").lower(),
         profile=_bool(runtime, "profile", False),
@@ -534,6 +585,8 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("decode.max_detections must be >= 0")
     if cfg.frames < 0:
         raise ValueError("runtime.frames must be >= 0")
+    if cfg.output_buffers < 1:
+        raise ValueError("runtime.output_buffers must be >= 1")
     if cfg.pull_timeout_ms <= 0:
         raise ValueError("runtime.pull_timeout_ms must be > 0")
     if cfg.profile_interval <= 0:
@@ -553,6 +606,23 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("output.video.fps must be >= 0")
     if cfg.insight_enable and not cfg.insight_host:
         raise ValueError("output.insight.host must be set when insight is enabled")
+    # Two senders on one port is not a warning-level mistake: the H.264 encoder
+    # fails to configure, and because it shares the codec daemon with the
+    # decoder feeding the source, the whole pipeline stalls a few frames in.
+    # That looks like "the output video is 12 frames long", which is a long way
+    # from the actual cause.
+    if cfg.insight_enable and cfg.video_port_base == cfg.metadata_port_base:
+        raise ValueError(
+            f"output.insight.video_port_base and metadata_port_base are both "
+            f"{cfg.video_port_base}. They must differ; the defaults are 9000 and 9100.\n"
+            f"  Sharing a port wedges the encoder, which stalls the source and "
+            f"truncates the recording."
+        )
+    if cfg.insight_enable and 9900 in (cfg.video_port_base, cfg.metadata_port_base):
+        raise ValueError(
+            "output.insight port base 9900 is the Neat Insight web UI port, not a "
+            "stream port.\n  Use video_port_base: 9000 and metadata_port_base: 9100."
+        )
     if not (cfg.save_enable or cfg.insight_enable or cfg.video_enable):
         raise ValueError(
             "enable at least one of output.save, output.video or output.insight"
@@ -1506,14 +1576,14 @@ def build_detector_graph(cfg: AppConfig, model, width: int, height: int, fps: in
     branch = pyneat.graphs.branch("source", ["frame", "model"])
 
     frame_graph = pyneat.Graph("frame")
-    frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(4)))
+    frame_graph.add(pyneat.nodes.output("frame", pyneat.OutputOptions.every_frame(cfg.output_buffers)))
 
     model_graph = pyneat.Graph("model")
     model_graph.connect(pyneat.nodes.input("model"), model)
 
     detections_graph = pyneat.Graph("detections")
     detections_graph.add(
-        pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(4))
+        pyneat.nodes.output("detections", pyneat.OutputOptions.every_frame(cfg.output_buffers))
     )
 
     joined = pyneat.graphs.combine(
@@ -1585,7 +1655,9 @@ def build_pipeline(cfg: AppConfig) -> Pipeline:
     )
 
     preset, policy = resolve_flow_control(cfg)
-    step(f"runtime: preset={preset} overflow={policy} queue_depth={cfg.queue_depth}")
+    step(f"runtime: preset={preset} overflow={policy} queue_depth={cfg.queue_depth} "
+         f"output_buffers={cfg.output_buffers} (2 outputs -> "
+         f"{2 * cfg.output_buffers} decoder buffers in flight)")
     if policy == "block":
         step(
             "       block keeps every frame, so the run takes longer than the clip.\n"
@@ -1716,6 +1788,36 @@ def parse_boxes(payload: bytes, img_w: int, img_h: int, expected_topk: int) -> l
 # ─────────────────────────────────────────────────────────────────────────────
 # Frames, overlay, sinks
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class FrameStamp:
+    """The timing fields a sink needs, copied out of a sample as plain ints.
+
+    The point is to stop holding the sample itself. A decoded frame is a buffer
+    from the hardware decoder's pool, and that pool is small: this board reports
+    ``BufferNum=8``. Anything still referencing a sample is still holding one of
+    those eight, so keeping one alive across the next ``pull()`` -- while
+    compositing, encoding a JPEG and writing a video frame -- starves the
+    decoder and deadlocks the pipeline. The run stops with a pull timeout after
+    almost exactly as many frames as the pool has buffers.
+    """
+
+    pts_ns: int = -1
+    dts_ns: int = -1
+    duration_ns: int = 0
+    frame_id: int = -1
+    stream_id: int = 0
+
+    @classmethod
+    def of(cls, sample) -> "FrameStamp":
+        return cls(
+            pts_ns=getattr(sample, "pts_ns", -1),
+            dts_ns=getattr(sample, "dts_ns", -1),
+            duration_ns=getattr(sample, "duration_ns", 0),
+            frame_id=getattr(sample, "frame_id", -1),
+            stream_id=getattr(sample, "stream_id", 0),
+        )
 
 
 def tensor_dim(tensor, name: str) -> int:
@@ -1965,17 +2067,25 @@ def draw_fps(frame, fps: float, draw: DrawConfig) -> None:
     text_scale = (draw.hud_text_scale or draw.text_scale) * scale
     raw_thickness = draw.hud_text_thickness or draw.text_thickness
     text_thickness = max(1, int(round(raw_thickness * scale)))
-    pad = max(0, int(round((draw.hud_padding or draw.text_padding) * scale)))
 
-    text = f"FPS: {fps:.1f}"
+    # padding_x / padding_y fall back to the shared hud padding, which itself
+    # falls back to the caption padding, so one number still styles everything
+    # and two numbers give independent control of the horizontal and vertical
+    # breathing room.
+    base_pad = draw.hud_padding or draw.text_padding
+    pad_x = max(0, int(round((draw.hud_padding_x or base_pad) * scale)))
+    pad_y = max(0, int(round((draw.hud_padding_y or base_pad) * scale)))
+
+    text = f"FPS: {fps:.{max(0, draw.hud_fps_decimals)}f}"
     (text_w, _), _ = cv2.getTextSize(text, FONT, text_scale, text_thickness)
     above, below = text_ink_extent(text, text_scale, text_thickness)
 
     # Padding sets the badge size; a minimum can only grow it. The text is then
     # centred in whatever box results, so a forced size never pushes it off.
-    box_w = max(text_w + pad * 2, int(round(draw.hud_min_width * scale)))
-    box_h = max(above + below + pad * 2, int(round(draw.hud_min_height * scale)))
-    left, top = pad or 1, pad or 1
+    box_w = max(text_w + pad_x * 2, int(round(draw.hud_min_width * scale)))
+    box_h = max(above + below + pad_y * 2, int(round(draw.hud_min_height * scale)))
+    left = max(0, int(round((draw.hud_margin_x or (draw.hud_padding_x or base_pad)) * scale))) or 1
+    top = max(0, int(round((draw.hud_margin_y or (draw.hud_padding_y or base_pad)) * scale))) or 1
 
     cv2.rectangle(
         frame, (left, top), (left + box_w, top + box_h), draw.hud_bg_color, -1
@@ -2016,11 +2126,11 @@ def metadata_objects(boxes: list[dict], labels: list[str], w: int, h: int) -> li
     return objects
 
 
-def send_metadata(pipeline: Pipeline, sample, boxes: list[dict]) -> None:
+def send_metadata(pipeline: Pipeline, stamp: FrameStamp, boxes: list[dict]) -> None:
     if pipeline.metadata_sender is None:
         return
-    timestamp_ms = int(sample.pts_ns // 1_000_000) if sample.pts_ns >= 0 else -1
-    frame_id = str(sample.frame_id) if sample.frame_id >= 0 else ""
+    timestamp_ms = int(stamp.pts_ns // 1_000_000) if stamp.pts_ns >= 0 else -1
+    frame_id = str(stamp.frame_id) if stamp.frame_id >= 0 else ""
     pipeline.metadata_sender.send_metadata(
         "object-detection",
         json.dumps(
@@ -2032,7 +2142,7 @@ def send_metadata(pipeline: Pipeline, sample, boxes: list[dict]) -> None:
     )
 
 
-def push_video(pipeline: Pipeline, sample, frame_bgr) -> None:
+def push_video(pipeline: Pipeline, stamp: FrameStamp, frame_bgr) -> None:
     """Send one frame to the Insight preview, dropping it if the feed is busy.
 
     Best effort by design. A refused push means the encoder or UDP egress is
@@ -2041,7 +2151,7 @@ def push_video(pipeline: Pipeline, sample, frame_bgr) -> None:
 
     Args:
         pipeline: Live pipeline, whose ``video_run`` may be None.
-        sample: Source sample, for timestamps and ids.
+        stamp: Timing fields copied from the source sample.
         frame_bgr: BGR image to send.
     """
     if pipeline.video_run is None:
@@ -2054,11 +2164,11 @@ def push_video(pipeline: Pipeline, sample, frame_bgr) -> None:
         memory=pyneat.TensorMemory.EV74,
     )
     video_sample = pyneat.make_tensor_sample("", tensor)
-    video_sample.pts_ns = sample.pts_ns
-    video_sample.dts_ns = sample.dts_ns
-    video_sample.duration_ns = sample.duration_ns
-    video_sample.frame_id = sample.frame_id
-    video_sample.stream_id = sample.stream_id
+    video_sample.pts_ns = stamp.pts_ns
+    video_sample.dts_ns = stamp.dts_ns
+    video_sample.duration_ns = stamp.duration_ns
+    video_sample.frame_id = stamp.frame_id
+    video_sample.stream_id = stamp.stream_id
     try:
         if not pipeline.video_run.push([video_sample]):
             pipeline.video_dropped += 1
@@ -2203,14 +2313,22 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
                 print(
                     f"source produced nothing for {cfg.pull_timeout_ms} ms after "
                     f"{processed} frames; stopping.\n"
-                    "If that is far short of the clip length, the source stalled "
-                    "rather than ended.\nSet runtime.overflow_policy: auto so a file "
-                    "source never drops buffers.",
+                    "If that is far short of the clip length the source stalled "
+                    "rather than ended. In order of likelihood:\n"
+                    "  1. the hardware decoder ran out of buffers. Its pool is small "
+                    "(the boot log\n     prints BufferNum), so anything holding a "
+                    "decoded sample starves it. Cut\n     per-frame work: "
+                    "output.save.every: 10 rather than 1 is the usual win, and\n"
+                    "     lower runtime.queue_depth.\n"
+                    "  2. output.insight.enable is on and its encoder wedged the "
+                    "shared codec daemon.\n"
+                    "  3. the clip really ended.",
                     flush=True,
                 )
                 break
             continue
 
+        stamp = FrameStamp.of(sample)
         boxes = parse_boxes(
             extract_bbox_payload(sample),
             pipeline.frame_w,
@@ -2218,6 +2336,9 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
             cfg.max_detections,
         )
         frame = frame_to_bgr(first_tensor(joined_field(sample, "frame", 0)))
+        # `boxes` and `frame` are copies, so give the decoder its buffer back
+        # before the sinks rather than after. See FrameStamp for why.
+        sample = None
         decode_end = time_ms()
 
         processed += 1
@@ -2238,10 +2359,10 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
         # With insight_annotated the viewer shows our overlay. Without it,
         # Insight receives the raw frame and draws its own from the metadata.
         push_video(
-            pipeline, sample,
+            pipeline, stamp,
             annotated if (cfg.insight_annotated and annotated is not None) else frame,
         )
-        send_metadata(pipeline, sample, boxes)
+        send_metadata(pipeline, stamp, boxes)
 
         if pipeline.writer is not None:
             pipeline.writer.write(annotated)
@@ -2270,6 +2391,35 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
 
     profile.flush()
     print(f"processed={processed} timeouts={timeouts}")
+
+    # A recording that is over almost before it starts is the most commonly
+    # reported symptom, and it has three quite different causes. Rank them here
+    # rather than leaving the frame count to be interpreted.
+    out_fps = cfg.video_fps or pipeline.fps or 25
+    seconds = pipeline.writer_frames / out_fps if out_fps else 0.0
+    if pipeline.writer is not None and pipeline.writer_frames and seconds < 2.0:
+        causes = []
+        if cfg.insight_enable:
+            causes.append(
+                "output.insight.enable is true. Its H.264 encoder shares the codec "
+                "daemon with the decoder feeding the source, so a failing encoder "
+                "stalls the run. Set it to false; the recording does not need it."
+            )
+        if cfg.frames:
+            causes.append(f"runtime.frames is {cfg.frames}, which capped the run.")
+        if timeouts:
+            causes.append(
+                f"the source stopped producing frames ({timeouts} timeout(s)), so "
+                "the run ended before the clip did."
+            )
+        if not causes:
+            causes.append("the source clip really is that short.")
+        listed = "\n".join(f"       {i}. {c}" for i, c in enumerate(causes, 1))
+        print(
+            f"[warn] the recording is only {seconds:.1f}s "
+            f"({pipeline.writer_frames} frames at {out_fps} fps).\n{listed}",
+            file=sys.stderr, flush=True,
+        )
     if pipeline.metadata_sender is not None:
         stats = pipeline.metadata_sender.stats()
         print(

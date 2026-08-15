@@ -18,7 +18,8 @@ model:
 
 source:
   type: video                          # video | rtsp | usb
-  uri: assets/videos/video-1.h264    # .h264 only, see note below
+  # Fetched by step 7 of the README. .h264 only, see note below.
+  uri: assets/videos/people-walking-outside-mall.h264
 
   # Leave these at 0. For .h264 the app reads the real geometry out of the
   # stream's SPS, and the stream always wins over anything set here.
@@ -84,6 +85,22 @@ runtime:
   frames: 0                  # 0 = run until interrupted
   pull_timeout_ms: 20000     # how long to wait for a frame before giving up
   queue_depth: 3
+
+  # Buffers each public output may hold. THE knob for "the run stops after N
+  # frames and then times out".
+  #
+  # Every buffer here is a frame checked out of the hardware decoder's pool, and
+  # that pool is small: the boot log prints `BufferNum=8` on this board. There
+  # are two public outputs, so this number is doubled, and the source appsink
+  # holds up to 4 more. At 4 that is 4*2 + 4 = 12 against a pool of 8, which
+  # only survives because a fast consumer drains it before both fill. A slower
+  # one (segmentation, a big model, JPEGs every frame) deadlocks the decoder:
+  # it cannot produce, so the app cannot consume, so nothing is ever released.
+  #
+  # Observed on a Modalix DevKit with the yolo26m-seg pack: 4 -> stalls at 8
+  # frames, 2 -> stalls at 25, 1 -> the lowest pressure this knob allows.
+  # Raise it only if a run completes and you want more headroom.
+  output_buffers: 1
   # auto splits on source type, because a file and a camera want opposites:
   #   file        -> reliable + block       every frame is kept, no deadline
   #   rtsp / usb  -> realtime + keep_latest stay current, a camera cannot pause
@@ -126,7 +143,20 @@ visualization:
     bg_color: [255, 255, 255]
     text_scale: 2.0          # 0 = follow text_scale above
     text_thickness: 5        # 0 = follow text_thickness above
-    padding: 15              # 0 = follow text_padding above
+
+    # Breathing room inside the badge, between the text and the badge edge.
+    # `padding` sets all four sides; padding_x / padding_y override the
+    # horizontal and vertical pair independently. 0 on either follows `padding`.
+    padding: 22              # 0 = follow text_padding above
+    padding_x: 34            # left and right gap
+    padding_y: 24            # top and bottom gap
+
+    # Gap between the badge and the top-left corner of the frame.
+    # 0 on either follows the matching padding.
+    margin_x: 28
+    margin_y: 24
+
+    fps_decimals: 0          # 0 gives "FPS: 25", 1 gives "FPS: 24.8"
     min_width: 0             # 0 = fit the text
     min_height: 0            # 0 = fit the text
 
@@ -141,11 +171,15 @@ output:
     fps: 0                   # 0 = match the source
     hud: true                # small FPS badge in the top-left corner
 
-  # Annotated stills.
+  # Annotated stills. `every` below skips STILLS only. The video above always
+  # gets every processed frame; there is no frame-skip setting for it.
   save:
     enable: true
     dir: frames
-    every: 1                 # write every Nth frame, 0 disables
+    # Write every Nth frame, 0 disables. A 1080p JPEG per frame is real work on
+    # the board; 10 gives you plenty to look at and keeps the pipeline ahead of
+    # the decoder.
+    every: 10
     overlay: true
     format: jpg              # jpg | png
 
