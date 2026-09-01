@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -132,57 +129,54 @@ def test_a_bad_config_exits_one(capsys):
     assert "model.path must be set" in capsys.readouterr().err
 
 
-# ── compatibility shims ──
-
-SHIMS = [
-    ("object-detection", "detect"),
-    ("instance-segmentation", "segment"),
-    ("fall-detection", "fall"),
-]
+# ── init and fetch ──
 
 
-@pytest.mark.parametrize("directory,task", SHIMS, ids=[d for d, _ in SHIMS])
-def test_shim_targets_the_right_task(directory, task):
-    path = REPO / directory / "src" / "app.py"
-    spec = importlib.util.spec_from_file_location(f"shim_{task}", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    assert module.TASK == task
+@pytest.mark.parametrize("name", list(TASKS))
+def test_init_writes_a_documented_config(tmp_path, monkeypatch, name):
+    monkeypatch.chdir(tmp_path)
+    assert main(["init", name]) == 0
+    written = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+    assert written.count("#") > 50, "the starter config should be commented"
+    # And the command that reads it back must find it with no --config at all.
+    assert main([name, "--validate"]) == 0
 
 
-@pytest.mark.parametrize("directory,task", SHIMS, ids=[d for d, _ in SHIMS])
-def test_shim_accepts_the_old_flag(directory, task):
-    """The READMEs document `--validate-config`, so it has to keep working."""
-    result = subprocess.run(
-        [sys.executable, "src/app.py", "--config", "config.yaml", "--validate-config"],
-        cwd=REPO / directory, capture_output=True, text=True,
-    )
-    assert result.returncode == 0, result.stderr
-    assert "config OK" in result.stdout
+def test_init_refuses_to_clobber(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert main(["init", "detect"]) == 0
+    assert main(["init", "detect"]) == 1
+    assert "already exists" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("directory,task", SHIMS, ids=[d for d, _ in SHIMS])
-def test_deploy_command_carries_the_package(directory, task):
-    """`scp -r <app>/` alone leaves the shared package behind.
-
-    Before the refactor each app.py was self-contained, so copying just the app
-    folder to the board worked. It no longer does, and a README that still said
-    it would produce a ModuleNotFoundError on the DevKit. Every documented
-    deploy command must bring `src/` too.
-    """
-    readme = (REPO / directory / "README.md").read_text(encoding="utf-8")
-    bare = f"scp -r {directory}/ sima@"
-    assert bare not in readme, (
-        f"{directory}/README.md still deploys the app folder without src/"
-    )
-    assert f"scp -r {directory}/ src/ sima@" in readme
+def test_init_force_overwrites(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text("stale", encoding="utf-8")
+    assert main(["init", "segment", "--force"]) == 0
+    assert "stale" not in (tmp_path / "config.yaml").read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("directory,task", SHIMS, ids=[d for d, _ in SHIMS])
-def test_shim_names_its_own_app(directory, task):
-    """The shim quotes its own deploy command in the not-installed message."""
-    path = REPO / directory / "src" / "app.py"
-    spec = importlib.util.spec_from_file_location(f"shim_app_{task}", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    assert module.APP == directory
+def test_init_can_write_elsewhere(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    out = tmp_path / "cfgs" / "fall.yaml"
+    assert main(["init", "fall", "-o", str(out)]) == 0
+    assert out.is_file()
+
+
+def test_fetch_prints_a_runnable_model_command():
+    """The model is behind a login, so the command has to be exact."""
+    from sima_vision.setup_commands import MODELS, model_command
+
+    for name in TASKS:
+        assert name in MODELS
+        command = model_command(name)
+        assert "sima-cli download" in command
+        assert MODELS[name][1] in command
+        # It must land where the printed run command then looks for it.
+        assert "assets/models" in command
+
+
+def test_every_command_is_reachable():
+    parser = build_parser()
+    for name in [*TASKS, "init", "fetch", "preview", "doctor"]:
+        assert name in parser.format_help()

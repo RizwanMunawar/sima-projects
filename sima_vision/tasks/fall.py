@@ -976,7 +976,6 @@ FALL_DRAW = DrawConfig(box_thickness=3, centre_dot=True, banner=True)
 
 class FallTask(Task):
     name = "fall"
-    directory = "fall-detection"
     help = "Track people and email when one of them goes down"
     config_class = FallAppConfig
     graph_name = "yolo_detector"

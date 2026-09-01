@@ -35,9 +35,8 @@ class Task:
     the writer, the pull loop and the closing report -- is shared.
 
     Attributes:
-        name: Subcommand name, such as ``detect``.
-        directory: The repo folder this task's config and assets live in, used
-            to discover ``config.yaml`` when ``--config`` is not given.
+        name: Subcommand name, such as ``detect``. Also names the packaged
+            starter config, ``sima_vision/configs/<name>.yaml``.
         help: One-line description for ``sima-vision --help``.
         graph_name: Name of the Neat graph, such as ``yolo_detector``.
         result_label: Public output carrying the model results.
@@ -46,7 +45,6 @@ class Task:
     """
 
     name = ""
-    directory = ""
     help = ""
     graph_name = "yolo_detector"
     result_label = "detections"
@@ -79,7 +77,7 @@ class Task:
         Returns:
             A validated config.
         """
-        resolved = discover_config(self.directory, path) if use_file else None
+        resolved = discover_config(path) if use_file else None
         raw = apply_overrides(read_config_file(resolved), self.link_overrides(overrides))
         cfg = self.build_config(raw, resolved)
         self.validate(cfg)

@@ -68,12 +68,13 @@ Issues = "https://github.com/RizwanMunawar/sima-projects/issues"
 sima-vision = "sima_vision.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/sima_vision"]
+packages = ["sima_vision"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "/src",
+    "/sima_vision",
     "/tests",
+    "/docs",
     "/README.md",
     "/LICENSE",
 ]

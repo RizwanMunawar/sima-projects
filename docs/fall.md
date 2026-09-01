@@ -62,7 +62,7 @@ whoever is on shift, with a snapshot attached.
 | Section | What it covers |
 |:--|:--|
 | [See it before you deploy](#see-it-before-you-deploy) | The overlay on a laptop, no hardware |
-| [Test it in three commands](#test-it-in-three-commands) | Push, run, pull the result back |
+| [Run it in three commands](#run-it-in-three-commands) | Push, run, pull the result back |
 | [Get a model and a test video](#get-a-model-and-a-test-video) | Both land in `assets/`, ready to run |
 | [Set up email alerts](#set-up-email-alerts) | SMTP, the password rule, `--test-alert` |
 | [Deploy and run](#deploy-and-run) | `scp` the app over and run it |
@@ -82,7 +82,8 @@ using your own config:
 
 ```bash
 pip install "sima-vision[preview]"
-sima-vision preview --task fall -c fall-detection/config.yaml -o preview.png
+sima-vision init fall      # writes a documented config.yaml
+sima-vision preview --task fall -o preview.png
 ```
 
 <div align="center">
@@ -93,53 +94,43 @@ It runs the same drawing code the board does, over a synthetic scene, so every
 `visualization:` value below can be tuned here first. **No model is run** --
 the detections are placed for you so there is something to draw.
 
-## Test it in three commands
+## Run it in three commands
 
-Run these from the **repo root** in WSL:
-
-```bash
-scp -r fall-detection/ src/ sima@<devkit-ip>:~                           # 1. push the app
-
-ssh -tt sima@<devkit-ip> \
-  'source ~/pyneat/bin/activate && cd ~/fall-detection && python3 src/app.py && cd ..'
-
-scp sima@<devkit-ip>:~/fall-detection/falls.mp4 .                   # 3. pull the result
-```
-
-Or, with the CLI installed on the board (`pip install sima-vision`):
+On the DevKit. There is nothing to clone and nothing to `scp`:
 
 ```bash
-ssh -tt sima@<devkit-ip> \
-  'source ~/pyneat/bin/activate && cd ~/fall-detection && sima-vision fall'
+pip install sima-vision                     # 1. install
+
+sima-vision fetch fall                    # 2. sample clips + the model command
+
+sima-vision fall \
+  --source assets/videos/people-walking-outside-mall.h264 \
+  --model  assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
 ```
 
-`sima-vision fall` finds `config.yaml` in the directory you run it from, so that is the
-same run. Every setting below can also be given as a flag, and flags win over the file —
-see [the CLI reference](../README.md#the-cli).
-
-Alerts ship **off**, so this first run only annotates. Green boxes on people and a red
-one plus a banner when someone goes down means the whole chain works.
-
-**Faster still, before you touch the board.** This parses and validates `config.yaml`
-without pyneat, a model, or any hardware, and runs anywhere:
+`fetch` downloads the clips and prints the one `sima-cli download` line for the model,
+which needs a community.sima.ai login. Then pull the result back and look at it:
 
 ```bash
-python3 fall-detection/src/app.py --validate-config
-```
-```
-config OK: fall-detection/config.yaml
-  family=yolo26 -> BoxDecodeType.YoloV26
-  preprocess: kind=image enable=on in=NV12 ... resize=letterbox pad=114 | normalize=coco_yolo
-  fall: watching person | aspect>=1.2 height<=55% descent>=55%/s | confirm=1.5s recover=3.0s
-  alerts: off
-  watched class ids: [0]
+scp sima@<devkit-ip>:~/falls.mp4 .
 ```
 
-<a id="get-a-model-and-a-test-video"></a>
+Coloured boxes that follow people means the whole chain works.
+
+A config file is optional — the flags above are enough. For a persistent setup:
+
+```bash
+sima-vision init fall      # documented config.yaml, here
+sima-vision fall           # picks it up on its own
+```
+
+Every setting has a flag too, and flags win over the file. See
+[the CLI reference](../README.md#reference).
+
 ## Get a model and a test video
 
 This app uses the **ordinary YOLO26 detect head**, the same pack the
-[detector app](../object-detection/README.md) uses. No pose or segmentation model is
+[detector app](detect.md) uses. No pose or segmentation model is
 needed: a bounding box is enough to tell upright from horizontal.
 
 Run both blocks **in WSL, from the repo root**:
@@ -154,17 +145,17 @@ sima-cli login                                    # needs a community.sima.ai ac
 MODELS=https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yolo26-detection
 MODEL=yolo26m-det-bf16-mla_tess-b1.tar.gz
 
-mkdir -p fall-detection/assets/models
-cd fall-detection/assets/models && sima-cli download "$MODELS/$MODEL" && cd ../../../
+mkdir -p assets/models
+cd assets/models && sima-cli download "$MODELS/$MODEL" && cd ../../../
 ```
 
 ```bash
 VIDEOS=https://github.com/RizwanMunawar/sima-projects/releases/download/0.0.1
 
-mkdir -p fall-detection/assets/videos
-curl -L -o fall-detection/assets/videos/people-walking-inside-mall.h264 \
+mkdir -p assets/videos
+curl -L -o assets/videos/people-walking-inside-mall.h264 \
   $VIDEOS/people-walking-inside-mall.h264
-curl -L -o fall-detection/assets/videos/people-walking-outside-mall.h264 \
+curl -L -o assets/videos/people-walking-outside-mall.h264 \
   $VIDEOS/people-walking-outside-mall.h264
 ```
 
@@ -172,7 +163,7 @@ curl -L -o fall-detection/assets/videos/people-walking-outside-mall.h264 \
 > **`sima-cli download` writes into the current directory**, which is the whole reason for
 > the `cd`. The trailing `cd ../../../` puts you back at the repo root. Downloading from
 > anywhere else, including the container's `/workspace`, is how the pack ends up
-> [somewhere `config.yaml` cannot see](../README.md#paths).
+> [somewhere `config.yaml` cannot see](setup.md#paths).
 
 > [!NOTE]
 > **Neither shipped clip contains a fall**, so a first run should report `falls=0`. That
@@ -181,7 +172,7 @@ curl -L -o fall-detection/assets/videos/people-walking-outside-mall.h264 \
 > `fall.aspect_ratio` until someone bending over trips it.
 
 Bringing your own footage? It must be raw H.264, not `.mp4` — see
-[Video must be raw H.264](../README.md#video-must-be-raw-h264).
+[Video must be raw H.264](setup.md#video-must-be-raw-h264).
 
 <a id="set-up-email-alerts"></a>
 ## Set up email alerts
@@ -191,7 +182,7 @@ Bringing your own footage? It must be raw H.264, not `.mp4` — see
 > password in it is a password on GitHub. There is deliberately no key for it. The app
 > reads an environment variable instead, named by `alerts.smtp.password_env`.
 
-**1. Fill in the addresses** in `fall-detection/config.yaml`:
+**1. Fill in the addresses** in `config.yaml`:
 
 ```yaml
 alerts:
@@ -223,7 +214,7 @@ port 465 wants `ssl: on` and `starttls: off`.
 **3. Prove the wiring** without waiting for anyone to fall over:
 
 ```bash
-python3 src/app.py --test-alert
+sima-vision fall --test-alert
 ```
 
 With `dry_run: on` it composes the message and prints the subject, touching no network.
@@ -244,31 +235,30 @@ badly tuned threshold is forty, and forty emails get filtered to a folder nobody
 <a id="deploy-and-run"></a>
 ## Deploy and run
 
-```
-fall-detection/
-├── config.yaml          # every setting lives here
-├── assets/
-│   ├── models/          # .tar.gz model packs  (not in git)
-│   └── videos/          # .h264 streams        (not in git)
-└── src/
-    ├── app.py           # pipeline, tracker, fall rules, alert sender
-    ├── coco_labels.txt  # 80 COCO class names
-    └── requirements.txt
-```
-
-On the DevKit, once per board:
+There is nothing to copy. Install the package on the board and run it:
 
 ```bash
-pip install -r ~/fall-detection/src/requirements.txt
+pip install sima-vision
+```
+
+Your working directory holds only what is yours:
+
+```
+~/
+├── config.yaml          # sima-vision init fall
+└── assets/
+    ├── models/          # .tar.gz model packs   (sima-cli download)
+    └── videos/          # .h264 streams         (sima-vision fetch)
 ```
 
 > [!CAUTION]
 > **Never let pip pull numpy 2.x.** `pyneat` and every `simaai-*` package need
-> `numpy<2`. The pins in `requirements.txt` handle it. If you already broke it:
+> `numpy<2`. `sima-vision` depends on neither numpy nor OpenCV precisely so that
+> installing it cannot upgrade them -- the board provides both. If you already broke it:
 > `pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"`
 
 ```bash
-scp -r fall-detection/ src/ sima@<devkit-ip>:~
+pip install sima-vision
 ```
 
 Then on the DevKit:
@@ -277,7 +267,7 @@ Then on the DevKit:
 ssh -tt sima@<devkit-ip>                     # two t's, see below
 source ~/pyneat/bin/activate
 export FALL_ALERT_SMTP_PASSWORD='your-app-password'
-cd ~/fall-detection && python3 src/app.py && cd ..
+sima-vision fall
 ```
 
 Healthy output:
@@ -298,15 +288,15 @@ running. press Ctrl-C to stop.
 > [!CAUTION]
 > **Use `ssh -tt`, two t's.** Without a pty, Ctrl-C never reaches the app. It keeps
 > running invisibly holding the MLA and your next run fails.
-> Rescue: `ssh sima@<devkit-ip> pkill -f src/app.py`
+> Rescue: `ssh sima@<devkit-ip> pkill -f sima-vision`
 
 <a id="see-the-result"></a>
 ## See the result
 
 ```bash
-scp sima@<devkit-ip>:~/fall-detection/falls.mp4 .
-scp -r sima@<devkit-ip>:~/fall-detection/alerts .      # one snapshot per alert
-scp -r sima@<devkit-ip>:~/fall-detection/frames .
+scp sima@<devkit-ip>:~/falls.mp4 .
+scp -r sima@<devkit-ip>:~/alerts .      # one snapshot per alert
+scp -r sima@<devkit-ip>:~/frames .
 ```
 
 On exit the app reports what happened, including what the alert thread managed:
@@ -434,11 +424,11 @@ visualization:
 The banner is a full-width strip across the bottom while anyone is down. A red box around
 one person is easy to miss on a wall of camera tiles; a band across the frame is not.
 Everything else — caption sizes, the FPS badge, `auto_scale` — behaves exactly as in the
-[detector's overlay](../object-detection/README.md#the-overlay).
+[detector's overlay](detect.md#the-overlay).
 
 ## Configuration
 
-Everything lives in `fall-detection/config.yaml`.
+Everything lives in `config.yaml`.
 
 ```yaml
 model:
@@ -480,19 +470,19 @@ output:
 | `tracking.history_seconds` < `fall.descent_window` | Refused at startup: the descent test could never see far enough back |
 | `ssl: on` **and** `starttls: on` | Refused at startup. 465 uses one, 587 the other |
 | `alerts.enable: on` with no `to:` | Refused at startup |
-| A `.mp4` source | Hits a [demuxer bug](../README.md#video-must-be-raw-h264). Convert to `.h264` |
+| A `.mp4` source | Hits a [demuxer bug](setup.md#video-must-be-raw-h264). Convert to `.h264` |
 
 ## Daily loop
 
 | Task | Command | Run in |
 |:--|:--|:--|
-| Validate the config, no hardware | `python3 fall-detection/src/app.py --validate-config` | anywhere |
-| Check the mail settings | `python3 src/app.py --test-alert` | DevKit |
-| Push the app to the board | `scp -r fall-detection/ src/ sima@<devkit-ip>:~` | WSL |
-| Run the app | `python3 src/app.py` | DevKit |
-| Pull the video back | `scp sima@<devkit-ip>:~/fall-detection/falls.mp4 .` | WSL |
-| Pull the alert snapshots | `scp -r sima@<devkit-ip>:~/fall-detection/alerts .` | WSL |
-| Kill an orphaned run | `pkill -f src/app.py` | DevKit |
+| Validate the config, no hardware | `sima-vision fall --validate` | anywhere |
+| Check the mail settings | `sima-vision fall --test-alert` | DevKit |
+| Push the app to the board | `pip install sima-vision` | WSL |
+| Run the app | `sima-vision fall` | DevKit |
+| Pull the video back | `scp sima@<devkit-ip>:~/falls.mp4 .` | WSL |
+| Pull the alert snapshots | `scp -r sima@<devkit-ip>:~/alerts .` | WSL |
+| Kill an orphaned run | `pkill -f sima-vision` | DevKit |
 
 ## Questions people ask
 
@@ -506,7 +496,7 @@ create an [App Password](https://myaccount.google.com/apppasswords), and export 
 export FALL_ALERT_SMTP_PASSWORD='abcd efgh ijkl mnop'
 ```
 
-Then `python3 src/app.py --test-alert` with `dry_run: off`. The error it prints is the
+Then `sima-vision fall --test-alert` with `dry_run: off`. The error it prints is the
 real SMTP error, which is usually enough to say whether it is the password, the port or
 the TLS mode.
 
@@ -580,7 +570,7 @@ signals in `fall_signals()` are the only thing that would need rewriting.
 ## Common errors
 
 Problems with a **running fall detector**. Bring-up problems are in the
-[root README](../README.md#setup-errors).
+[root README](setup.md#setup-errors).
 
 | Symptom | Fix |
 |:--|:--|
@@ -595,8 +585,8 @@ Problems with a **running fall detector**. Bring-up problems are in the
 | Ids change every few frames | Lower `tracking.iou_threshold`, raise `tracking.max_age` |
 | `model archive not found` | Run from `~/fall-detection`, and check `find assets -type f` |
 | `is not a raw H.264 elementary stream` | You renamed a `.mp4` instead of converting it |
-| Device busy | Orphaned run: `ssh sima@<ip> pkill -f src/app.py` |
-| Recording is a few frames long | See the [detector's note](../object-detection/README.md#questions-people-ask); usually `output.insight` |
+| Device busy | Orphaned run: `ssh sima@<ip> pkill -f sima-vision` |
+| Recording is a few frames long | See the [detector's note](detect.md#questions-people-ask); usually `output.insight` |
 
 ---
 

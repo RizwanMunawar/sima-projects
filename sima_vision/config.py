@@ -31,8 +31,12 @@ from .runtime import (
     SCALING_TYPES,
 )
 
-#: Labels shipped inside the wheel, used when nothing else resolves.
-PACKAGED_LABELS = Path(__file__).resolve().parent / "data" / "coco_labels.txt"
+#: Everything shipped inside the wheel.
+PACKAGE_ROOT = Path(__file__).resolve().parent
+#: Labels used when nothing else resolves.
+PACKAGED_LABELS = PACKAGE_ROOT / "data" / "coco_labels.txt"
+#: The heavily commented starter configs `sima-vision init` writes out.
+PACKAGED_CONFIGS = PACKAGE_ROOT / "configs"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -823,18 +827,20 @@ def apply_overrides(raw: dict, overrides: dict) -> dict:
 DISCOVERY_NAMES = ("config.yaml", "config.yml")
 
 
-def discover_config(task_dir: str, explicit: Path | None) -> Path | None:
+def packaged_config(task: str) -> Path:
+    """The commented starter config for a task, as shipped in the wheel."""
+    return PACKAGED_CONFIGS / f"{task}.yaml"
+
+
+def discover_config(explicit: Path | None) -> Path | None:
     """Find the config file to use.
 
-    An explicit ``--config`` must exist. Otherwise look for ``config.yaml`` in
-    the working directory -- which is how the READMEs launch each app, from
-    inside its own folder -- and then in ``<task_dir>/``, which is how it works
-    from the repo root. Finding nothing is not an error: the dataclass defaults
-    are a complete configuration, and ``--model`` plus ``--source`` is enough to
-    run without any file at all.
+    An explicit ``--config`` must exist. Otherwise take ``config.yaml`` from the
+    working directory if there is one. Finding nothing is not an error: the
+    dataclass defaults are a complete configuration, so ``--model`` and
+    ``--source`` are enough to run without any file at all.
 
     Args:
-        task_dir: The repo folder for this task, such as ``object-detection``.
         explicit: Whatever ``--config`` was given, or None.
 
     Returns:
@@ -844,10 +850,9 @@ def discover_config(task_dir: str, explicit: Path | None) -> Path | None:
         if not explicit.is_file():
             raise FileNotFoundError(f"config file not found: {explicit}")
         return explicit
-    for parent in (Path.cwd(), Path.cwd() / task_dir):
-        for name in DISCOVERY_NAMES:
-            candidate = parent / name
-            if candidate.is_file():
-                return candidate
+    for name in DISCOVERY_NAMES:
+        candidate = Path.cwd() / name
+        if candidate.is_file():
+            return candidate
     return None
 

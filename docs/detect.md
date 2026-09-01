@@ -48,7 +48,7 @@ the app draws a box, a centre marker and a labelled caption on every frame.
 | Section | What it covers |
 |:--|:--|
 | [See it before you deploy](#see-it-before-you-deploy) | The overlay on a laptop, no hardware |
-| [Test it in three commands](#test-it-in-three-commands) | Push, run, pull the result back |
+| [Run it in three commands](#run-it-in-three-commands) | Push, run, pull the result back |
 | [Get a model and a test video](#get-a-model-and-a-test-video) | Both land in `assets/`, ready to run |
 | [Deploy and run](#deploy-and-run) | `scp` the app over and run it |
 | [See the result](#see-the-result) | Pull `detections.mp4` and `frames/` back |
@@ -66,7 +66,8 @@ using your own config:
 
 ```bash
 pip install "sima-vision[preview]"
-sima-vision preview --task detect -c object-detection/config.yaml -o preview.png
+sima-vision init detect      # writes a documented config.yaml
+sima-vision preview --task detect -o preview.png
 ```
 
 <div align="center">
@@ -77,54 +78,44 @@ It runs the same drawing code the board does, over a synthetic scene, so every
 `visualization:` value below can be tuned here first. **No model is run** --
 the detections are placed for you so there is something to draw.
 
-## Test it in three commands
+## Run it in three commands
 
-Run these from the **repo root** in WSL:
-
-```bash
-scp -r object-detection/ src/ sima@<devkit-ip>:~                         # 1. push the app
-
-ssh -tt sima@<devkit-ip> \
-  'source ~/pyneat/bin/activate && cd ~/object-detection && python3 src/app.py && cd ..'
-
-scp sima@<devkit-ip>:~/object-detection/detections.mp4 .            # 3. pull the result
-```
-
-Or, with the CLI installed on the board (`pip install sima-vision`):
+On the DevKit. There is nothing to clone and nothing to `scp`:
 
 ```bash
-ssh -tt sima@<devkit-ip> \
-  'source ~/pyneat/bin/activate && cd ~/object-detection && sima-vision detect'
+pip install sima-vision                     # 1. install
+
+sima-vision fetch detect                    # 2. sample clips + the model command
+
+sima-vision detect \
+  --source assets/videos/people-walking-outside-mall.h264 \
+  --model  assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
 ```
 
-`sima-vision detect` finds `config.yaml` in the directory you run it from, so that is the
-same run. Every setting below can also be given as a flag, and flags win over the file —
-see [the CLI reference](../README.md#the-cli).
-
-Play `detections.mp4`. Boxes on it means the whole chain works. Repeat after every edit.
-
-**Faster still, before you touch the board.** This parses and validates `config.yaml`
-without pyneat, a model, or any hardware, and runs anywhere:
+`fetch` downloads the clips and prints the one `sima-cli download` line for the model,
+which needs a community.sima.ai login. Then pull the result back and look at it:
 
 ```bash
-python3 object-detection/src/app.py --validate-config
-```
-```
-config OK: object-detection/config.yaml
-  family=yolo26 -> BoxDecodeType.YoloV26
-  preprocess: kind=image enable=on in=NV12 ... resize=letterbox pad=114 | normalize=coco_yolo
+scp sima@<devkit-ip>:~/detections.mp4 .
 ```
 
-**A short run instead of a whole clip.** Set `runtime.frames: 100` and
-`output.video.enable: false`. You get 100 annotated JPEGs in `frames/` and the app exits
-by itself.
+Boxes on it means the whole chain works. Repeat after every edit.
 
-<a id="get-a-model-and-a-test-video"></a>
+A config file is optional — the flags above are enough. For a persistent setup:
+
+```bash
+sima-vision init detect      # documented config.yaml, here
+sima-vision detect           # picks it up on its own
+```
+
+Every setting has a flag too, and flags win over the file. See
+[the CLI reference](../README.md#reference).
+
 ## Get a model and a test video
 
-Both are gitignored, so a fresh clone has neither. Run both blocks **in WSL, from the
-repo root**; they land in `object-detection/assets/`, which is exactly where
-`config.yaml` already looks.
+`sima-vision fetch` above already did the video. Here is what it does, and the model
+step it cannot do for you. Both land in `assets/`, which is where `config.yaml`
+already looks.
 
 **The model:**
 
@@ -139,8 +130,8 @@ MODELS=https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yolo26-detecti
 
 MODEL=yolo26m-det-bf16-mla_tess-b1.tar.gz
 
-mkdir -p object-detection/assets/models
-cd object-detection/assets/models && sima-cli download "$MODELS/$MODEL" && cd ../../../
+mkdir -p assets/models
+cd assets/models && sima-cli download "$MODELS/$MODEL" && cd ../../../
 ```
 
 Swap `yolo26m` for `n`, `s`, `l` or `x` to trade speed against accuracy. `family` stays
@@ -151,18 +142,18 @@ Swap `yolo26m` for `n`, `s`, `l` or `x` to trade speed against accuracy. `family
 > the `cd`. The trailing `cd ../../../` puts you back at the repo root, ready for the
 > `scp` in the next step. Downloading from anywhere else, including the container's
 > `/workspace`, is how the pack ends up
-> [somewhere `config.yaml` cannot see](../README.md#paths).
+> [somewhere `config.yaml` cannot see](setup.md#paths).
 
 **The test video.** Two ready-made 1080p clips, already converted to raw `.h264` so they
-skip the [demuxer bug](../README.md#known-issues) entirely:
+skip the [demuxer bug](setup.md#known-issues) entirely:
 
 ```bash
 VIDEOS=https://github.com/RizwanMunawar/sima-projects/releases/download/0.0.1
 
-mkdir -p object-detection/assets/videos
-curl -L -o object-detection/assets/videos/people-walking-outside-mall.h264 \
+mkdir -p assets/videos
+curl -L -o assets/videos/people-walking-outside-mall.h264 \
   $VIDEOS/people-walking-outside-mall.h264
-curl -L -o object-detection/assets/videos/people-walking-inside-mall.h264 \
+curl -L -o assets/videos/people-walking-inside-mall.h264 \
   $VIDEOS/people-walking-inside-mall.h264
 ```
 
@@ -182,12 +173,12 @@ source:
 Confirm both landed:
 
 ```bash
-ls -lh object-detection/assets/models/ object-detection/assets/videos/
+ls -lh assets/models/ assets/videos/
 ```
 
 > [!NOTE]
 > **Bringing your own clip?** It must be a raw H.264 elementary stream, not an `.mp4`.
-> See [Video must be raw H.264](../README.md#video-must-be-raw-h264). Leave `source.fps`,
+> See [Video must be raw H.264](setup.md#video-must-be-raw-h264). Leave `source.fps`,
 > `source.width` and `source.height` at `0`; the app reads the real geometry out of the
 > stream's SPS.
 
@@ -208,9 +199,9 @@ sima-cli download $MODELS/yolo26m-det-bf16-mla_tess-b1.tar.gz
 
 ```bash
 # then back in WSL
-mkdir -p /root/sima-projects/object-detection/assets/models
+mkdir -p /root/sima-projects/assets/models
 mv /root/workspace/assets/models/yolo26m-det-*.tar.gz \
-   /root/sima-projects/object-detection/assets/models/
+   /root/sima-projects/assets/models/
 ```
 
 The WSL route above skips this entirely, which is why it is the one written out first.
@@ -220,35 +211,32 @@ The WSL route above skips this entirely, which is why it is the one written out 
 <a id="deploy-and-run"></a>
 ## Deploy and run
 
-The app lives in [`object-detection/`](.):
-
-```
-object-detection/
-├── config.yaml          # every setting lives here
-├── assets/
-│   ├── models/          # .tar.gz model packs  (not in git)
-│   └── videos/          # .h264 streams        (not in git)
-└── src/
-    ├── app.py           # the pipeline
-    ├── coco_labels.txt  # 80 COCO class names
-    └── requirements.txt
-```
-
-On the DevKit, once per board:
+There is nothing to copy. Install the package on the board and run it:
 
 ```bash
-pip install -r ~/object-detection/src/requirements.txt
+pip install sima-vision
+```
+
+Your working directory holds only what is yours:
+
+```
+~/
+├── config.yaml          # sima-vision init detect
+└── assets/
+    ├── models/          # .tar.gz model packs   (sima-cli download)
+    └── videos/          # .h264 streams         (sima-vision fetch)
 ```
 
 > [!CAUTION]
 > **Never let pip pull numpy 2.x.** `pyneat` and every `simaai-*` package need
-> `numpy<2`. The pins in `requirements.txt` handle it. If you already broke it:
+> `numpy<2`. `sima-vision` depends on neither numpy nor OpenCV precisely so that
+> installing it cannot upgrade them -- the board provides both. If you already broke it:
 > `pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"`
 
 **One command copies everything.** Run it from the repo root in WSL, after every change:
 
 ```bash
-scp -r object-detection/ src/ sima@<devkit-ip>:~
+pip install sima-vision
 ```
 
 Then on the DevKit:
@@ -256,7 +244,7 @@ Then on the DevKit:
 ```bash
 ssh -tt sima@<devkit-ip>                     # two t's, see below
 source ~/pyneat/bin/activate
-cd ~/object-detection && python3 src/app.py && cd ..
+sima-vision detect
 ```
 
 Healthy output:
@@ -276,7 +264,7 @@ running. press Ctrl-C to stop.
 > [!CAUTION]
 > **Use `ssh -tt`, two t's.** Without a pty, Ctrl-C never reaches the app. It keeps
 > running invisibly holding the MLA and your next run fails.
-> Rescue: `ssh sima@<devkit-ip> pkill -f src/app.py`
+> Rescue: `ssh sima@<devkit-ip> pkill -f sima-vision`
 
 Anything other than that output (no detections, a stall, a crash) is in
 [Common errors](#common-errors) and [Questions people ask](#questions-people-ask).
@@ -287,8 +275,8 @@ Anything other than that output (no detections, a stall, a crash) is in
 Every run writes an annotated video and annotated stills on the board. Pull them across:
 
 ```bash
-scp sima@<devkit-ip>:~/object-detection/detections.mp4 .
-scp -r sima@<devkit-ip>:~/object-detection/frames .
+scp sima@<devkit-ip>:~/detections.mp4 .
+scp -r sima@<devkit-ip>:~/frames .
 ```
 
 On exit the app says exactly what it wrote, so a short or empty file is obvious:
@@ -389,7 +377,7 @@ Where the output goes:
 
 ## Configuration
 
-Everything lives in `object-detection/config.yaml`. These settings matter:
+Everything lives in `config.yaml`. These settings matter:
 
 ```yaml
 model:
@@ -433,7 +421,7 @@ next run: see [The overlay](#the-overlay) for the full list.
 | `uri: C:\Users\...\video.mp4` | The DevKit has no `C:` drive |
 | `uri: r"C:\path\file.mp4"` | `r"..."` is Python. YAML keeps the `r` and quotes |
 | `family` not `yolo26` | No detections, or every score near zero |
-| A `.mp4` source | Hits a [demuxer bug](../README.md#video-must-be-raw-h264). Convert to `.h264` |
+| A `.mp4` source | Hits a [demuxer bug](setup.md#video-must-be-raw-h264). Convert to `.h264` |
 
 ## Daily loop
 
@@ -441,15 +429,15 @@ next run: see [The overlay](#the-overlay) for the full list.
 
 | Task | Command | Run in |
 |:--|:--|:--|
-| Validate the config, no hardware | `python3 object-detection/src/app.py --validate-config` | anywhere |
-| Push the app to the board | `scp -r object-detection/ src/ sima@<devkit-ip>:~` | WSL |
-| Run the app | `python3 src/app.py` | DevKit |
-| Pull the video back | `scp sima@<devkit-ip>:~/object-detection/detections.mp4 .` | WSL |
-| Pull the stills back | `scp -r sima@<devkit-ip>:~/object-detection/frames .` | WSL |
-| Kill an orphaned run | `pkill -f src/app.py` | DevKit |
+| Validate the config, no hardware | `sima-vision detect --validate` | anywhere |
+| Push the app to the board | `pip install sima-vision` | WSL |
+| Run the app | `sima-vision detect` | DevKit |
+| Pull the video back | `scp sima@<devkit-ip>:~/detections.mp4 .` | WSL |
+| Pull the stills back | `scp -r sima@<devkit-ip>:~/frames .` | WSL |
+| Kill an orphaned run | `pkill -f sima-vision` | DevKit |
 
 The SDK container (`dk shell`, `dk status`, `neat`) is only needed for board admin, and
-is covered in the [root README](../README.md#setup-questions).
+is covered in the [root README](setup.md#setup-questions).
 
 ## How the app works
 
@@ -685,7 +673,7 @@ are still written at the source rate. Leave `runtime.overflow_policy: auto`, whi
 <summary><b>I want masks, not boxes</b></summary>
 
 That is the companion app:
-[instance segmentation with a background blur](../instance-segmentation/README.md). Same
+[instance segmentation with a background blur](segment.md). Same
 board, same setup, a `-seg` model pack.
 
 </details>
@@ -693,17 +681,17 @@ board, same setup, a `-seg` model pack.
 ## Common errors
 
 Problems with a **running detector**. Bring-up problems are in the
-[root README](../README.md#setup-errors).
+[root README](setup.md#setup-errors).
 
 | Symptom | Fix |
 |:--|:--|
 | `model archive not found` | Run from `~/object-detection`, and check `find assets -type f` |
 | `source file not found` | The path is relative to where you launch `app.py`. The error lists what is actually in the folder |
 | `is not a raw H.264 elementary stream` | You renamed a `.mp4` instead of converting it. Use the ffmpeg command in the error |
-| `No src-element named "nN_demux"` | `.mp4` demuxer bug. [Convert to `.h264`](../README.md#video-must-be-raw-h264) |
-| `ModuleNotFoundError: pyneat` | You are on the PC, or pairing never ran. See the [root README](../README.md#pyneat-missing) |
+| `No src-element named "nN_demux"` | `.mp4` demuxer bug. [Convert to `.h264`](setup.md#video-must-be-raw-h264) |
+| `ModuleNotFoundError: pyneat` | You are on the PC, or pairing never ran. See the [root README](setup.md#recovery) |
 | `pyneat requires numpy<2` | `pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"` |
-| Device busy | Orphaned run: `ssh sima@<ip> pkill -f src/app.py` |
+| Device busy | Orphaned run: `ssh sima@<ip> pkill -f sima-vision` |
 | Stuck after `loading model` | First load unpacks the archive. Give it a minute |
 | No detections at all | Check `model.family` is `yolo26`, then lower `decode.score_threshold` |
 | Scores all near zero | `model.family` is not `yolo26`, so the raw-logit head is being decoded wrong |

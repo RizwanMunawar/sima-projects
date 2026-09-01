@@ -28,6 +28,7 @@ from . import __version__, runtime
 from .neat import describe_preprocess
 from .runloop import Stopper
 from .runtime import FAMILY_DECODE_TOKENS, load_runtime_dependencies
+from .setup_commands import run_fetch, run_init
 from .tasks import TASKS
 
 EPILOG = """\
@@ -190,9 +191,57 @@ def build_parser() -> argparse.ArgumentParser:
         task.add_arguments(task_group)
         sub.set_defaults(_task=task_cls)
 
+    add_init_parser(subparsers)
+    add_fetch_parser(subparsers)
     add_preview_parser(subparsers)
     add_doctor_parser(subparsers)
     return parser
+
+
+def add_init_parser(subparsers) -> None:
+    """``init`` -- write a commented starter config into the working directory."""
+    sub = subparsers.add_parser(
+        "init",
+        help="Write a documented config.yaml you can edit",
+        description=(
+            "Copy this task's starter config into the working directory. It is "
+            "the same file the repo ships, with every setting commented, and it "
+            "comes out of the installed package -- no clone needed."
+        ),
+    )
+    sub.add_argument("task", choices=list(TASKS), help="Which app to configure.")
+    sub.add_argument(
+        "--out", "-o", type=Path, default=Path("config.yaml"), metavar="PATH",
+        help="Where to write it. Default ./config.yaml, which every command finds "
+             "on its own.",
+    )
+    sub.add_argument(
+        "--force", "-f", action="store_true", help="Overwrite an existing file.",
+    )
+    sub.set_defaults(_command="init")
+
+
+def add_fetch_parser(subparsers) -> None:
+    """``fetch`` -- download the sample clips and print the model command."""
+    sub = subparsers.add_parser(
+        "fetch",
+        help="Download the sample clips, and say how to get the model",
+        description=(
+            "Download the two sample videos into ./assets/videos/. They are on a "
+            "public GitHub release, so they need no login. The model packs do "
+            "need a community.sima.ai login, so that command is printed for you "
+            "to run rather than attempted here."
+        ),
+    )
+    sub.add_argument(
+        "task", choices=list(TASKS), nargs="?", default="detect",
+        help="Which model to print the download command for. Default detect.",
+    )
+    sub.add_argument(
+        "--into", type=Path, default=Path("assets"), metavar="DIR",
+        help="Where to put them. Default ./assets.",
+    )
+    sub.set_defaults(_command="fetch")
 
 
 def add_preview_parser(subparsers) -> None:
@@ -346,7 +395,7 @@ def run_preview(args) -> int:
     # A preview runs no model and opens no source, but the config it previews
     # still has to pass the ordinary validation. Fill in only what is missing,
     # so a real config's values are never shadowed by a placeholder.
-    found = discover_config(task.directory, args.config) if use_file else None
+    found = discover_config(args.config) if use_file else None
     raw = read_config_file(found)
     overrides = {}
     if not (raw.get("model") or {}).get("path"):
@@ -464,7 +513,13 @@ def main(argv: list[str] | None = None) -> int:
     command = getattr(args, "_command", None)
     if command is not None:
         try:
-            return run_doctor() if command == "doctor" else run_preview(args)
+            if command == "doctor":
+                return run_doctor()
+            if command == "init":
+                return run_init(args.task, args.out, args.force)
+            if command == "fetch":
+                return run_fetch(args.task, args.into)
+            return run_preview(args)
         except KeyboardInterrupt:
             return 130
         except SystemExit as exc:

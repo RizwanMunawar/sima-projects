@@ -50,7 +50,6 @@ class DetectRuntime(TaskRuntime):
 
 class DetectTask(Task):
     name = "detect"
-    directory = "object-detection"
     help = "Boxes, class names and confidence on every frame"
     graph_name = "yolo_detector"
     result_label = "detections"

@@ -17,19 +17,17 @@ from sima_vision.config import (
     apply_overrides,
     discover_config,
     load_base_config,
+    packaged_config,
     validate_base,
 )
 from sima_vision.tasks import TASKS
 
 REPO = Path(__file__).resolve().parents[1]
 
-#: The configs shipped in the repo, and the task that owns each one. Loading
-#: every one of them is the regression guard for the shared-core refactor.
-SHIPPED = [
-    ("detect", REPO / "object-detection" / "config.yaml"),
-    ("segment", REPO / "instance-segmentation" / "config.yaml"),
-    ("fall", REPO / "fall-detection" / "config.yaml"),
-]
+#: The starter configs shipped inside the wheel, and the task that owns each.
+#: Loading every one of them is the regression guard for the shared-core
+#: refactor, and proves `sima-vision init` cannot hand out a broken file.
+SHIPPED = [(name, packaged_config(name)) for name in TASKS]
 
 
 @pytest.mark.parametrize("name,path", SHIPPED, ids=[n for n, _ in SHIPPED])
@@ -97,7 +95,7 @@ def test_apply_overrides_replaces_a_non_mapping():
 
 def test_flags_beat_the_config_file():
     cfg = TASKS["detect"]().load(
-        REPO / "object-detection" / "config.yaml",
+        packaged_config("detect"),
         {"decode.score_threshold": 0.9, "output.save.enable": False},
     )
     assert cfg.score_threshold == 0.9
@@ -117,31 +115,32 @@ def test_override_goes_through_validation():
 # ── discovery ──
 
 
-def test_discovery_prefers_the_working_directory(tmp_path, monkeypatch):
+def test_discovery_finds_the_working_directory(tmp_path, monkeypatch):
     (tmp_path / "config.yaml").write_text("model:\n  path: a.tar.gz\n", encoding="utf-8")
-    nested = tmp_path / "object-detection"
-    nested.mkdir()
-    (nested / "config.yaml").write_text("model:\n  path: b.tar.gz\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    assert discover_config("object-detection", None) == tmp_path / "config.yaml"
-
-
-def test_discovery_falls_back_to_the_app_directory(tmp_path, monkeypatch):
-    nested = tmp_path / "object-detection"
-    nested.mkdir()
-    (nested / "config.yaml").write_text("model:\n  path: b.tar.gz\n", encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-    assert discover_config("object-detection", None) == nested / "config.yaml"
+    assert discover_config(None) == tmp_path / "config.yaml"
 
 
 def test_discovery_returns_none_when_there_is_nothing(tmp_path, monkeypatch):
+    """No file is not an error: the defaults are a complete configuration."""
     monkeypatch.chdir(tmp_path)
-    assert discover_config("object-detection", None) is None
+    assert discover_config(None) is None
 
 
 def test_explicit_config_must_exist(tmp_path):
     with pytest.raises(FileNotFoundError):
-        discover_config("object-detection", tmp_path / "nope.yaml")
+        discover_config(tmp_path / "nope.yaml")
+
+
+def test_init_writes_a_config_every_task_can_load(tmp_path, monkeypatch):
+    """`sima-vision init` must never hand out a file that then fails to load."""
+    from sima_vision.setup_commands import run_init
+
+    monkeypatch.chdir(tmp_path)
+    for name in TASKS:
+        out = tmp_path / f"{name}.yaml"
+        assert run_init(name, out, force=False) == 0
+        assert TASKS[name]().load(out, {}).config_path == out
 
 
 # ── scalar readers ──

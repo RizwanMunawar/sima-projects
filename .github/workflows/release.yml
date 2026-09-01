@@ -48,7 +48,7 @@ jobs:
 
       - name: Lint and test
         run: |
-          ruff check src tests
+          ruff check sima_vision tests
           pytest -q
 
       - name: Check the tag matches the package version

@@ -34,7 +34,7 @@ the MLA and the compositing runs at frame rate on the board.
    └───────────────────────────────────────────────────────────────┘
 ```
 
-It is the companion to [`object-detection/`](../object-detection/README.md), and shares
+It is the companion to [object detection](detect.md), and shares
 its whole setup. If you have already brought a board up with that app, everything here is
 three commands away.
 
@@ -56,7 +56,7 @@ setup lives in the [root README](../README.md).
 | Section | What it covers |
 |:--|:--|
 | [See it before you deploy](#see-it-before-you-deploy) | The overlay on a laptop, no hardware |
-| [Test it in three commands](#test-it-in-three-commands) | Push, run, pull the result back |
+| [Run it in three commands](#run-it-in-three-commands) | Push, run, pull the result back |
 | [Get a segmentation model](#get-a-segmentation-model) | A `-seg` `.tar.gz` pack, not a detect one |
 | [Get a test video](#get-a-test-video) | Two ready-made `.h264` clips from the releases page |
 | [Deploy and run](#deploy-and-run) | `scp` the app over and run it |
@@ -78,7 +78,8 @@ using your own config:
 
 ```bash
 pip install "sima-vision[preview]"
-sima-vision preview --task segment -c instance-segmentation/config.yaml -o preview.png
+sima-vision init segment      # writes a documented config.yaml
+sima-vision preview --task segment -o preview.png
 ```
 
 <div align="center">
@@ -89,62 +90,46 @@ It runs the same drawing code the board does, over a synthetic scene, so every
 `visualization:` and `blur:` value below can be tuned here first. **No model is run** --
 the detections are placed for you so there is something to draw.
 
-## Test it in three commands
+## Run it in three commands
 
-**Board already paired?** This is the whole loop. Run it from the repo root in WSL:
-
-```bash
-scp -r instance-segmentation/ src/ sima@<devkit-ip>:~                    # 1. push the app
-
-ssh -tt sima@<devkit-ip> \
-  'source ~/pyneat/bin/activate && cd ~/instance-segmentation && python3 src/app.py && cd ..'
-
-scp sima@<devkit-ip>:~/instance-segmentation/segmentation.mp4 .     # 3. pull the result
-```
-
-Or, with the CLI installed on the board (`pip install sima-vision`):
+On the DevKit. There is nothing to clone and nothing to `scp`:
 
 ```bash
-ssh -tt sima@<devkit-ip> \
-  'source ~/pyneat/bin/activate && cd ~/instance-segmentation && sima-vision segment --blur'
+pip install sima-vision                     # 1. install
+
+sima-vision fetch segment                    # 2. sample clips + the model command
+
+sima-vision segment \
+  --source assets/videos/people-walking-outside-mall.h264 \
+  --model  assets/models/yolo26m-seg-bf16-mla_tess-b1.tar.gz
 ```
 
-`sima-vision segment` finds `config.yaml` in the directory you run it from, so that is the
-same run. Every setting below can also be given as a flag, and flags win over the file —
-see [the CLI reference](../README.md#the-cli).
-
-Play `segmentation.mp4`. A sharp subject on a blurred background means the whole chain
-works. Repeat after every edit.
-
-**Faster still, before you touch the board.** This parses and validates `config.yaml`
-without pyneat, a model, or any hardware, and runs anywhere:
+`fetch` downloads the clips and prints the one `sima-cli download` line for the model,
+which needs a community.sima.ai login. Then pull the result back and look at it:
 
 ```bash
-python3 instance-segmentation/src/app.py --validate-config
-```
-```
-config OK: instance-segmentation/config.yaml
-  family=yolo26-seg -> BoxDecodeType.YoloV26Seg
-  preprocess: kind=image enable=on in=NV12 ... resize=letterbox pad=114 | normalize=coco_yolo
-  segmentation: masks=on source=auto space=auto threshold=0.5 net=<from the first mask>
-  blur: gaussian kernel=41 sigma=auto down=2 on the background | keep=every class | feather=9
+scp sima@<devkit-ip>:~/segmentation.mp4 .
 ```
 
-It catches a detect head pointed at a segmentation app, a misspelled class name in
-`blur.keep_classes`, and every out-of-range knob, in under a second.
+A sharp subject on a blurred background means the whole chain works.
 
-**A short run instead of a whole clip.** Set `runtime.frames: 100` and
-`output.video.enable: false`. You get 100 composited JPEGs in `frames/` and the app exits
-by itself.
+A config file is optional — the flags above are enough. For a persistent setup:
 
-<a id="get-a-segmentation-model"></a>
+```bash
+sima-vision init segment      # documented config.yaml, here
+sima-vision segment           # picks it up on its own
+```
+
+Every setting has a flag too, and flags win over the file. See
+[the CLI reference](../README.md#reference).
+
 ## Get a segmentation model
 
 This is the **one thing the detector app does not give you**. A detect pack emits boxes
 and nothing else, so it cannot drive a mask-shaped blur. You need a `-seg` pack.
 
 Run this **in WSL, from the repo root**. It downloads straight into
-`instance-segmentation/assets/models/`, which is exactly where `config.yaml` already
+`assets/models/`, which is exactly where `config.yaml` already
 looks, so there is nothing to move afterwards:
 
 ```bash
@@ -157,8 +142,8 @@ sima-cli login                                    # needs a community.sima.ai ac
 MODELS=https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix
 MODEL=yolo26-segmentation/yolo26m-seg-bf16-mla_tess-b1.tar.gz
 
-mkdir -p instance-segmentation/assets/models
-cd instance-segmentation/assets/models && sima-cli download "$MODELS/$MODEL" && cd ../../../
+mkdir -p assets/models
+cd assets/models && sima-cli download "$MODELS/$MODEL" && cd ../../../
 ```
 
 > [!IMPORTANT]
@@ -166,17 +151,17 @@ cd instance-segmentation/assets/models && sima-cli download "$MODELS/$MODEL" && 
 > the `cd`. The trailing `cd ../../../` puts you back at the repo root, ready for the
 > `scp` in the next step. Downloading from anywhere else, including the container's
 > `/workspace`, is how the pack ends up
-> [somewhere `config.yaml` cannot see](../README.md#paths).
+> [somewhere `config.yaml` cannot see](setup.md#paths).
 
 Confirm it landed, and that the name matches `model.path`:
 
 ```bash
-ls -lh instance-segmentation/assets/models/
-grep '^  path:' instance-segmentation/config.yaml
+ls -lh assets/models/
+grep '^  path:' config.yaml
 ```
 
 > ✅ The two must agree. `model.path` is relative to the app directory, so a pack at
-> `instance-segmentation/assets/models/X.tar.gz` is written `path: assets/models/X.tar.gz`.
+> `assets/models/X.tar.gz` is written `path: assets/models/X.tar.gz`.
 
 > [!NOTE]
 > **Check the listing before you trust that filename.** The segmentation packs follow the
@@ -201,9 +186,9 @@ sima-cli download $MODELS/yolo26-segmentation/yolo26m-seg-bf16-mla_tess-b1.tar.g
 
 ```bash
 # then back in WSL
-mkdir -p /root/sima-projects/instance-segmentation/assets/models
+mkdir -p /root/sima-projects/assets/models
 mv /root/workspace/assets/models/yolo26m-seg-*.tar.gz \
-   /root/sima-projects/instance-segmentation/assets/models/
+   /root/sima-projects/assets/models/
 ```
 
 The WSL route above skips this entirely, which is why it is the one written out first.
@@ -214,15 +199,15 @@ The WSL route above skips this entirely, which is why it is the one written out 
 ## Get a test video
 
 Two ready-made 1080p clips, already converted to raw `.h264` so they skip the
-[demuxer bug](../README.md#known-issues) entirely. Same idea as the model: run it **in WSL, from the
+[demuxer bug](setup.md#known-issues) entirely. Same idea as the model: run it **in WSL, from the
 repo root**, and it lands where `config.yaml` already looks.
 
 ```bash
 VIDEOS=https://github.com/RizwanMunawar/sima-projects/releases/download/0.0.1
 
-curl -L -o instance-segmentation/assets/videos/people-walking-inside-mall.h264 \
+curl -L -o assets/videos/people-walking-inside-mall.h264 \
   $VIDEOS/people-walking-inside-mall.h264
-curl -L -o instance-segmentation/assets/videos/people-walking-outside-mall.h264 \
+curl -L -o assets/videos/people-walking-outside-mall.h264 \
   $VIDEOS/people-walking-outside-mall.h264
 ```
 
@@ -244,12 +229,12 @@ source:
 Confirm the model and the clips all landed:
 
 ```bash
-ls -lh instance-segmentation/assets/models/ instance-segmentation/assets/videos/
+ls -lh assets/models/ assets/videos/
 ```
 
 > [!NOTE]
 > **Bringing your own clip?** It must be a raw H.264 elementary stream, not an `.mp4`.
-> See [Video must be raw H.264](../README.md#video-must-be-raw-h264). Leave `source.fps`,
+> See [Video must be raw H.264](setup.md#video-must-be-raw-h264). Leave `source.fps`,
 > `source.width` and `source.height` at `0`; the app reads the real geometry out of the
 > stream's SPS, and both clips above carry it.
 
@@ -260,41 +245,36 @@ and a useful baseline for the rest of the config.
 <a id="deploy-and-run"></a>
 ## Deploy and run
 
-The app lives in [`instance-segmentation/`](.):
-
-```
-instance-segmentation/
-├── config.yaml          # every setting lives here
-├── assets/
-│   ├── models/          # -seg .tar.gz model packs  (not in git)
-│   └── videos/          # .h264 streams             (not in git)
-└── src/
-    ├── app.py           # the pipeline and the compositor
-    ├── coco_labels.txt  # 80 COCO class names
-    └── requirements.txt
-```
-
-Models and video are gitignored, so after cloning you fetch them with the commands in
-[Get a segmentation model](#get-a-segmentation-model) and
-[Get a test video](#get-a-test-video), which put the `-seg` pack in `assets/models/` and
-the `.h264` clips in `assets/videos/`.
-
-On the DevKit, once per board (skip it if you already did this for the detector, the
-requirements are identical):
+There is nothing to copy. Install the package on the board and run it:
 
 ```bash
-pip install -r ~/instance-segmentation/src/requirements.txt
+pip install sima-vision
 ```
+
+Your working directory holds only what is yours:
+
+```
+~/
+├── config.yaml          # sima-vision init segment
+└── assets/
+    ├── models/          # -seg .tar.gz model packs  (sima-cli download)
+    └── videos/          # .h264 streams             (sima-vision fetch)
+```
+
+Neither is in git. [Get a segmentation model](#get-a-segmentation-model) and
+[Get a test video](#get-a-test-video) put the `-seg` pack in `assets/models/` and the
+`.h264` clips in `assets/videos/`, which is where `config.yaml` already looks.
 
 > [!CAUTION]
 > **Never let pip pull numpy 2.x.** `pyneat` and every `simaai-*` package need
-> `numpy<2`. The pins in `requirements.txt` handle it. If you already broke it:
+> `numpy<2`. `sima-vision` depends on neither numpy nor OpenCV precisely so that
+> installing it cannot upgrade them -- the board provides both. If you already broke it:
 > `pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"`
 
 **One command copies everything.** Run it from the repo root in WSL, after every change:
 
 ```bash
-scp -r instance-segmentation/ src/ sima@<devkit-ip>:~
+pip install sima-vision
 ```
 
 Then on the DevKit:
@@ -302,7 +282,7 @@ Then on the DevKit:
 ```bash
 ssh -tt sima@<devkit-ip>                     # two t's, see below
 source ~/pyneat/bin/activate
-cd ~/instance-segmentation && python3 src/app.py && cd ..
+sima-vision segment
 ```
 
 Healthy output:
@@ -331,7 +311,7 @@ That **tensor dump is the important line**, and it is printed once per run. See
 > [!CAUTION]
 > **Use `ssh -tt`, two t's.** Without a pty, Ctrl-C never reaches the app. It keeps
 > running invisibly holding the MLA and your next run fails.
-> Rescue: `ssh sima@<devkit-ip> pkill -f src/app.py`
+> Rescue: `ssh sima@<devkit-ip> pkill -f sima-vision`
 
 <a id="see-the-result"></a>
 ## See the result
@@ -339,8 +319,8 @@ That **tensor dump is the important line**, and it is printed once per run. See
 Every run writes a composited video and composited stills on the board:
 
 ```bash
-scp sima@<devkit-ip>:~/instance-segmentation/segmentation.mp4 .
-scp -r sima@<devkit-ip>:~/instance-segmentation/frames .
+scp sima@<devkit-ip>:~/segmentation.mp4 .
+scp -r sima@<devkit-ip>:~/frames .
 ```
 
 On exit the app says exactly what it wrote, and which mask encoding it used:
@@ -493,7 +473,7 @@ visible signal that the mask decode did not work for it.
 
 ## Configuration
 
-Everything lives in `instance-segmentation/config.yaml`. These settings matter:
+Everything lives in `config.yaml`. These settings matter:
 
 ```yaml
 model:
@@ -533,7 +513,7 @@ output:
 | `family: yolo26` (detect) | Refused at startup: a detect head has no mask data |
 | `uri: C:\Users\...\video.mp4` | The DevKit has no `C:` drive |
 | `uri: r"C:\path\file.mp4"` | `r"..."` is Python. YAML keeps the `r` and quotes |
-| A `.mp4` source | Hits a [demuxer bug](../README.md#video-must-be-raw-h264). Convert to `.h264` |
+| A `.mp4` source | Hits a [demuxer bug](setup.md#video-must-be-raw-h264). Convert to `.h264` |
 | `keep_classes: [persn]` | Refused at startup, with a spelling suggestion |
 
 ## Daily loop
@@ -542,15 +522,15 @@ output:
 
 | Task | Command | Run in |
 |:--|:--|:--|
-| Validate the config, no hardware | `python3 instance-segmentation/src/app.py --validate-config` | anywhere |
-| Push the app to the board | `scp -r instance-segmentation/ src/ sima@<devkit-ip>:~` | WSL |
-| Run the app | `python3 src/app.py` | DevKit |
-| Pull the video back | `scp sima@<devkit-ip>:~/instance-segmentation/segmentation.mp4 .` | WSL |
-| Pull the stills back | `scp -r sima@<devkit-ip>:~/instance-segmentation/frames .` | WSL |
-| Kill an orphaned run | `pkill -f src/app.py` | DevKit |
+| Validate the config, no hardware | `sima-vision segment --validate` | anywhere |
+| Push the app to the board | `pip install sima-vision` | WSL |
+| Run the app | `sima-vision segment` | DevKit |
+| Pull the video back | `scp sima@<devkit-ip>:~/segmentation.mp4 .` | WSL |
+| Pull the stills back | `scp -r sima@<devkit-ip>:~/frames .` | WSL |
+| Kill an orphaned run | `pkill -f sima-vision` | DevKit |
 
 The SDK container (`dk shell`, `dk status`, `neat`) is only needed for board admin, and
-is covered in the [root README](../README.md#setup-questions).
+is covered in the [root README](setup.md#setup-questions).
 
 ## How the app works
 
@@ -740,7 +720,7 @@ visualization: { mask_outline: off }
 ## Known issues
 
 The `.mp4` demuxer bug in Neat 0.3.0 affects every app in this repo and is written up in
-the [root README](../README.md#known-issues). The one below is specific to segmentation.
+the [root README](setup.md#known-issues). The one below is specific to segmentation.
 
 <details>
 <summary><b>Mask layout is solved from the buffer, not assumed</b></summary>
@@ -924,7 +904,7 @@ To tell a graph that over-allocates apart from an app that simply does too much 
 frame, run once with `--minimal`, which strips the consumer back to a bare pull loop:
 
 ```bash
-python src/app.py --minimal
+sima-vision segment --minimal
 ```
 
 Reaching the end of the clip means the graph is fine. Stalling at the same frame means
@@ -1022,7 +1002,7 @@ than silently filtering everything out.
 ## Common errors
 
 Problems with a **running segmenter**. Bring-up problems are in the
-[root README](../README.md#setup-errors).
+[root README](setup.md#setup-errors).
 
 | Symptom | Fix |
 |:--|:--|
@@ -1032,10 +1012,10 @@ Problems with a **running segmenter**. Bring-up problems are in the
 | `model archive not found` | Run from `~/instance-segmentation`, and check `find assets -type f` |
 | `source file not found` | The path is relative to where you launch `app.py`. The error lists what is in the folder |
 | `is not a raw H.264 elementary stream` | You renamed a `.mp4` instead of converting it. Use the ffmpeg command in the error |
-| `No src-element named "nN_demux"` | `.mp4` demuxer bug. [Convert to `.h264`](../README.md#video-must-be-raw-h264) |
+| `No src-element named "nN_demux"` | `.mp4` demuxer bug. [Convert to `.h264`](setup.md#video-must-be-raw-h264) |
 | `pyneat requires numpy<2` | `pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"` |
-| `ModuleNotFoundError: pyneat` | You are on the PC, or pairing never ran. See the [root README](../README.md#pyneat-missing) |
-| Device busy | Orphaned run: `ssh sima@<ip> pkill -f src/app.py` |
+| `ModuleNotFoundError: pyneat` | You are on the PC, or pairing never ran. See the [root README](setup.md#recovery) |
+| Device busy | Orphaned run: `ssh sima@<ip> pkill -f sima-vision` |
 | Stuck after `loading model` | First load unpacks the archive. Give it a minute |
 | `timed out waiting for instances` after a few frames, no codec-daemon errors | The graph starved the decoder's buffer pool. Count the queues in the printed pipeline, and run `--minimal` to confirm |
 | `timed out waiting for instances` after a few frames, with `sima_enc_daemon` errors | The Insight encoder wedged the shared codec daemon. Set `output.insight.enable: false` |

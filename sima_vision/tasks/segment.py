@@ -609,7 +609,6 @@ SEGMENT_DRAW = DrawConfig(box_thickness=2, centre_dot=False, banner=False)
 
 class SegmentTask(Task):
     name = "segment"
-    directory = "instance-segmentation"
     help = "Per-pixel masks, and a background blur that keeps the subject sharp"
     config_class = SegmentAppConfig
     graph_name = "yolo_segmenter"

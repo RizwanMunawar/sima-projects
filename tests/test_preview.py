@@ -143,10 +143,11 @@ def test_preview_command_writes_a_png(tmp_path, name):
 
 
 def test_preview_command_uses_a_shipped_config(tmp_path):
+    from sima_vision.config import packaged_config
+
     out = tmp_path / "seg.png"
     code = main(["preview", "--task", "segment", "-o", str(out),
-                 "-c", str(REPO / "instance-segmentation" / "config.yaml"),
-                 "--size", "320x180"])
+                 "-c", str(packaged_config("segment")), "--size", "320x180"])
     assert code == 0
     assert out.is_file()
 
