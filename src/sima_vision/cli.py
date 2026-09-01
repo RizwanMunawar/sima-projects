@@ -25,6 +25,8 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .neat import describe_preprocess
+from .runloop import Stopper
 from .runtime import FAMILY_DECODE_TOKENS, load_runtime_dependencies
 from .tasks import TASKS
 
@@ -205,8 +207,6 @@ def collect_overrides(args: argparse.Namespace) -> dict:
 
 def print_validation(task, cfg) -> None:
     """What ``--validate`` prints. Deliberately the same shape for every task."""
-    from .neat import describe_preprocess
-
     where = cfg.config_path or "<defaults and flags only>"
     print(f"config OK: {where}")
     print(f"  model: {cfg.model_path or '<unset>'}")
@@ -255,8 +255,6 @@ def main(argv: list[str] | None = None) -> int:
             os.environ.setdefault("SIMA_GST_FLOW_DEBUG", "1")
         if cfg.save_enable:
             Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
-
-        from .runloop import Stopper
 
         task.run(cfg, Stopper())
         return 0

@@ -38,8 +38,6 @@ from ..config import (
     _section,
     _str,
     _str_list,
-    load_base_config,
-    validate_base,
 )
 from ..draw import draw_banner, draw_caption, draw_fps, draw_scale
 from ..runloop import TaskRuntime
@@ -52,7 +50,7 @@ from ..samples import (
     parse_boxes,
     resolve_classes,
 )
-from ..sinks import Pipeline
+from ..sinks import Pipeline, load_labels
 from .base import Task
 
 UPRIGHT, FALLING, FALLEN, RECOVERING = "upright", "falling", "fallen", "recovering"
@@ -588,7 +586,6 @@ class Alert:
     """One pending notification."""
 
     track_id: int
-    when: float
     label: str
     box: tuple[int, int, int, int]
     signals: dict
@@ -923,7 +920,7 @@ class FallRuntime(TaskRuntime):
             )
             queued = pipeline.alerts.offer(
                 Alert(
-                    track_id=track.track_id, when=now, label=label,
+                    track_id=track.track_id, label=label,
                     box=(int(track.box["x1"]), int(track.box["y1"]),
                          int(track.box["x2"]), int(track.box["y2"])),
                     signals=signals, frame_index=index, snapshot_path=snapshot,
@@ -981,6 +978,7 @@ class FallTask(Task):
     name = "fall"
     directory = "fall-detection"
     help = "Track people and email when one of them goes down"
+    config_class = FallAppConfig
     graph_name = "yolo_detector"
     result_label = "detections"
     output_label = "detector_output"
@@ -1050,22 +1048,18 @@ class FallTask(Task):
             overrides.setdefault("alerts.enable", True)
         return overrides
 
-    def build_config(self, raw: dict, path) -> FallAppConfig:
-        base = load_base_config(raw, path, self.defaults)
-        return FallAppConfig(
-            **{f: getattr(base, f) for f in BaseConfig.__dataclass_fields__},
-            track=load_track_config(raw),
-            fall=load_fall_config(raw),
-            alerts=load_alert_config(raw),
-        )
+    def extra_sections(self, raw: dict) -> dict:
+        return {
+            "track": load_track_config(raw),
+            "fall": load_fall_config(raw),
+            "alerts": load_alert_config(raw),
+        }
 
     def validate(self, cfg: FallAppConfig) -> None:
-        validate_base(cfg)
+        super().validate(cfg)
         validate_fall(cfg)
 
     def describe(self, cfg: FallAppConfig) -> list[str]:
-        from ..sinks import load_labels
-
         # Resolving the classes here means a typo in tracking.classes is caught
         # off-board rather than on the DevKit.
         ids = resolve_classes(

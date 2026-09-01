@@ -53,6 +53,10 @@ class Task:
     output_label = "detector_output"
     defaults = TaskDefaults()
 
+    #: The config dataclass this task builds. Tasks that add sections point
+    #: this at their own subclass of :class:`~sima_vision.config.BaseConfig`.
+    config_class: type = BaseConfig
+
     #: Set by :meth:`build` as soon as it exists, so a failure part-way through
     #: still has something to close.
     pipeline: Pipeline | None = None
@@ -98,9 +102,24 @@ class Task:
         """
         return cfg
 
+    def extra_sections(self, raw: dict) -> dict:
+        """This task's own config sections, as ``config_class`` keywords.
+
+        Override to read a section the base config knows nothing about. Return
+        nothing and the task simply uses :class:`BaseConfig` as it stands.
+        """
+        return {}
+
     def build_config(self, raw: dict, path: Path | None) -> BaseConfig:
-        """Read this task's config sections. Override to add your own."""
-        return load_base_config(raw, path, self.defaults)
+        """Read the shared sections, then let the task add its own."""
+        base = load_base_config(raw, path, self.defaults)
+        extra = self.extra_sections(raw)
+        if not extra:
+            return base
+        return self.config_class(
+            **{name: getattr(base, name) for name in BaseConfig.__dataclass_fields__},
+            **extra,
+        )
 
     def validate(self, cfg) -> None:
         """Check the config. Override to add rules, and call ``super()`` first."""

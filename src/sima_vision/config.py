@@ -17,12 +17,13 @@ whose sensible default differs per task.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
 from .runtime import (
+    AUTO_FLAGS,
     COLOR_FORMATS,
     FAMILY_DECODE_TOKENS,
     NORMALIZE_PRESETS,
@@ -84,8 +85,6 @@ def _flag(raw: dict, key: str, default: str) -> str:
     bare `on`/`off`/`yes`/`no` to booleans, so `enable: on`
     reaches us as True. Fold those back onto the token vocabulary.
     """
-    from .runtime import AUTO_FLAGS
-
     value = raw.get(key, default)
     if value is None:
         return default
@@ -852,7 +851,3 @@ def discover_config(task_dir: str, explicit: Path | None) -> Path | None:
                 return candidate
     return None
 
-
-def replace_config(cfg, **changes):
-    """``dataclasses.replace`` re-exported, so tasks need not import dataclasses."""
-    return replace(cfg, **changes)

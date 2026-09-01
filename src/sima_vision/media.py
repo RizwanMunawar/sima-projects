@@ -15,7 +15,6 @@ from fractions import Fraction
 from pathlib import Path
 
 from . import runtime
-from .runtime import time_ms  # noqa: F401  (re-exported for convenience)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Probing

@@ -134,7 +134,7 @@ Setup runs once per machine, about two hours and mostly downloading.
 │                        │ 7  fetch model + video     │                         │
 │                        │      into <app>/assets/    │                         │
 │                        │                            │                         │
-│                        │ 8  scp -r <app>/ ──────────┼─>  ~/<app>              │
+│                        │ 8  scp -r <app>/ src/ ─────┼─>  ~/<app>, ~/src       │
 │                        │      edit, copy, run       │      python3 src/app.py │
 │                        │                            │                         │
 │ 9  scp the result back<┼────────────────────────────┼────  annotated .mp4     │
@@ -569,7 +569,7 @@ address: `ssh-keygen -R <ip>`.
 <details>
 <summary><b>Do I have to re-run the setup after every code change?</b></summary>
 
-No. Steps 1 to 6 are once per machine. After an edit it is `scp -r <app>/` and run again.
+No. Steps 1 to 6 are once per machine. After an edit it is `scp -r <app>/ src/` and run again.
 You only re-pair (step 6) if the board's home directory is wiped, which a firmware update
 can do.
 

@@ -79,7 +79,7 @@ whoever is on shift, with a snapshot attached.
 Run these from the **repo root** in WSL:
 
 ```bash
-scp -r fall-detection/ sima@<devkit-ip>:~                           # 1. push the app
+scp -r fall-detection/ src/ sima@<devkit-ip>:~                           # 1. push the app
 
 ssh -tt sima@<devkit-ip> \
   'source ~/pyneat/bin/activate && cd ~/fall-detection && python3 src/app.py && cd ..'
@@ -249,7 +249,7 @@ pip install -r ~/fall-detection/src/requirements.txt
 > `pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"`
 
 ```bash
-scp -r fall-detection/ sima@<devkit-ip>:~
+scp -r fall-detection/ src/ sima@<devkit-ip>:~
 ```
 
 Then on the DevKit:
@@ -469,7 +469,7 @@ output:
 |:--|:--|:--|
 | Validate the config, no hardware | `python3 fall-detection/src/app.py --validate-config` | anywhere |
 | Check the mail settings | `python3 src/app.py --test-alert` | DevKit |
-| Push the app to the board | `scp -r fall-detection/ sima@<devkit-ip>:~` | WSL |
+| Push the app to the board | `scp -r fall-detection/ src/ sima@<devkit-ip>:~` | WSL |
 | Run the app | `python3 src/app.py` | DevKit |
 | Pull the video back | `scp sima@<devkit-ip>:~/fall-detection/falls.mp4 .` | WSL |
 | Pull the alert snapshots | `scp -r sima@<devkit-ip>:~/fall-detection/alerts .` | WSL |

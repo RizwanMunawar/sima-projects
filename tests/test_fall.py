@@ -219,7 +219,7 @@ def test_alerts_off_queue_nothing():
 
 
 def make_alert():
-    return Alert(track_id=1, when=0.0, label="person", box=(0, 0, 10, 10),
+    return Alert(track_id=1, label="person", box=(0, 0, 10, 10),
                  signals={}, frame_index=1)
 
 
@@ -270,7 +270,7 @@ def test_the_message_carries_the_signals_that_fired():
     sender = AlertSender(cfg)
     try:
         alert = Alert(
-            track_id=7, when=0.0, label="person", box=(10, 20, 110, 60),
+            track_id=7, label="person", box=(10, 20, 110, 60),
             signals={"aspect": True, "aspect_value": 1.9, "collapse": False,
                      "descent": True, "descent_value": 812.5},
             frame_index=42,

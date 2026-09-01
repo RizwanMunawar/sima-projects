@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import runtime
+from .neat import build_video_graph
 from .runtime import time_ms
 from .samples import FrameStamp
 
@@ -140,8 +141,6 @@ def open_video_writer(cfg, width: int, height: int, fps: int):
 
 def start_insight(cfg, pipeline: Pipeline, width: int, height: int, fps: int, step) -> None:
     """Bring up the Insight video and metadata senders on ``pipeline``."""
-    from .neat import build_video_graph
-
     pyneat = runtime.pyneat
     step("starting Insight senders...")
     pipeline.video_graph, pipeline.video_run, pipeline.video_port = build_video_graph(

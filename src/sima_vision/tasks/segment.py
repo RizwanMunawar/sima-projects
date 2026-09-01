@@ -9,7 +9,7 @@ overlay and the app is still a segmenter.
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .. import runtime
 from ..config import (
@@ -23,9 +23,6 @@ from ..config import (
     _section,
     _str,
     _str_list,
-    load_base_config,
-    replace_config,
-    validate_base,
 )
 from ..draw import caption_text, class_color, draw_caption, draw_fps, draw_scale
 from ..masks import (
@@ -55,7 +52,7 @@ from ..samples import (
     parse_boxes,
     resolve_classes,
 )
-from ..sinks import Pipeline
+from ..sinks import Pipeline, load_labels
 from .base import Task
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -614,6 +611,7 @@ class SegmentTask(Task):
     name = "segment"
     directory = "instance-segmentation"
     help = "Per-pixel masks, and a background blur that keeps the subject sharp"
+    config_class = SegmentAppConfig
     graph_name = "yolo_segmenter"
     result_label = "instances"
     output_label = "segmenter_output"
@@ -680,28 +678,21 @@ class SegmentTask(Task):
             "and the app was\n          simply holding buffers too long.",
             flush=True,
         )
-        return replace_config(
+        return replace(
             cfg,
-            segment=replace_config(cfg.segment, masks="off", describe=False),
-            blur=replace_config(cfg.blur, enable=False),
+            segment=replace(cfg.segment, masks="off", describe=False),
+            blur=replace(cfg.blur, enable=False),
             save_enable=False, video_enable=False, insight_enable=False,
         )
 
-    def build_config(self, raw: dict, path) -> SegmentAppConfig:
-        base = load_base_config(raw, path, self.defaults)
-        return SegmentAppConfig(
-            **{f: getattr(base, f) for f in BaseConfig.__dataclass_fields__},
-            segment=load_segment_config(raw),
-            blur=load_blur_config(raw),
-        )
+    def extra_sections(self, raw: dict) -> dict:
+        return {"segment": load_segment_config(raw), "blur": load_blur_config(raw)}
 
     def validate(self, cfg: SegmentAppConfig) -> None:
-        validate_base(cfg)
+        super().validate(cfg)
         validate_segment(cfg)
 
     def describe(self, cfg: SegmentAppConfig) -> list[str]:
-        from ..sinks import load_labels
-
         net_w, net_h = resolve_net_size(cfg)
         # Needs the labels file, not the board, so a typo in blur.keep_classes
         # is caught here rather than on the DevKit.

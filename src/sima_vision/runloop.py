@@ -14,6 +14,7 @@ import signal
 import sys
 
 from .runtime import time_ms
+from .samples import FrameStamp
 from .sinks import Pipeline, SinkJob, SinkWorker
 
 HEARTBEAT_EVERY = 50
@@ -154,10 +155,6 @@ class TaskRuntime:
         """The Insight JSON payload for one frame's results."""
         raise NotImplementedError
 
-    def heartbeat_count(self, results) -> int:
-        """What the heartbeat and profile counter should add for this frame."""
-        return len(results)
-
     def summarise(self, pipeline: Pipeline, processed: int) -> list[str]:
         """Extra lines printed once the run is over."""
         return []
@@ -270,8 +267,6 @@ def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
                 break
             continue
 
-        from .samples import FrameStamp
-
         stamp = FrameStamp.of(sample)
         frame, results, stage_ms = task.decode(pipeline, cfg, sample, processed + 1)
         sample = None
@@ -281,7 +276,7 @@ def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
         sinks.submit(SinkJob(processed, stamp, frame, results, live_fps))
         sink_end = time_ms()
 
-        count = task.heartbeat_count(results)
+        count = len(results)
         profile.add(
             pull_end - pull_start,
             (decode_end - pull_end) - stage_ms,

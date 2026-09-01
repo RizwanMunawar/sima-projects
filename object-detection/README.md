@@ -63,7 +63,7 @@ the app draws a box, a centre marker and a labelled caption on every frame.
 Run these from the **repo root** in WSL:
 
 ```bash
-scp -r object-detection/ sima@<devkit-ip>:~                         # 1. push the app
+scp -r object-detection/ src/ sima@<devkit-ip>:~                         # 1. push the app
 
 ssh -tt sima@<devkit-ip> \
   'source ~/pyneat/bin/activate && cd ~/object-detection && python3 src/app.py && cd ..'
@@ -229,7 +229,7 @@ pip install -r ~/object-detection/src/requirements.txt
 **One command copies everything.** Run it from the repo root in WSL, after every change:
 
 ```bash
-scp -r object-detection/ sima@<devkit-ip>:~
+scp -r object-detection/ src/ sima@<devkit-ip>:~
 ```
 
 Then on the DevKit:
@@ -423,7 +423,7 @@ next run: see [The overlay](#the-overlay) for the full list.
 | Task | Command | Run in |
 |:--|:--|:--|
 | Validate the config, no hardware | `python3 object-detection/src/app.py --validate-config` | anywhere |
-| Push the app to the board | `scp -r object-detection/ sima@<devkit-ip>:~` | WSL |
+| Push the app to the board | `scp -r object-detection/ src/ sima@<devkit-ip>:~` | WSL |
 | Run the app | `python3 src/app.py` | DevKit |
 | Pull the video back | `scp sima@<devkit-ip>:~/object-detection/detections.mp4 .` | WSL |
 | Pull the stills back | `scp -r sima@<devkit-ip>:~/object-detection/frames .` | WSL |

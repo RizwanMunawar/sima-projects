@@ -159,3 +159,30 @@ def test_shim_accepts_the_old_flag(directory, task):
     )
     assert result.returncode == 0, result.stderr
     assert "config OK" in result.stdout
+
+
+@pytest.mark.parametrize("directory,task", SHIMS, ids=[d for d, _ in SHIMS])
+def test_deploy_command_carries_the_package(directory, task):
+    """`scp -r <app>/` alone leaves the shared package behind.
+
+    Before the refactor each app.py was self-contained, so copying just the app
+    folder to the board worked. It no longer does, and a README that still said
+    it would produce a ModuleNotFoundError on the DevKit. Every documented
+    deploy command must bring `src/` too.
+    """
+    readme = (REPO / directory / "README.md").read_text(encoding="utf-8")
+    bare = f"scp -r {directory}/ sima@"
+    assert bare not in readme, (
+        f"{directory}/README.md still deploys the app folder without src/"
+    )
+    assert f"scp -r {directory}/ src/ sima@" in readme
+
+
+@pytest.mark.parametrize("directory,task", SHIMS, ids=[d for d, _ in SHIMS])
+def test_shim_names_its_own_app(directory, task):
+    """The shim quotes its own deploy command in the not-installed message."""
+    path = REPO / directory / "src" / "app.py"
+    spec = importlib.util.spec_from_file_location(f"shim_app_{task}", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.APP == directory

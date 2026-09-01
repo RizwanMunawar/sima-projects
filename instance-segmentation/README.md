@@ -75,7 +75,7 @@ setup lives in the [root README](../README.md).
 **Board already paired?** This is the whole loop. Run it from the repo root in WSL:
 
 ```bash
-scp -r instance-segmentation/ sima@<devkit-ip>:~                    # 1. push the app
+scp -r instance-segmentation/ src/ sima@<devkit-ip>:~                    # 1. push the app
 
 ssh -tt sima@<devkit-ip> \
   'source ~/pyneat/bin/activate && cd ~/instance-segmentation && python3 src/app.py && cd ..'
@@ -275,7 +275,7 @@ pip install -r ~/instance-segmentation/src/requirements.txt
 **One command copies everything.** Run it from the repo root in WSL, after every change:
 
 ```bash
-scp -r instance-segmentation/ sima@<devkit-ip>:~
+scp -r instance-segmentation/ src/ sima@<devkit-ip>:~
 ```
 
 Then on the DevKit:
@@ -524,7 +524,7 @@ output:
 | Task | Command | Run in |
 |:--|:--|:--|
 | Validate the config, no hardware | `python3 instance-segmentation/src/app.py --validate-config` | anywhere |
-| Push the app to the board | `scp -r instance-segmentation/ sima@<devkit-ip>:~` | WSL |
+| Push the app to the board | `scp -r instance-segmentation/ src/ sima@<devkit-ip>:~` | WSL |
 | Run the app | `python3 src/app.py` | DevKit |
 | Pull the video back | `scp sima@<devkit-ip>:~/instance-segmentation/segmentation.mp4 .` | WSL |
 | Pull the stills back | `scp -r sima@<devkit-ip>:~/instance-segmentation/frames .` | WSL |
