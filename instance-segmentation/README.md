@@ -55,6 +55,7 @@ setup lives in the [root README](../README.md).
 
 | Section | What it covers |
 |:--|:--|
+| [See it before you deploy](#see-it-before-you-deploy) | The overlay on a laptop, no hardware |
 | [Test it in three commands](#test-it-in-three-commands) | Push, run, pull the result back |
 | [Get a segmentation model](#get-a-segmentation-model) | A `-seg` `.tar.gz` pack, not a detect one |
 | [Get a test video](#get-a-test-video) | Two ready-made `.h264` clips from the releases page |
@@ -69,6 +70,24 @@ setup lives in the [root README](../README.md).
 | [Known issues](#known-issues) | Mask layout is discovered, not assumed |
 | [Questions people ask](#questions-people-ask) | FAQ: no masks, jagged edges, slow runs |
 | [Common errors](#common-errors) | One table, symptom to fix |
+
+## See it before you deploy
+
+No board, no model, no SDK. This draws masks and the background blur
+using your own config:
+
+```bash
+pip install "sima-vision[preview]"
+sima-vision preview --task segment -c instance-segmentation/config.yaml -o preview.png
+```
+
+<div align="center">
+<img src="../assets/preview-segment.png" alt="Instance segmentation preview: masks, captions and a blurred background" width="680">
+</div>
+
+It runs the same drawing code the board does, over a synthetic scene, so every
+`visualization:` and `blur:` value below can be tuned here first. **No model is run** --
+the detections are placed for you so there is something to draw.
 
 ## Test it in three commands
 

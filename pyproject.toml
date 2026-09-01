@@ -39,8 +39,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Only for a machine that does not already have OpenCV and numpy from the
-# board image. numpy is capped because pyneat 0.3.0 requires numpy<2.
+# Everything `sima-vision preview` and `sima-vision doctor` need to draw on a
+# laptop. Not needed on the DevKit, which provides both system-wide.
+preview = [
+    "numpy>=1.24",
+    "opencv-python>=4.7",
+]
+# Only for a board that is somehow missing them. numpy is capped here because
+# pyneat 0.3.0 requires numpy<2, and installing 2.x breaks every simaai-*
+# package on the DevKit.
 board = [
     "numpy>=1.24,<2",
     "opencv-python>=4.7,<5",

@@ -19,6 +19,43 @@
 
 </div>
 
+## Try it right now
+
+**No DevKit. No SDK. No model. No 12.6 GB download.** Two commands:
+
+```bash
+pip install "sima-vision[preview]"
+sima-vision preview --task segment -o blur.png
+```
+
+<div align="center">
+<img src="assets/preview-segment.png" alt="Instance segmentation preview: masks, captions and a blurred background, rendered with no board" width="720">
+</div>
+
+That is the **real overlay code** — the same functions that draw the recording on the
+board — run against a synthetic scene. No model is involved: the detections are placed
+for you so the drawing has something to draw.
+
+Now edit `instance-segmentation/config.yaml`, run the command again, and look at the
+result. That is the whole tuning loop for every `visualization:` and `blur:` setting, and
+it never touches a board.
+
+```bash
+sima-vision preview --task detect          # boxes and labels
+sima-vision preview --task fall            # tracked people, states, alert banner
+sima-vision preview --task segment --anonymise --keep-classes person
+```
+
+Three more commands worth knowing before you own anything:
+
+```bash
+sima-vision doctor                              # what is installed and what it unlocks
+sima-vision segment --config <file> --validate  # check a config, no board needed
+sima-vision segment --help                      # every flag
+```
+
+When you do have a board, the same config and the same commands run there unchanged.
+
 ## What this is
 
 **The setup guide for a Modalix DevKit 3.0**, written while actually bringing one up.
@@ -86,6 +123,7 @@ Setup runs once per machine, about two hours and mostly downloading.
 
 | Section | What it covers |
 |:--|:--|
+| [Try it right now](#try-it-right-now) | See the overlay on a laptop. No hardware |
 | [Complete workflow](#complete-workflow) | Who does what, and in which order |
 | [Cable up the DevKit](#step-1) | USB serial and Ethernet, set DHCP. 15 min |
 | [Install WSL2](#step-2) | `wsl --install -d Ubuntu`. 10 min |
@@ -375,6 +413,44 @@ cd ~/sima-projects    && sima-vision detect     # finds object-detection/config.
 
 `--no-config` ignores any file and runs on defaults plus flags alone.
 
+#### Common adjustments
+
+The things people actually change, and the two ways to change each. A flag is for one
+run; the config key is for every run after it.
+
+| I want | Flag | Config key |
+|:--|:--|:--|
+| Fewer spurious boxes | `--conf 0.5` | `decode.score_threshold` |
+| To catch more, at the cost of noise | `--conf 0.15` | `decode.score_threshold` |
+| A short test run | `--frames 100` | `runtime.frames` |
+| No video file | `--no-video` | `output.video.enable` |
+| No stills | `--no-save` | `output.save.enable` |
+| Fewer stills | `--save-every 30` | `output.save.every` |
+| To see where the time goes | `--profile` | `runtime.profile` |
+| A live view in Neat Insight | `--insight` | `output.insight.enable` |
+| A stronger background blur | `--blur-strength 81` | `blur.kernel` |
+| A pixelated background | `--blur-method pixelate` | `blur.method` |
+| Only people kept sharp | `--keep-classes person` | `blur.keep_classes` |
+| People blurred, scene sharp | `--anonymise --keep-classes person` | `blur.invert` |
+| No blur, just masks | `--no-blur` | `blur.enable` |
+| To track something other than people | `--classes person forklift` | `tracking.classes` |
+| Falls confirmed faster | `--confirm 0.8` | `fall.confirm_seconds` |
+| An email when someone falls | `--alert-to me@example.com --send` | `alerts.*` |
+
+**When it runs too slowly**, in the order worth trying: `blur.downscale: 4` (the biggest
+single win at 1080p), `output.save.every: 30`, `--no-save`, then `blur.feather: 0`.
+
+**When a run stops part-way through a clip**, that is the decoder running out of buffers.
+Lower `runtime.output_buffers`, and use `sima-vision segment --minimal` to tell "the app
+is too slow" apart from "the graph is wrong" in a single run.
+
+Every one of these can be checked before deploying:
+
+```bash
+sima-vision segment --conf 0.5 --blur-strength 81 --validate   # does it parse?
+sima-vision preview --task segment --conf 0.5                  # what does it look like?
+```
+
 #### Check a config without a board
 
 `--validate` parses everything, resolves it and prints the result. It loads neither
@@ -435,6 +511,21 @@ config OK: instance-segmentation/config.yaml
 
 Alerts stay a dry run until you pass `--send`, and the SMTP password is only ever read
 from `$FALL_ALERT_SMTP_PASSWORD` — never from a config file, which is committed.
+
+#### Two commands that need no board
+
+`preview` draws one frame the way a real run would and writes a PNG, so
+`visualization:` and `blur:` can be tuned on a laptop. `doctor` says what is installed
+and what each piece lets you do.
+
+```bash
+sima-vision preview --task segment -c instance-segmentation/config.yaml -o out.png
+sima-vision preview --task fall --source my-photo.jpg      # draw on your own image
+sima-vision doctor
+```
+
+`preview` runs **no model**. The detections are synthetic and exist only to give the
+drawing code something to draw, so what you are judging is styling, not accuracy.
 
 #### The old command still works
 

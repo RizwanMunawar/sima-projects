@@ -61,6 +61,7 @@ whoever is on shift, with a snapshot attached.
 
 | Section | What it covers |
 |:--|:--|
+| [See it before you deploy](#see-it-before-you-deploy) | The overlay on a laptop, no hardware |
 | [Test it in three commands](#test-it-in-three-commands) | Push, run, pull the result back |
 | [Get a model and a test video](#get-a-model-and-a-test-video) | Both land in `assets/`, ready to run |
 | [Set up email alerts](#set-up-email-alerts) | SMTP, the password rule, `--test-alert` |
@@ -73,6 +74,24 @@ whoever is on shift, with a snapshot attached.
 | [Daily loop](#daily-loop) | The commands you repeat after every edit |
 | [Questions people ask](#questions-people-ask) | FAQ: Gmail, false alarms, cameras, privacy |
 | [Common errors](#common-errors) | One table, symptom to fix |
+
+## See it before you deploy
+
+No board, no model, no SDK. This draws tracked people, their states and the alert banner
+using your own config:
+
+```bash
+pip install "sima-vision[preview]"
+sima-vision preview --task fall -c fall-detection/config.yaml -o preview.png
+```
+
+<div align="center">
+<img src="../assets/preview-fall.png" alt="Fall detection preview: per-state box colours and the alert banner" width="680">
+</div>
+
+It runs the same drawing code the board does, over a synthetic scene, so every
+`visualization:` value below can be tuned here first. **No model is run** --
+the detections are placed for you so there is something to draw.
 
 ## Test it in three commands
 

@@ -1087,3 +1087,30 @@ class FallTask(Task):
 
     def runtime(self, cfg, pipeline) -> TaskRuntime:
         return FallRuntime()
+
+    def sample_results(self, cfg, pipeline, frame, boxes: list[dict]):
+        """One track per state, for ``sima-vision preview``.
+
+        Cycling the states means a single preview shows every box colour and
+        the alert banner together, which is what you are usually tuning.
+        """
+        states = (UPRIGHT, FALLING, FALLEN, RECOVERING)
+        tracks = []
+        for index, box in enumerate(boxes):
+            if pipeline.fall_class_ids is not None:
+                if int(box["class_id"]) not in pipeline.fall_class_ids:
+                    continue
+            state = states[len(tracks) % len(states)]
+            track = Track(track_id=index + 1, box=box, hits=99, state=state)
+            if state == FALLEN:
+                # A fallen person is wide and short; rotate the box so the
+                # preview matches what the rules would actually have seen.
+                cx = (box["x1"] + box["x2"]) / 2.0
+                cy = (box["y1"] + box["y2"]) / 2.0
+                half_w = (box["y2"] - box["y1"]) / 2.0
+                half_h = (box["x2"] - box["x1"]) / 2.0
+                track.box = dict(
+                    box, x1=cx - half_w, x2=cx + half_w, y1=cy - half_h, y2=cy + half_h
+                )
+            tracks.append(track)
+        return tracks

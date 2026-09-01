@@ -24,7 +24,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import __version__
+from . import __version__, runtime
 from .neat import describe_preprocess
 from .runloop import Stopper
 from .runtime import FAMILY_DECODE_TOKENS, load_runtime_dependencies
@@ -189,7 +189,86 @@ def build_parser() -> argparse.ArgumentParser:
         task_group = sub.add_argument_group(group_title)
         task.add_arguments(task_group)
         sub.set_defaults(_task=task_cls)
+
+    add_preview_parser(subparsers)
+    add_doctor_parser(subparsers)
     return parser
+
+
+def add_preview_parser(subparsers) -> None:
+    """``preview`` -- render the overlay a config produces, with no board."""
+    sub = subparsers.add_parser(
+        "preview",
+        help="Render what your config looks like, with no board and no model",
+        description=(
+            "Draw one frame the way a real run would, so visualization and blur "
+            "settings can be tuned on a laptop. No model is run: the detections "
+            "are synthetic and only exist to give the drawing code something to "
+            "draw. Needs numpy and OpenCV (pip install 'sima-vision[preview]')."
+        ),
+        epilog=(
+            "examples:\n"
+            "  sima-vision preview                                  # detect, defaults\n"
+            "  sima-vision preview --task segment -o blur.png\n"
+            "  sima-vision preview --task segment "
+            "-c instance-segmentation/config.yaml\n"
+            "  sima-vision preview --task fall --source my-photo.jpg\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub.add_argument(
+        "--task", "-t", choices=list(TASKS), default="detect",
+        help="Which app's overlay to draw. Default detect.",
+    )
+    group = sub.add_mutually_exclusive_group()
+    group.add_argument(
+        "--config", "-c", type=Path, metavar="PATH",
+        help="Config to preview. Defaults to ./config.yaml, then <app-dir>/config.yaml.",
+    )
+    group.add_argument(
+        "--no-config", action="store_true",
+        help="Preview the built-in defaults, ignoring any config file.",
+    )
+    sub.add_argument(
+        "--source", "-s", metavar="PATH",
+        help="Image or video to draw on. Anything OpenCV can open; raw .h264 "
+             "cannot be, and falls back to the synthetic scene.",
+    )
+    sub.add_argument(
+        "--out", "-o", type=Path, default=Path("preview.png"), metavar="PATH",
+        help="Where to write the PNG. Default preview.png.",
+    )
+    sub.add_argument(
+        "--size", default="1280x720", metavar="WxH",
+        help="Synthetic scene size. Default 1280x720.",
+    )
+    sub.set_defaults(_command="preview")
+
+
+def add_doctor_parser(subparsers) -> None:
+    """``doctor`` -- say what is installed and what each part enables."""
+    sub = subparsers.add_parser(
+        "doctor",
+        help="Check what is installed and what you can do with it",
+        description=(
+            "Report which pieces are present. Nothing here is fatal on its own: "
+            "the parts needed to check a config and preview an overlay are "
+            "separate from the parts needed to run inference on the DevKit."
+        ),
+    )
+    sub.set_defaults(_command="doctor")
+
+
+def parse_size(text: str) -> tuple[int, int]:
+    """Read a ``WxH`` size. Raises ValueError on anything else."""
+    width, _, height = text.lower().partition("x")
+    try:
+        size = (int(width), int(height))
+    except ValueError:
+        raise ValueError(f"--size must look like 1280x720, got {text!r}") from None
+    if size[0] < 64 or size[1] < 64:
+        raise ValueError(f"--size must be at least 64x64, got {text!r}")
+    return size
 
 
 def collect_overrides(args: argparse.Namespace) -> dict:
@@ -230,6 +309,150 @@ def print_validation(task, cfg) -> None:
     print(f"  output: {' '.join(outputs)}")
 
 
+def load_drawing_dependencies() -> None:
+    """Bind numpy and OpenCV without requiring pyneat.
+
+    ``load_runtime_dependencies`` needs all three, because a real run does. A
+    preview draws and composites but never touches the MLA, so it needs only
+    two -- which is what lets it work on a laptop.
+    """
+    from . import runtime as rt
+
+    if rt.cv2 is not None:
+        return
+    try:
+        import cv2
+        import numpy as np
+    except ImportError as exc:
+        raise SystemExit(
+            f"preview needs numpy and OpenCV, and {exc.name} is missing.\n"
+            "  pip install 'sima-vision[preview]'\n"
+            "\nOn the DevKit they come from the board's system packages instead, "
+            "so nothing needs installing there."
+        ) from None
+    rt.cv2, rt.np, rt.FONT = cv2, np, cv2.FONT_HERSHEY_SIMPLEX
+
+
+def run_preview(args) -> int:
+    """Draw one frame the way a real run would, and write it to a PNG."""
+    from . import preview as preview_module
+    from .config import discover_config, read_config_file
+    from .sinks import load_labels
+
+    load_drawing_dependencies()
+    task = TASKS[args.task]()
+    use_file = not args.no_config
+
+    # A preview runs no model and opens no source, but the config it previews
+    # still has to pass the ordinary validation. Fill in only what is missing,
+    # so a real config's values are never shadowed by a placeholder.
+    found = discover_config(task.directory, args.config) if use_file else None
+    raw = read_config_file(found)
+    overrides = {}
+    if not (raw.get("model") or {}).get("path"):
+        overrides["model.path"] = "<preview: no model is run>"
+    if not (raw.get("source") or {}).get("uri"):
+        overrides["source.uri"] = "<preview>"
+
+    cfg = task.load(args.config, overrides, use_file=use_file)
+    labels = load_labels(cfg.labels_path)
+
+    frame = preview_module.read_first_frame(args.source) if args.source else None
+    if frame is not None:
+        height, width = frame.shape[:2]
+        _, subjects = preview_module.build_scene(width, height)
+        origin = args.source
+    else:
+        if args.source:
+            print(
+                f"[warn] OpenCV could not read {args.source}; using the synthetic "
+                f"scene instead.\n       Raw .h264 is expected to fail here -- it "
+                f"has no container for OpenCV to parse.",
+                file=sys.stderr,
+            )
+        width, height = parse_size(args.size)
+        frame, subjects = preview_module.build_scene(width, height)
+        origin = f"synthetic scene {width}x{height}"
+
+    annotated = preview_module.render(task, cfg, frame, subjects, labels)
+
+    out = args.out
+    if out.parent != Path("."):
+        out.parent.mkdir(parents=True, exist_ok=True)
+    if not runtime.cv2.imwrite(str(out), annotated):
+        raise SystemExit(f"could not write {out}")
+
+    where = cfg.config_path or "<defaults only>"
+    print(f"preview: {task.name} overlay from {where}")
+    print(f"  frame:  {origin}")
+    print(f"  drew:   {len(subjects)} synthetic detections -- NO MODEL WAS RUN")
+    for line in task.describe(cfg):
+        print(f"  {line}")
+    print(f"\nwrote {out.resolve()}  ({annotated.shape[1]}x{annotated.shape[0]})")
+    print("Open it, edit the config, run this again. No board needed.")
+    return 0
+
+
+def mark_for(ok: bool) -> str:
+    return "yes" if ok else "no "
+
+
+def run_doctor() -> int:
+    """Report what is installed, and what each piece unlocks."""
+    import glob
+    import importlib.util
+    import shutil
+
+    print(f"sima-vision {__version__}")
+    print(f"python      {sys.version.split()[0]}  ({sys.executable})\n")
+
+    def probe(module: str):
+        try:
+            found = importlib.util.find_spec(module)
+        except (ImportError, ValueError):
+            return None
+        return found
+
+    rows = [
+        ("yaml", "read config files", "required", "pip install pyyaml"),
+        ("numpy", "preview, and every run", "preview", "pip install 'sima-vision[preview]'"),
+        ("cv2", "preview, and every run", "preview", "pip install 'sima-vision[preview]'"),
+        ("pyneat", "run inference on the MLA", "DevKit", "ships with the Palette SDK"),
+    ]
+    have = {}
+    width = len("board packages")
+    for module, what, needed_for, fix in rows:
+        ok = probe(module) is not None
+        have[module] = ok
+        print(f"  {mark_for(ok)}  {module:<{width}}  {what}")
+        if not ok:
+            print(f"  {'':<5}{'':<{width}}  needed for: {needed_for} -- {fix}")
+
+    dist = glob.glob("/usr/lib/python3*/dist-packages")
+    board = dist[0] if dist else "(not a DevKit, which is fine)"
+    print(f"\n  {mark_for(bool(dist))}  {'board packages':<{width}}  {board}")
+
+    ffprobe = shutil.which("ffprobe")
+    where = ffprobe or "optional; raw .h264 is read directly"
+    print(f"  {mark_for(bool(ffprobe))}  {'ffprobe':<{width}}  {where}")
+
+    drawing = have["numpy"] and have["cv2"]
+    print("\nWhat you can do right now:")
+    for ok, command, what in (
+        (have["yaml"], "sima-vision <task> --validate", "check a config"),
+        (drawing, "sima-vision preview", "see your overlay and blur"),
+        (drawing and have["pyneat"], "sima-vision <task>", "run inference on the MLA"),
+    ):
+        print(f"  {mark_for(ok)}  {command:<30}  {what}")
+
+    if not have["pyneat"]:
+        print(
+            "\npyneat is an aarch64 wheel that ships with the Palette SDK and is not on\n"
+            "PyPI, so inference only runs on the DevKit. Everything else works here."
+        )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -237,6 +460,19 @@ def main(argv: list[str] | None = None) -> int:
     if not getattr(args, "task", None):
         parser.print_help()
         return 2
+
+    command = getattr(args, "_command", None)
+    if command is not None:
+        try:
+            return run_doctor() if command == "doctor" else run_preview(args)
+        except KeyboardInterrupt:
+            return 130
+        except SystemExit as exc:
+            print(f"[ERR] {exc}", file=sys.stderr)
+            return 1
+        except Exception as exc:
+            print(f"[ERR] {exc}", file=sys.stderr)
+            return 1
 
     task = args._task()
     try:

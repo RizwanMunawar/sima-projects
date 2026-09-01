@@ -142,6 +142,15 @@ class Task:
         """The pull-loop implementation for this task."""
         raise NotImplementedError
 
+    def sample_results(self, cfg, pipeline: Pipeline, frame, boxes: list[dict]):
+        """Synthetic results for ``sima-vision preview``.
+
+        Turns plain boxes into whatever this task's ``render`` expects, so a
+        preview exercises the real drawing code rather than a stand-in. Only
+        ever called by :mod:`sima_vision.preview`; no model is involved.
+        """
+        return boxes
+
     def build(self, cfg) -> Pipeline:
         """The startup sequence. Identical for all three tasks."""
         step = lambda msg: print(msg, flush=True)  # noqa: E731
