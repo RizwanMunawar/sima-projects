@@ -61,6 +61,24 @@ and follow that README the rest of the way.
 Each app README owns its own model, video, config, overlay, tuning and errors. Nothing
 about running an app lives on this page.
 
+All three share one pipeline and one command.
+
+```bash
+pip install sima-vision          # on the DevKit
+
+sima-vision detect  --source clip.h264 --model yolo26m-det.tar.gz
+sima-vision segment --source clip.h264 --model yolo26m-seg.tar.gz --blur
+sima-vision fall    --source rtsp://camera/live --alert-to ops@example.com
+```
+
+`config.yaml` is optional: the defaults are a complete configuration, so a model and a
+source are enough to start. Point `--config` at a file to go further, and flags still win
+over it. See [the CLI reference](#the-cli) below.
+
+> The command is `sima-vision`, **not** `sima-cli`. `sima-cli` is SiMa.ai's own tool,
+> installed in [step 4](#step-4) to pair the board — a different program, and one you
+> still need.
+
 
 ## Contents
 
@@ -76,6 +94,7 @@ Setup runs once per machine, about two hours and mostly downloading.
 | [Docker Engine + NFS](#step-5) | The Neat SDK is a container. 10 min |
 | [Install the Neat SDK](#step-6) | Pairs the board, 12.6 GB. 30 to 60 min |
 | [Now pick an app](#now-pick-an-app) | Where setup ends and the app guides begin |
+| [The CLI](#the-cli) | `sima-vision`, its flags, and how config layers work |
 | [Video must be raw H.264](#video-must-be-raw-h264) | The one media rule every app shares |
 | [Known issues](#known-issues) | The `.mp4` demuxer bug in Neat 0.3.0 |
 | [Reference](#reference) | Addresses, paths, five rules |
@@ -309,6 +328,123 @@ table.
 
 The rest of this page is what both apps rely on. You should not need it until something
 breaks.
+
+<a id="the-cli"></a>
+
+### The CLI
+
+One command, one subcommand per app. Install it on the DevKit:
+
+```bash
+pip install sima-vision
+```
+
+Or from a clone, which is what you want while changing the code:
+
+```bash
+pip install -e .
+```
+
+#### Where settings come from
+
+Three layers, each beating the one above it:
+
+```
+built-in defaults        a complete, runnable configuration
+      ↓
+config.yaml              whatever the file sets
+      ↓
+command-line flags       whatever you typed
+```
+
+So a config file is **optional**. These are equivalent:
+
+```bash
+sima-vision detect --model assets/models/yolo26m-det.tar.gz \
+                   --source assets/videos/mall.h264 --conf 0.4
+sima-vision detect --config config.yaml --conf 0.4
+```
+
+With no `--config`, the CLI looks for `config.yaml` in the current directory and then in
+the app's folder, so both of these work:
+
+```bash
+cd ~/object-detection && sima-vision detect     # finds ./config.yaml
+cd ~/sima-projects    && sima-vision detect     # finds object-detection/config.yaml
+```
+
+`--no-config` ignores any file and runs on defaults plus flags alone.
+
+#### Check a config without a board
+
+`--validate` parses everything, resolves it and prints the result. It loads neither
+pyneat nor the model, so it runs on your laptop, in the SDK container, anywhere:
+
+```bash
+sima-vision segment --config instance-segmentation/config.yaml --validate
+```
+
+```
+config OK: instance-segmentation/config.yaml
+  model: assets/models/yolo26m-seg-bf16-mla_tess-b1.tar.gz
+  family=yolo26-seg -> BoxDecodeType.YoloV26Seg
+  source: type=video uri=assets/videos/people-walking-outside-mall.h264
+  decode: conf=0.3 iou=0.6 max_det=50
+  segmentation: masks=on source=auto space=auto threshold=0.5 net=<from the first mask>
+  blur: background | method=gaussian kernel=41 sigma=auto down=2 feather=9
+  output: video=segmentation.mp4 stills=frames/ every=10
+```
+
+#### Flags every app takes
+
+| Flag | Config key | What it does |
+|:--|:--|:--|
+| `--source`, `-s` | `source.uri` | File, RTSP URL, or nothing for the camera |
+| `--source-type` | `source.type` | `video`, `rtsp` or `usb` |
+| `--model`, `-m` | `model.path` | Compiled model archive |
+| `--labels` | `model.labels` | Class names. Defaults to the packaged COCO list |
+| `--family` | `model.family` | Detection head. Must match the model |
+| `--conf` | `decode.score_threshold` | Minimum confidence |
+| `--iou` | `decode.nms_iou` | NMS IoU threshold |
+| `--max-det` | `decode.max_detections` | Top-K per frame |
+| `--frames`, `-n` | `runtime.frames` | Stop after N frames |
+| `--profile` | `runtime.profile` | Per-stage timings |
+| `--video` / `--no-video` | `output.video.*` | The annotated recording |
+| `--save-dir` / `--save-every` / `--no-save` | `output.save.*` | Annotated stills |
+| `--insight` / `--insight-host` | `output.insight.*` | The live Neat Insight feed |
+| `--config`, `-c` / `--no-config` | — | Which config file, or none |
+| `--validate` | — | Check and print, then exit |
+
+#### Flags per app
+
+```bash
+# segment
+--blur / --no-blur          --blur-method gaussian|pixelate|none
+--blur-strength PX          --keep-classes person car
+--anonymise                 # blur the instances instead of the background
+--mask-threshold T          --no-masks       --minimal
+
+# fall
+--classes person            --confirm S      --no-fall
+--alert-to EMAIL...         --alert-from EMAIL
+--alerts                    --send           # --send is required to really email
+--smtp-host / --smtp-port / --smtp-user      --site NAME
+```
+
+`--anonymise --keep-classes person` blurs people and leaves the scene sharp.
+
+Alerts stay a dry run until you pass `--send`, and the SMTP password is only ever read
+from `$FALL_ALERT_SMTP_PASSWORD` — never from a config file, which is committed.
+
+#### The old command still works
+
+Each app keeps a `src/app.py` that forwards to the CLI, so every command already written
+down in the app READMEs runs unchanged:
+
+```bash
+python3 src/app.py --config config.yaml            # same as sima-vision <task> --config config.yaml
+python3 src/app.py --validate-config               # same as --validate
+```
 
 <a id="video-must-be-raw-h264"></a>
 ### Video must be raw H.264

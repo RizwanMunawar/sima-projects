@@ -83,6 +83,17 @@ ssh -tt sima@<devkit-ip> \
 scp sima@<devkit-ip>:~/instance-segmentation/segmentation.mp4 .     # 3. pull the result
 ```
 
+Or, with the CLI installed on the board (`pip install sima-vision`):
+
+```bash
+ssh -tt sima@<devkit-ip> \
+  'source ~/pyneat/bin/activate && cd ~/instance-segmentation && sima-vision segment --blur'
+```
+
+`sima-vision segment` finds `config.yaml` in the directory you run it from, so that is the
+same run. Every setting below can also be given as a flag, and flags win over the file —
+see [the CLI reference](../README.md#the-cli).
+
 Play `segmentation.mp4`. A sharp subject on a blurred background means the whole chain
 works. Repeat after every edit.
 

@@ -87,6 +87,17 @@ ssh -tt sima@<devkit-ip> \
 scp sima@<devkit-ip>:~/fall-detection/falls.mp4 .                   # 3. pull the result
 ```
 
+Or, with the CLI installed on the board (`pip install sima-vision`):
+
+```bash
+ssh -tt sima@<devkit-ip> \
+  'source ~/pyneat/bin/activate && cd ~/fall-detection && sima-vision fall'
+```
+
+`sima-vision fall` finds `config.yaml` in the directory you run it from, so that is the
+same run. Every setting below can also be given as a flag, and flags win over the file —
+see [the CLI reference](../README.md#the-cli).
+
 Alerts ship **off**, so this first run only annotates. Green boxes on people and a red
 one plus a banner when someone goes down means the whole chain works.
 

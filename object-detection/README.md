@@ -71,6 +71,17 @@ ssh -tt sima@<devkit-ip> \
 scp sima@<devkit-ip>:~/object-detection/detections.mp4 .            # 3. pull the result
 ```
 
+Or, with the CLI installed on the board (`pip install sima-vision`):
+
+```bash
+ssh -tt sima@<devkit-ip> \
+  'source ~/pyneat/bin/activate && cd ~/object-detection && sima-vision detect'
+```
+
+`sima-vision detect` finds `config.yaml` in the directory you run it from, so that is the
+same run. Every setting below can also be given as a flag, and flags win over the file —
+see [the CLI reference](../README.md#the-cli).
+
 Play `detections.mp4`. Boxes on it means the whole chain works. Repeat after every edit.
 
 **Faster still, before you touch the board.** This parses and validates `config.yaml`
