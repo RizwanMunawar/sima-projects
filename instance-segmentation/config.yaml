@@ -175,21 +175,28 @@ blur:
 runtime:
   frames: 0                  # 0 = run until interrupted
   pull_timeout_ms: 20000     # how long to wait for a frame before giving up
-  queue_depth: 3
 
-  # Buffers each public output may hold. THE knob for "the run stops after N
-  # frames and then times out".
+  # Depth of the runtime's own queues, and of the app's sink thread.
   #
-  # Every buffer here is a frame checked out of the hardware decoder's pool, and
-  # that pool is small: the boot log prints `BufferNum=8` on this board. There
-  # are two public outputs, so this number is doubled, and the source appsink
-  # holds up to 4 more. At 4 that is 4*2 + 4 = 12 against a pool of 8, which
-  # only survives because a fast consumer drains it before both fill. A slower
-  # one (segmentation, a big model, JPEGs every frame) deadlocks the decoder:
-  # it cannot produce, so the app cannot consume, so nothing is ever released.
+  # It does NOT set the buffer counts in the pipeline the app prints at startup:
+  # `max-buffers=4` on the appsinks and `num-buffers=4` on preproc and the MLA
+  # are fixed inside pyneat and read the same at 1 as at 3. So this is not the
+  # knob for "the run stops after N frames and then times out" — measured on a
+  # Modalix DevKit with the yolo26m-seg pack, 3 stalled at 22 frames and 1 at
+  # 17, which is the same stall with different noise.
   #
-  # Observed on a Modalix DevKit with the yolo26m-seg pack: 4 -> stalls at 8
-  # frames, 2 -> stalls at 25, 1 -> the lowest pressure this knob allows.
+  # What it does change is how far ahead of the sinks this app may run. Low
+  # keeps memory flat; higher absorbs an uneven frame.
+  queue_depth: 1
+
+  # Buffers each public output may hold. There are two public outputs, so this
+  # number is doubled, and every one of them can hold a frame checked out of
+  # the hardware decoder's pool of 8 (`BufferNum=8` in the boot log).
+  #
+  # Measured at queue_depth 3: 4 -> stalls at 8 frames, 2 -> at 25, 1 -> at 22.
+  # More buffers clearly stalls sooner, but 1 still did not reach the end of the
+  # clip, so this is a contributing term rather than the cause. The cause was
+  # the decoded path in front of the appsink; see make_elementary_h264_source.
   # Raise it only if a run completes and you want more headroom.
   output_buffers: 1
   # auto splits on source type, because a file and a camera want opposites:
@@ -268,13 +275,13 @@ output:
   # Composited stills. `every` below skips STILLS only. The video above always
   # gets every processed frame; there is no frame-skip setting for it.
   save:
-    enable: true
+    enable: false
     dir: frames
     # Write every Nth frame, 0 disables. A 1080p JPEG per frame is real work on
     # the board; 10 gives you plenty to look at and keeps the pipeline ahead of
     # the decoder.
     every: 10
-    overlay: true            # false writes the untouched frame instead
+    overlay: false            # false writes the untouched frame instead
     format: jpg              # jpg | png
 
   # Optional live UDP feed to Neat Insight. Off by default: everything you need

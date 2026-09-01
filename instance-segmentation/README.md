@@ -793,13 +793,16 @@ Two different faults produce this, and the run's last lines tell you which:
        1. output.insight.enable is true. Its H.264 encoder shares the codec daemon ...
 ```
 
-**The run ended early.** Almost always the Insight feed. Its H.264 encoder shares the
-codec daemon with the decoder feeding your source, so when the encoder fails to
-configure, the decoder stalls with it and the source stops producing:
+**The run ended early.** The source stopped producing before the clip did, and the run's
+own last lines name the cause. Either the graph starved the hardware decoder of frame
+buffers — lower `runtime.queue_depth`, see
+[the entry below](#the-run-stops-after-a-dozen-frames) — or the Insight feed wedged the
+codec daemon. Its H.264 encoder shares that daemon with the decoder feeding your source,
+so when the encoder fails to configure, the decoder stalls with it:
 
 ```
 sima_enc_daemon ... ERROR: Failed setting advanced configuration
-[warn] timed out waiting for instances (1)
+[warn] timed out waiting for instances after 12 frames; ...
 ```
 
 ```yaml
@@ -832,13 +835,82 @@ survive the run, which the UDP feed does not.
 <details>
 <summary><b>The run stops after a dozen frames with "timed out waiting for instances"</b></summary>
 
-If the log also carries encoder errors from the codec daemon, the Insight feed is the
-cause, not the pipeline:
+First, the run tells you whether it is even a problem. The app counts the coded pictures
+in the clip before it starts and reports against that number, so a stall and a finished
+clip are no longer the same event:
+
+```
+source: type=video uri=assets/videos/people-walking-outside-mall.h264 stream=1920x1080@24 frames=379 (15.8s)
+...
+processed=83 of 379 timeouts=1 recovered=0 masks=packed
+[warn] the recording is incomplete: 83 of 379 frames, 3.5s of 15.8s.
+```
+
+A complete run says so instead:
+
+```
+video: complete, all 379 frames of the clip.
+```
+
+If it is short, there are two causes, and the log tells you which.
+
+**Decoder buffer starvation**, if there are no codec-daemon errors in the log:
+
+```
+[warn] timed out waiting for instances after 22 frames; flushing the sink queue and retrying once
+source produced nothing for 20000 ms twice in a row after 22 frames; stopping.
+```
+
+The hardware decoder owns a fixed pool of frame buffers — this board prints
+`BufferNum=8` in the boot log, and it keeps several of them for its own reference
+frames. Every GStreamer element between the decoder and the source appsink can park one
+of the rest, and you can count them in the first pipeline the app prints at startup.
+
+That is where this failed. The app used to add a format-only `CapsRaw` node after the
+decoder, and the Graph inserts `queue max-size-buffers=5` between adjacent nodes, so the
+decoded path read
+
+```
+neatdecoder ! videoconvert ! capsfilter ! queue(5) ! capsfilter ! appsink max-buffers=4
+```
+
+`5 + 4 = 9` decoded frames could sit there at once, against a pool of 8. The decoder ran
+dry, could not produce, so the app could not consume, so nothing was ever released. The
+node constrained nothing the decoder's own capsfilter did not already fix, so it is
+gone, and the path now ends `capsfilter ! appsink max-buffers=4`.
+
+**`runtime.queue_depth` is not this knob**, despite what the timeout advice used to say.
+It does not change the `max-buffers` and `num-buffers` in the printed pipeline — pyneat
+fixes those at 4, and they read the same at `queue_depth: 1` as at `3`. Measured with
+the `yolo26m-seg` pack, 3 stalled at 22 frames and 1 at 17. Same stall, different noise.
+`output_buffers` is real but small, two buffers of the pool:
+
+```yaml
+runtime:
+  output_buffers: 1
+```
+
+To tell a graph that over-allocates apart from an app that simply does too much work per
+frame, run once with `--minimal`, which strips the consumer back to a bare pull loop:
+
+```bash
+python src/app.py --minimal
+```
+
+Reaching the end of the clip means the graph is fine. Stalling at the same frame means
+it is not, and the buffer arithmetic above is where to look. If a normal run reports
+
+```
+[warn] the source recovered once the backlog was flushed.
+```
+
+the app was the one holding buffers: it got them back and the source picked up again.
+
+**A wedged codec daemon**, if the log carries encoder errors:
 
 ```
 sima_enc_daemon/SimaEncoderWrapper.cpp ... ERROR: Failed setting advanced configuration
-[warn] timed out waiting for instances (1)
-source produced nothing for 20000 ms after 12 frames; stopping.
+[warn] timed out waiting for instances after 12 frames; ...
 ```
 
 The H.264 **encoder** the Insight sender opens shares the codec daemon with the
@@ -935,6 +1007,7 @@ Problems with a **running segmenter**. Bring-up problems are in the
 | `ModuleNotFoundError: pyneat` | You are on the PC, or pairing never ran. See the [root README](../README.md#pyneat-missing) |
 | Device busy | Orphaned run: `ssh sima@<ip> pkill -f src/app.py` |
 | Stuck after `loading model` | First load unpacks the archive. Give it a minute |
+| `timed out waiting for instances` after a few frames, no codec-daemon errors | The graph starved the decoder's buffer pool. Count the queues in the printed pipeline, and run `--minimal` to confirm |
 | `timed out waiting for instances` after a few frames, with `sima_enc_daemon` errors | The Insight encoder wedged the shared codec daemon. Set `output.insight.enable: false` |
 | `packed layout: ... does not decompose` | The mask side is not in `segmentation.mask_sides`. See [the FAQ](#questions-people-ask) |
 | Masks decode but sit in the wrong place | `segmentation.space`, not `source`. Pin it to `net` or `box` |

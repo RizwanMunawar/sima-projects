@@ -41,10 +41,12 @@ import glob
 import json
 import math
 import os
+import queue
 import signal
 import struct
 import subprocess
 import sys
+import threading
 import time
 import dataclasses
 from dataclasses import dataclass, field
@@ -362,12 +364,14 @@ class AppConfig:
         max_detections: Top-K cap per frame.
         frames: Frame limit. 0 runs until interrupted.
         pull_timeout_ms: How long to wait for a frame before giving up.
-        queue_depth: Runtime queue depth.
-        output_buffers: Buffers each public output may hold. Every one of
-            them is a frame checked out of the hardware decoder's pool, and
-            that pool is small (the boot log prints ``BufferNum=8``). Two
-            outputs at 4 is already the whole pool, so a slow consumer
-            deadlocks the decoder. Keep the product well under BufferNum.
+        queue_depth: Depth of the runtime's own queues, and of the sink
+            thread's queue. It does not change the ``max-buffers`` and
+            ``num-buffers`` in the printed pipeline, which pyneat fixes at 4.
+        output_buffers: Buffers each public output may hold. Every one of them
+            is a frame checked out of the hardware decoder's pool, that pool is
+            small (the boot log prints ``BufferNum=8``), and there are two
+            outputs. Counts against the same budget as the decoded path in
+            front of the source appsink; see ``make_elementary_h264_source``.
         run_preset: One of ``realtime``, ``balanced`` or ``reliable``.
         overflow_policy: One of ``keep_latest``, ``block`` or ``drop_incoming``.
         profile: Whether to print per-stage timings.
@@ -857,6 +861,8 @@ def validate_config(cfg: AppConfig) -> None:
         raise ValueError("runtime.frames must be >= 0")
     if cfg.output_buffers < 1:
         raise ValueError("runtime.output_buffers must be >= 1")
+    if cfg.queue_depth < 1:
+        raise ValueError("runtime.queue_depth must be >= 1")
     if cfg.pull_timeout_ms <= 0:
         raise ValueError("runtime.pull_timeout_ms must be > 0")
     if cfg.profile_interval <= 0:
@@ -1442,6 +1448,91 @@ def probe_h264_sps(path: str, scan_bytes: int = 4 << 20) -> tuple[int, int, int]
         pos = start
 
 
+# A slice NAL whose first_mb_in_slice is 0 begins a new primary coded picture;
+# any other slice continues the one before it. 24 bytes of RBSP is far more than
+# an Exp-Golomb first_mb_in_slice can occupy, so it is always enough to decide.
+SLICE_NAL_TYPES = frozenset({1, 5})
+SLICE_HEADER_BYTES = 24
+PICTURE_SCAN_LIMIT = 512 << 20
+
+
+def count_pictures_in(buf: bytes, final: bool) -> tuple[int, int]:
+    """Count picture starts in one buffer.
+
+    Args:
+        buf: Annex-B bytes, starting on a start-code boundary or earlier.
+        final: True when no more bytes follow, so a NAL near the end can be
+            parsed from what is there rather than deferred.
+
+    Returns:
+        A ``(count, consumed)`` pair. ``consumed`` is how many leading bytes are
+        finished with; the caller carries the remainder into the next chunk.
+    """
+    count = 0
+    pos = 0
+    while True:
+        idx = buf.find(b"\x00\x00\x01", pos)
+        if idx < 0:
+            # Two trailing bytes could still be the head of a split start code.
+            return count, len(buf) if final else max(0, len(buf) - 2)
+        start = idx + 3
+        if start + SLICE_HEADER_BYTES > len(buf):
+            if not final:
+                return count, idx
+            if start >= len(buf):
+                return count, len(buf)
+        if buf[start] & 0x1F in SLICE_NAL_TYPES:
+            rbsp = unescape_rbsp(buf[start + 1 : start + 1 + SLICE_HEADER_BYTES])
+            try:
+                if BitReader(rbsp).ue() == 0:
+                    count += 1
+            except (ValueError, IndexError):
+                pass
+        pos = start
+
+
+def count_h264_pictures(path: str, limit_bytes: int = PICTURE_SCAN_LIMIT) -> int:
+    """Count the coded pictures in a raw Annex-B stream.
+
+    Without this number, "the clip ended" and "the source stalled" are the same
+    event from the pull loop: both are silence. That is what let a run stop at 83
+    frames of a 379 frame clip and still write a plausible-looking
+    ``segmentation.mp4``. The bytes on disk settle it before the run even
+    starts, and they need neither a container nor a decoder to do it.
+
+    ``ffprobe -count_frames`` would answer the same question, but it is not on
+    the DevKit and it is unreliable on elementary streams, which is the same
+    reason :func:`probe_h264_sps` exists.
+
+    Args:
+        path: Path to a raw Annex-B H.264 file.
+        limit_bytes: Stop scanning after this many bytes, so a very large file
+            cannot hold up startup. The result is then a lower bound.
+
+    Returns:
+        The number of coded pictures, or 0 if the file could not be read.
+    """
+    count = 0
+    carry = b""
+    scanned = 0
+    try:
+        with open(path, "rb") as handle:
+            while True:
+                chunk = handle.read(1 << 20) if scanned < limit_bytes else b""
+                scanned += len(chunk)
+                buf = carry + chunk
+                if not buf:
+                    break
+                found, consumed = count_pictures_in(buf, final=not chunk)
+                count += found
+                if not chunk:
+                    break
+                carry = buf[consumed:]
+    except OSError:
+        return 0
+    return count
+
+
 def resolve_source_geometry(cfg: AppConfig) -> tuple[int, int, int]:
     """Return (width, height, fps). Config values win; anything left at 0 is probed."""
     width, height, fps = cfg.source_width, cfg.source_height, cfg.source_fps
@@ -1544,8 +1635,8 @@ def make_elementary_h264_source(cfg: AppConfig, width: int, height: int, fps: in
         fps: Unused.
 
     Returns:
-        A ``pyneat.Graph`` of FileInput, H264Parse, Queue, SimaDecode and a
-        format-only CapsRaw, producing NV12 frames.
+        A ``pyneat.Graph`` of FileInput, H264Parse, Queue and SimaDecode,
+        producing NV12 frames.
     """
     graph = pyneat.Graph("file_source")
     graph.add(pyneat.nodes.file_input(cfg.source_uri))
@@ -1559,19 +1650,36 @@ def make_elementary_h264_source(cfg: AppConfig, width: int, height: int, fps: in
     dec.raw_output = False
     graph.add(pyneat.nodes.sima_decode(dec))
 
-    # Format only. CapsRawNode emits a field for every argument greater than
-    # zero, so passing width, height and fps here would add
-    # `width=W,height=H,framerate=F/1` to the capsfilter. A raw elementary
-    # stream has no container to state its frame rate, so h264parse publishes
-    # `framerate=0/1`, which cannot intersect with any fixed rate. Negotiation
-    # then fails upstream of the appsink and the run reports zero frames after
-    # a pull timeout, with nothing on the bus to explain it. The decoder already
-    # emits NV12 in system memory at the stream's own geometry, so there is
-    # nothing left to constrain.
+    # No CapsRaw node here, deliberately, and this is the difference between a
+    # run that finishes the clip and one that dies on a pull timeout part-way
+    # through.
     #
-    # nodes.caps_raw takes the format as a plain string, unlike the *Options
-    # `format` properties which accept the pyneat.Format enum.
-    graph.add(pyneat.nodes.caps_raw("NV12", -1, -1, -1, pyneat.CapsMemory.Any))
+    # `raw_output = False` already appends `videoconvert ! capsfilter
+    # caps="video/x-raw(memory:SystemMemory),format=NV12"` to the decoder, so a
+    # CapsRaw("NV12") after it constrains nothing that is not already fixed. It
+    # is not free, though: the Graph inserts `queue max-size-buffers=5` between
+    # adjacent nodes, and never before a terminal appsink. With the extra node
+    # the decoded path was
+    #
+    #   neatdecoder ! videoconvert ! capsfilter ! queue(5) ! capsfilter ! appsink(4)
+    #
+    # so 5 + 4 = 9 decoded frames could sit downstream at once. The hardware
+    # decoder's pool is 8 (`BufferNum=8` in the boot log) and it needs several
+    # of those for its own reference frames, so the path could swallow the
+    # entire pool. The decoder then cannot produce, the app cannot consume, and
+    # nothing is ever released. Without the node the path is
+    #
+    #   neatdecoder ! videoconvert ! capsfilter ! appsink(4)
+    #
+    # which caps it at 4 and leaves the rest of the pool to the decoder.
+    #
+    # If negotiation ever does fail here, the node comes back as
+    # `graph.add(pyneat.nodes.caps_raw("NV12", -1, -1, -1, pyneat.CapsMemory.Any))`
+    # -- format only. Passing width, height or fps instead would add
+    # `framerate=F/1`, and a raw elementary stream has no container to state its
+    # rate, so h264parse publishes `framerate=0/1`, which intersects with
+    # nothing. That fails silently: zero frames and a pull timeout, with nothing
+    # on the bus to explain it.
     return graph
 
 
@@ -1717,6 +1825,8 @@ class Pipeline:
         frame_w: Source frame width in pixels.
         frame_h: Source frame height in pixels.
         fps: Source frame rate.
+        source_frames: Coded pictures in the source file, counted before the
+            run. 0 for a live source, where there is no such number.
         net_w: Model input width, used to invert the letterbox for masks.
         net_h: Model input height.
         video_port: Resolved UDP port for the Insight video feed.
@@ -1741,6 +1851,7 @@ class Pipeline:
     frame_w: int = 0
     frame_h: int = 0
     fps: int = 0
+    source_frames: int = 0
     net_w: int = 0
     net_h: int = 0
     video_port: int = 0
@@ -2023,8 +2134,22 @@ def build_pipeline(cfg: AppConfig) -> Pipeline:
 
     check_source_file(cfg)
     width, height, fps = resolve_source_geometry(cfg)
+
+    # Counted up front so the end of the run can say "83 of 379" rather than
+    # leaving a short recording to be interpreted. Only a file has the number.
+    source_frames = (
+        count_h264_pictures(cfg.source_uri)
+        if cfg.source_type == "video" and is_elementary_h264(cfg.source_uri)
+        else 0
+    )
+    length = (
+        f" frames={source_frames} ({source_frames / fps:.1f}s)"
+        if source_frames and fps
+        else f" frames={source_frames}" if source_frames
+        else ""
+    )
     step(f"source: type={cfg.source_type} uri={cfg.source_uri or '<default camera>'} "
-         f"stream={width}x{height}@{fps}")
+         f"stream={width}x{height}@{fps}{length}")
     step(describe_preprocess(cfg, width, height))
 
     step("loading model (first load unpacks the archive, this can take a minute)...")
@@ -2068,7 +2193,8 @@ def build_pipeline(cfg: AppConfig) -> Pipeline:
 
     pipeline = Pipeline(
         model=model, graph=graph, run=run, labels=labels, keep_ids=keep_ids,
-        frame_w=width, frame_h=height, fps=fps, net_w=net_w, net_h=net_h,
+        frame_w=width, frame_h=height, fps=fps, source_frames=source_frames,
+        net_w=net_w, net_h=net_h,
     )
 
     if cfg.insight_enable:
@@ -3435,44 +3561,235 @@ class ProfileWindow:
         self.reset()
 
 
+@dataclass
+class SinkJob:
+    """One finished frame, handed to the sink thread.
+
+    Every field is plain numpy or plain Python. Nothing here references a
+    ``pyneat`` sample, so the decoder's buffer is already back in its pool by
+    the time a job is queued.
+
+    Attributes:
+        index: 1-based frame number, used for the stills filename and ``every``.
+        stamp: Timing fields copied out of the source sample.
+        frame: Untouched BGR frame.
+        instances: Instances detected on it.
+        fps: Rate to print in the HUD badge.
+    """
+
+    index: int
+    stamp: FrameStamp
+    frame: object
+    instances: list
+    fps: float
+
+
+class SinkWorker:
+    """Runs compositing, stills and the recording on a thread of its own.
+
+    The pull loop used to blur, draw, JPEG-encode and write the video before
+    asking for the next frame. All of that is pure numpy and needs no buffer
+    from the decoder, but it still gated ``pull()``, and a consumer that pauses
+    for a few hundred milliseconds per frame is what lets decoded frames pile up
+    in the queues between the decoder and the app. The pool is eight buffers on
+    this board, so a big enough pile starves the decoder, which then cannot
+    produce the frame that would release the pile: the run stops with a pull
+    timeout part-way through the clip.
+
+    Moving that work here means the loop pulls again immediately, so buffers go
+    back at the rate the decoder can reuse them. Ordering is preserved because
+    there is exactly one worker draining a FIFO, so the recording still has the
+    source's frame order.
+
+    The queue is bounded. When the sinks fall behind, ``submit`` blocks, which is
+    the backpressure that keeps memory flat -- but it blocks after ``depth``
+    frames of slack rather than on every single one.
+
+    Attributes:
+        error: First exception raised on the worker, re-raised by ``close``.
+        blocked_ms: Total time ``submit`` spent waiting for a free slot.
+    """
+
+    def __init__(self, cfg: AppConfig, pipeline: Pipeline, depth: int) -> None:
+        self.cfg = cfg
+        self.pipeline = pipeline
+        self.queue: queue.Queue = queue.Queue(maxsize=max(1, depth))
+        self.error: BaseException | None = None
+        self.blocked_ms = 0.0
+        self.thread = threading.Thread(target=self._run, name="sinks", daemon=True)
+        self.thread.start()
+
+    def submit(self, job: SinkJob) -> None:
+        start = time_ms()
+        self.queue.put(job)
+        self.blocked_ms += time_ms() - start
+
+    def drain(self) -> None:
+        """Block until every queued frame has been written."""
+        self.queue.join()
+
+    def close(self) -> None:
+        self.queue.put(None)
+        self.thread.join()
+        if self.error is not None:
+            raise self.error
+
+    def _run(self) -> None:
+        while True:
+            job = self.queue.get()
+            try:
+                if job is None:
+                    return
+                self._handle(job)
+            except BaseException as exc:  # noqa: BLE001 - reported by close()
+                if self.error is None:
+                    self.error = exc
+            finally:
+                self.queue.task_done()
+
+    def _handle(self, job: SinkJob) -> None:
+        cfg, pipeline = self.cfg, self.pipeline
+        need_jpeg = wants_jpeg(cfg, job.index)
+        need_annotated = (
+            pipeline.writer is not None
+            or (cfg.insight_enable and cfg.insight_annotated)
+            or (need_jpeg and cfg.save_overlay)
+        )
+
+        # Render once, then share the result across every sink that wants it.
+        annotated = (
+            render_annotated(cfg, pipeline, job.frame, job.instances, job.fps)
+            if need_annotated
+            else None
+        )
+
+        # With insight_annotated the viewer shows our composite. Without it,
+        # Insight receives the raw frame and draws its own overlay from the
+        # metadata, which has boxes but no masks.
+        push_video(
+            pipeline, job.stamp,
+            annotated if (cfg.insight_annotated and annotated is not None) else job.frame,
+        )
+        send_metadata(pipeline, job.stamp, job.instances)
+
+        if pipeline.writer is not None:
+            pipeline.writer.write(annotated)
+            pipeline.writer_frames += 1
+        if need_jpeg:
+            save_frame(cfg, job.index, annotated if cfg.save_overlay else job.frame)
+
+
 HEARTBEAT_EVERY = 50
 
 
-def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
-    profile = ProfileWindow(cfg.profile, cfg.profile_interval)
+def source_stopped_message(cfg: AppConfig, pipeline: Pipeline, processed: int) -> str:
+    """Explain a source that went quiet, ruling out what the frame count rules out.
+
+    The clip's length is known before the run starts, so "it just ended" is
+    either the whole answer or not on the list at all. Saying which turns a
+    short recording from something to be interpreted into something decided.
+    """
+    total = pipeline.source_frames
+    head = (
+        f"source produced nothing for {cfg.pull_timeout_ms} ms twice in a row after "
+        f"{processed} frames"
+    )
+    if total and processed >= total:
+        return (
+            f"{head}, which is the whole clip ({total} frames). Nothing is wrong: "
+            "the run is complete."
+        )
+
+    if total:
+        head += (
+            f", {processed / total:.0%} of the way through a {total} frame clip. "
+            "The source stalled; it did not end."
+        )
+    else:
+        head += ". If that is far short of the clip, the source stalled rather than ended."
+
+    return (
+        f"{head}\nIn order of likelihood:\n"
+        "  1. the hardware decoder ran out of buffers. Its pool is small (the boot log\n"
+        "     prints BufferNum), and every element between it and the source appsink\n"
+        "     can park one. Count the queues in the first pipeline printed above:\n"
+        "     their max-buffers plus the appsink's must stay under BufferNum. Then\n"
+        "     lower runtime.output_buffers, which costs two more.\n"
+        "  2. output.insight.enable is on and its encoder wedged the shared codec\n"
+        "     daemon.\n"
+        "Run again with --minimal to tell 1 apart from how much work this app does\n"
+        "per frame: the same stall means the graph, a complete run means the app."
+    )
+
+
+def pull_frame(pipeline: Pipeline, cfg: AppConfig, sinks: SinkWorker, processed: int):
+    """Pull one joined sample, flushing our own backlog before giving up.
+
+    A starved decoder and a finished clip look identical from here: both are
+    silence. So on the first timeout, hand back everything the app is still
+    holding -- the sink queue is several decoded frames deep -- and ask again. A
+    pool that refills answers straight away; a clip that ended stays quiet.
+
+    Args:
+        pipeline: Live pipeline.
+        cfg: Application configuration, for ``pull_timeout_ms``.
+        sinks: Sink worker to drain before the retry.
+        processed: Frames processed so far, for the message only.
+
+    Returns:
+        A ``(sample, timed_out, recovered)`` triple. ``sample`` is None only
+        when both attempts came back empty.
+    """
+    sample = pipeline.run.pull("segmenter_output", cfg.pull_timeout_ms)
+    if sample is not None:
+        return sample, False, False
+
+    print(
+        f"[warn] timed out waiting for instances after {processed} frames; "
+        "flushing the sink queue and retrying once",
+        file=sys.stderr, flush=True,
+    )
+    sinks.drain()
+    sample = pipeline.run.pull("segmenter_output", cfg.pull_timeout_ms)
+    if sample is None:
+        return None, True, False
+
+    print(
+        f"[warn] the source recovered once the backlog was flushed. That was "
+        f"back-pressure from this app rather than the end of the clip; lower "
+        f"runtime.queue_depth if it keeps happening.",
+        file=sys.stderr, flush=True,
+    )
+    return sample, True, True
+
+
+def consume_frames(
+    pipeline: Pipeline, cfg: AppConfig, stopper: Stopper, sinks: SinkWorker,
+    profile: ProfileWindow,
+) -> tuple[int, int, int]:
+    """The pull loop. Returns ``(processed, timeouts, recovered)``.
+
+    Everything expensive happens on ``sinks``, so the only work between two
+    ``pull`` calls is copying the frame out, parsing boxes and rebuilding masks.
+    That is what keeps the decoder's pool turning over.
+    """
     processed = 0
     timeouts = 0
+    recovered = 0
     heartbeat_start = time_ms()
     heartbeat_instances = 0
     live_fps = float(pipeline.fps or 25)   # HUD value, refreshed each heartbeat
 
     while not stopper.stop and (cfg.frames <= 0 or processed < cfg.frames):
         pull_start = time_ms()
-        sample = pipeline.run.pull("segmenter_output", cfg.pull_timeout_ms)
+        sample, timed_out, came_back = pull_frame(pipeline, cfg, sinks, processed)
         pull_end = time_ms()
+        timeouts += int(timed_out)
+        recovered += int(came_back)
 
         if sample is None:
-            timeouts += 1
-            print(
-                f"[warn] timed out waiting for instances ({timeouts})",
-                file=sys.stderr, flush=True,
-            )
             if cfg.source_type == "video":
-                print(
-                    f"source produced nothing for {cfg.pull_timeout_ms} ms after "
-                    f"{processed} frames; stopping.\n"
-                    "If that is far short of the clip length the source stalled "
-                    "rather than ended. In order of likelihood:\n"
-                    "  1. the hardware decoder ran out of buffers. Its pool is small "
-                    "(the boot log\n     prints BufferNum), so anything holding a "
-                    "decoded sample starves it. Cut\n     per-frame work: "
-                    "output.save.every: 10 rather than 1 is the usual win, and\n"
-                    "     lower runtime.queue_depth.\n"
-                    "  2. output.insight.enable is on and its encoder wedged the "
-                    "shared codec daemon.\n"
-                    "  3. the clip really ended.",
-                    flush=True,
-                )
+                print(source_stopped_message(cfg, pipeline, processed), flush=True)
                 break
             continue
 
@@ -3519,46 +3836,22 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
                 f"{mask_w}x{mask_h} slots={instance_count(bundle)} values={values}",
                 flush=True,
             )
+
+        # The decoder's buffer is free from here on. `frame` and `payload` are
+        # copies; a packed `bundle` is a view on `payload`, and a bundle built
+        # from separate tensors is copied out in classify_mask_tensors. Nothing
+        # below this line touches pyneat, so let go before doing any of it --
+        # the mask warp alone is tens of milliseconds per frame.
+        sample = instances_field = bbox_tensor = None
+
         instances = build_instances(
             pipeline, cfg, boxes, bundle, frame.shape, draw_scale(frame, cfg.draw)
         )
-
-        # Everything from here on works on plain numpy and Python objects, so
-        # give the decoder its buffer back before compositing rather than after.
-        # `frame` and `payload` are already copies; `bundle` is either a view on
-        # `payload` or an explicit copy. Nothing below touches pyneat.
-        sample = instances_field = bbox_tensor = bundle = None
+        bundle = None
         mask_end = time_ms()
 
         processed += 1
-        need_jpeg = wants_jpeg(cfg, processed)
-        need_annotated = (
-            pipeline.writer is not None
-            or (cfg.insight_enable and cfg.insight_annotated)
-            or (need_jpeg and cfg.save_overlay)
-        )
-
-        # Render once, then share the result across every sink that wants it.
-        annotated = (
-            render_annotated(cfg, pipeline, frame, instances, live_fps)
-            if need_annotated
-            else None
-        )
-
-        # With insight_annotated the viewer shows our composite. Without it,
-        # Insight receives the raw frame and draws its own overlay from the
-        # metadata, which has boxes but no masks.
-        push_video(
-            pipeline, stamp,
-            annotated if (cfg.insight_annotated and annotated is not None) else frame,
-        )
-        send_metadata(pipeline, stamp, instances)
-
-        if pipeline.writer is not None:
-            pipeline.writer.write(annotated)
-            pipeline.writer_frames += 1
-        if need_jpeg:
-            save_frame(cfg, processed, annotated if cfg.save_overlay else frame)
+        sinks.submit(SinkJob(processed, stamp, frame, instances, live_fps))
         sink_end = time_ms()
 
         profile.add(
@@ -3583,37 +3876,78 @@ def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
             heartbeat_start = time_ms()
             heartbeat_instances = 0
 
-    profile.flush()
-    print(f"processed={processed} timeouts={timeouts} masks={pipeline.mask_kind or 'none'}")
+    return processed, timeouts, recovered
 
-    # A recording that is over almost before it starts is the most commonly
-    # reported symptom, and it has three quite different causes. Rank them here
-    # rather than leaving the frame count to be interpreted.
+
+def run_pipeline(pipeline: Pipeline, cfg: AppConfig, stopper: Stopper) -> int:
+    profile = ProfileWindow(cfg.profile, cfg.profile_interval)
+    sinks = SinkWorker(cfg, pipeline, cfg.queue_depth)
+    try:
+        processed, timeouts, recovered = consume_frames(
+            pipeline, cfg, stopper, sinks, profile
+        )
+    finally:
+        # Ordered before anything that reads writer_frames: frames may still be
+        # queued, and they belong in the recording. close() re-raises whatever
+        # the worker hit, so a failing sink is not swallowed.
+        sinks.close()
+
+    profile.flush()
+    total = pipeline.source_frames
+    print(
+        f"processed={processed}{f' of {total}' if total else ''} timeouts={timeouts} "
+        f"recovered={recovered} masks={pipeline.mask_kind or 'none'}"
+    )
+    if sinks.blocked_ms > 1000.0 and processed:
+        print(
+            f"sinks: the pull loop waited {sinks.blocked_ms / 1000.0:.1f}s in total for "
+            f"the compositing thread ({sinks.blocked_ms / processed:.0f} ms/frame). "
+            "Cheaper settings are in the README under \"It runs slower than the detector\"."
+        )
+
+    # An incomplete recording is the most commonly reported symptom, and it has
+    # several quite different causes. Rank them here rather than leaving the
+    # frame count to be interpreted. "Incomplete" is measured against the clip's
+    # own length where that is known, not against an arbitrary few seconds: a
+    # 15 second clip cut off at 3 seconds used to pass this check in silence.
     out_fps = cfg.video_fps or pipeline.fps or 25
     seconds = pipeline.writer_frames / out_fps if out_fps else 0.0
-    if pipeline.writer is not None and pipeline.writer_frames and seconds < 2.0:
+    short = (
+        pipeline.writer_frames < total if total
+        else seconds < 2.0
+    )
+    if pipeline.writer is not None and pipeline.writer_frames and short:
         causes = []
+        if cfg.frames:
+            causes.append(f"runtime.frames is {cfg.frames}, which capped the run.")
         if cfg.insight_enable:
             causes.append(
                 "output.insight.enable is true. Its H.264 encoder shares the codec "
                 "daemon with the decoder feeding the source, so a failing encoder "
                 "stalls the run. Set it to false; the recording does not need it."
             )
-        if cfg.frames:
-            causes.append(f"runtime.frames is {cfg.frames}, which capped the run.")
         if timeouts:
             causes.append(
                 f"the source stopped producing frames ({timeouts} timeout(s)), so "
                 "the run ended before the clip did."
             )
         if not causes:
-            causes.append("the source clip really is that short.")
+            causes.append(
+                "frames were dropped rather than blocked on. Check that "
+                "runtime.overflow_policy resolved to block, as printed at startup."
+            )
         listed = "\n".join(f"       {i}. {c}" for i, c in enumerate(causes, 1))
+        missing = (
+            f"{pipeline.writer_frames} of {total} frames, {seconds:.1f}s of "
+            f"{total / out_fps:.1f}s" if total
+            else f"only {seconds:.1f}s ({pipeline.writer_frames} frames at {out_fps} fps)"
+        )
         print(
-            f"[warn] the recording is only {seconds:.1f}s "
-            f"({pipeline.writer_frames} frames at {out_fps} fps).\n{listed}",
+            f"[warn] the recording is incomplete: {missing}.\n{listed}",
             file=sys.stderr, flush=True,
         )
+    elif pipeline.writer is not None and total and pipeline.writer_frames >= total:
+        print(f"video: complete, all {total} frames of the clip.", flush=True)
     if pipeline.metadata_sender is not None:
         stats = pipeline.metadata_sender.stats()
         print(
