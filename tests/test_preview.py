@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from sima_vision.cli import main, parse_size
-from sima_vision.preview import boxes_from, build_scene, read_first_frame, render
+from sima_vision.scene import boxes_from, build_scene, read_first_frame, render
 from sima_vision.sinks import load_labels
 from sima_vision.tasks import TASKS
 

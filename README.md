@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/sima-devkit-docs-logo-home.png" alt="SiMa Neat SDK: live YOLO computer vision on a Modalix DevKit 3.0" width="640">
+<img src="assets/sima-devkit-docs-logo-home.png" alt="sima-vision: live YOLO computer vision on a SiMa Modalix DevKit 3.0" width="640">
 
 <br>
 
@@ -8,117 +8,231 @@
 [![Palette SDK](https://img.shields.io/badge/Palette_SDK-2.1.2-457B9D?style=for-the-badge)](https://docs.sima.ai)
 [![Neat](https://img.shields.io/badge/Neat-0.3.0-2A9D8F?style=for-the-badge)](https://docs.sima.ai)
 
-![Windows](https://img.shields.io/badge/Windows_11-0078D6?style=flat-square&logo=windows11&logoColor=white)
-![WSL2](https://img.shields.io/badge/WSL2-E95420?style=flat-square&logo=ubuntu&logoColor=white)
-![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
-![Python](https://img.shields.io/badge/Python_3.10+-3776AB?style=flat-square&logo=python&logoColor=white)
-![YOLO](https://img.shields.io/badge/Ultralytics_YOLO26-FFB703?style=flat-square&labelColor=333)
+<br>
 
+[![CI](https://github.com/RizwanMunawar/sima-projects/actions/workflows/ci.yml/badge.svg)](https://github.com/RizwanMunawar/sima-projects/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/badge/pip_install-sima--vision-3775A9?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/sima-vision/)
-![License](https://img.shields.io/badge/license-Apache--2.0-6C757D?style=flat-square)
+[![Python](https://img.shields.io/badge/python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-6C757D?style=flat-square)](LICENSE)
+[![Ultralytics YOLO26](https://img.shields.io/badge/Ultralytics-YOLO26-FFB703?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)
 
 </div>
 
-**Live YOLO computer vision on a SiMa Modalix DevKit 3.0** — object detection, instance
-segmentation with a background blur, and fall detection with email alerts. One command,
-one pipeline, three apps.
+**`sima-vision`** runs [Ultralytics YOLO26](https://github.com/ultralytics/ultralytics) on
+the MLA accelerator of a [SiMa.ai Modalix DevKit 3.0](https://sima.ai) — object detection,
+instance segmentation with a background blur, and fall detection with email alerts. Three
+apps, one pipeline, one command.
 
-Inference runs on the board's MLA. Everything else — checking a config, seeing exactly
-what the overlay will look like — runs anywhere, so you can do all of it before you own
-any hardware.
+Inference needs the board. **Everything else does not** — checking a config, and seeing
+exactly what the overlay will look like, both run on a laptop. So you can set the whole
+thing up before you own any hardware.
 
-## Try it right now
+<div align="center">
 
-**No DevKit. No SDK. No model. No download.**
+| <img src="assets/preview-detect.png" width="270"> | <img src="assets/preview-segment.png" width="270"> | <img src="assets/preview-fall.png" width="270"> |
+|:--:|:--:|:--:|
+| **`detect`** | **`segment`** | **`fall`** |
+
+<sub>Drawn on a laptop by <code>sima-vision preview</code> — no board, no model.</sub>
+
+</div>
+
+## <div align="center">Documentation</div>
+
+<details open>
+<summary>Install</summary>
+
+Python 3.10 or later. Needs no compiler, and pulls only PyYAML:
+
+```bash
+pip install sima-vision
+```
+
+To draw previews on a machine that has no board, add numpy and OpenCV:
 
 ```bash
 pip install "sima-vision[preview]"
-sima-vision preview --task segment -o blur.png
 ```
 
-<div align="center">
-<img src="assets/preview-segment.png" alt="Instance segmentation preview: masks, captions and a blurred background, rendered with no board" width="720">
-</div>
-
-That is the **real overlay code** — the same functions that draw the recording on the
-board — run against a synthetic scene. No model is involved: the detections are placed
-for you so the drawing has something to draw.
+On the DevKit you want the plain install: the board already provides numpy and OpenCV, and
+`pip install opencv-python` there would pull numpy 2.x and break `pyneat`.
 
 ```bash
-sima-vision preview --task detect       # boxes and labels
-sima-vision preview --task fall         # tracked people, states, alert banner
-sima-vision preview --task segment --anonymise --keep-classes person
+sima-vision doctor       # what is installed, and what it lets you do
 ```
 
-## Run it on a DevKit
+</details>
 
-Three commands on the board. There is nothing to clone and nothing to `scp`.
+<details open>
+<summary>Quickstart</summary>
+
+### Without a board
 
 ```bash
-pip install sima-vision                 # 1. install
+sima-vision preview --task segment -o blur.png    # draw the overlay your config makes
+sima-vision init segment                          # write a documented config.yaml
+sima-vision segment --validate                    # check it
+```
 
-sima-vision fetch detect                # 2. sample clips, and the model command to run
+`preview` runs **no model**. It draws synthetic detections using the real overlay code, so
+what you are judging is styling, not accuracy.
+
+### On the DevKit
+
+```bash
+pip install sima-vision
+sima-vision fetch detect                          # sample clips + the model command
 
 sima-vision detect \
   --source assets/videos/people-walking-outside-mall.h264 \
   --model  assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
 ```
 
-`fetch` downloads the two sample clips and prints the one `sima-cli download` line for
-the model, which needs a [community.sima.ai](https://community.sima.ai) login and so is
-yours to run. Swap `detect` for `segment` or `fall` and everything above is the same.
+`fetch` downloads the clips and prints the one `sima-cli download` line for the model,
+which needs a [community.sima.ai](https://community.sima.ai) login. Out comes
+`detections.mp4` and a `frames/` directory; `scp` them back and look.
 
-Out comes `detections.mp4` and a `frames/` directory on the board. Copy them back and
-look:
+> **New board?** It gets brought up once — cabling, WSL2, Docker, the 12.6 GB Neat SDK.
+> That is **[docs/setup.md](docs/setup.md)**, about two hours. Nothing above needs it.
+
+</details>
+
+<details open>
+<summary>Usage</summary>
+
+Every setting has a flag and a Python keyword under the same name. Both write the same
+config key, and both go through the same validation.
+
+### CLI
 
 ```bash
-scp sima@<devkit-ip>:~/detections.mp4 .
+sima-vision detect  --source clip.h264 --model det.tar.gz --conf 0.5
+sima-vision segment --source clip.h264 --model seg.tar.gz --blur-strength 81
+sima-vision segment --source clip.h264 --anonymise --keep-classes person
+sima-vision fall    --source rtsp://cam/live --alert-to ops@example.com --send
 ```
 
-> **First time with the board?** It has to be brought up once — cabling, WSL2, Docker,
-> the 12.6 GB Neat SDK. That is [docs/setup.md](docs/setup.md), about two hours, once per
-> machine. Everything on *this* page works before you start it.
+`sima-vision <command> --help` lists every flag.
 
-## Adjust it
+### Python
 
-Every setting has a flag for one run, and a config key for every run after.
+```python
+from sima_vision import run, preview, validate
 
-```bash
-sima-vision detect --conf 0.5 --frames 200 --no-save        # this run only
+# No board: draw the overlay a setting produces, and write a PNG.
+preview("segment", out="blur.png", blur_strength=81, keep_classes=["person"])
+
+# No board: resolve and check a config, then look at what it became.
+cfg = validate("detect", conf=0.5, max_det=20)
+print(cfg.score_threshold, cfg.video_path)
+
+# On the DevKit: run it.
+run("detect", source="clip.h264", model="det.tar.gz", conf=0.5, frames=200)
 ```
 
+Anything the keywords do not cover is still reachable by its config path:
+
+```python
+run("segment", **{"runtime.output_buffers": 2})
+```
+
+</details>
+
+<details open>
+<summary>Adjust it</summary>
+
+Three layers, each beating the one above it:
+
+```
+built-in defaults   →   config.yaml   →   flags / keywords
+```
+
+So **a config file is optional** — `--model` and `--source` are enough to run. For a setup
+you keep:
+
 ```bash
-sima-vision init detect        # writes a documented config.yaml here
+sima-vision init detect     # a documented config.yaml, right here
 $EDITOR config.yaml
-sima-vision detect             # picks up ./config.yaml on its own
+sima-vision detect          # picks up ./config.yaml on its own
 ```
 
-`init` writes the same commented file the repo ships — every key, what it does, and what
-goes wrong if you get it wrong. Check it without a board, then look at it:
+### What people actually change
+
+| I want | Flag | Python | Config key |
+|:--|:--|:--|:--|
+| Fewer spurious boxes | `--conf 0.5` | `conf=0.5` | `decode.score_threshold` |
+| To catch more, noisily | `--conf 0.15` | `conf=0.15` | `decode.score_threshold` |
+| A short test run | `--frames 100` | `frames=100` | `runtime.frames` |
+| No video file | `--no-video` | `video=False` | `output.video.enable` |
+| No stills | `--no-save` | `save=False` | `output.save.enable` |
+| Fewer stills | `--save-every 30` | `save_every=30` | `output.save.every` |
+| To see where the time goes | `--profile` | `profile=True` | `runtime.profile` |
+| A live Insight view | `--insight` | `insight=True` | `output.insight.enable` |
+| A stronger blur | `--blur-strength 81` | `blur_strength=81` | `blur.kernel` |
+| A pixelated background | `--blur-method pixelate` | `blur_method="pixelate"` | `blur.method` |
+| Only people kept sharp | `--keep-classes person` | `keep_classes=["person"]` | `blur.keep_classes` |
+| People blurred, scene sharp | `--anonymise` | `anonymise=True` | `blur.invert` |
+| Masks, but no blur | `--no-blur` | `blur=False` | `blur.enable` |
+| To track something else | `--classes forklift` | `classes=["forklift"]` | `tracking.classes` |
+| Falls confirmed faster | `--confirm 0.8` | `confirm=0.8` | `fall.confirm_seconds` |
+| An email on a fall | `--alert-to me@x.com --send` | `alert_to=[...], send=True` | `alerts.*` |
+
+Check any of it before deploying:
 
 ```bash
-sima-vision detect --validate           # does it parse, and what did it resolve to?
-sima-vision preview --task detect       # what does the overlay look like?
+sima-vision segment --conf 0.5 --blur-strength 81 --validate   # does it parse?
+sima-vision preview --task segment --blur-strength 81          # what does it look like?
 ```
 
-## The three apps
+### When it runs too slowly
 
-| App | What it does | Model | Guide |
+In the order worth trying: `blur.downscale: 4` (the biggest single win at 1080p),
+`output.save.every: 30`, `--no-save`, then `blur.feather: 0`.
+
+### When a run stops part-way through a clip
+
+That is the decoder running out of buffers. Lower `runtime.output_buffers`, and use
+`sima-vision segment --minimal` to tell "the app is too slow" apart from "the graph is
+wrong" in a single run.
+
+</details>
+
+<details open>
+<summary>Tasks</summary>
+
+| Task | What it does | Model | Guide |
 |:--|:--|:--|:--|
-| `sima-vision detect` | Boxes, class names and confidence on every frame | YOLO26 detect | [docs/detect.md](docs/detect.md) |
-| `sima-vision segment` | Per-pixel masks, and a background blur that keeps the subject sharp | YOLO26 segment | [docs/segment.md](docs/segment.md) |
-| `sima-vision fall` | Tracks people and emails when one of them goes down | YOLO26 detect | [docs/fall.md](docs/fall.md) |
+| **`detect`** | Boxes, class names and confidence on every frame | YOLO26 detect | [docs/detect.md](docs/detect.md) |
+| **`segment`** | Per-pixel masks, and a background blur that keeps the subject sharp | YOLO26 segment | [docs/segment.md](docs/segment.md) |
+| **`fall`** | Tracks people and emails when one of them goes down | YOLO26 detect | [docs/fall.md](docs/fall.md) |
 
-All three share one pipeline: the same source handling, graph, decoding, drawing and
-sinks. Each guide covers only what is genuinely its own — its model, its settings, its
-tuning and its errors.
+All three share one pipeline — the same source handling, Neat graph, sample decoding,
+drawing and sinks. Each guide covers only what is genuinely its own: its model, its
+settings, its tuning and its errors.
 
-> The command is `sima-vision`, **not** `sima-cli`. `sima-cli` is SiMa.ai's own tool,
-> used to log in and download models — a different program, and one you still need.
+**Task-specific flags:**
 
-## Every command
+```bash
+# segment
+--blur / --no-blur      --blur-method gaussian|pixelate|none    --blur-strength PX
+--keep-classes ...      --anonymise      --mask-threshold T     --no-masks   --minimal
 
-| Command | Needs a board? | What it does |
+# fall
+--classes ...           --confirm S      --no-fall
+--alert-to EMAIL...     --alert-from EMAIL     --alerts    --send
+--smtp-host / --smtp-port / --smtp-user        --site NAME
+--test-alert            # send one fake alert now and exit; needs no board
+```
+
+Alerts stay a dry run until `--send`, and the SMTP password is only ever read from
+`$FALL_ALERT_SMTP_PASSWORD` — never from a config file, which is committed.
+
+</details>
+
+<details>
+<summary>Commands</summary>
+
+| Command | Board? | What it does |
 |:--|:--:|:--|
 | `sima-vision preview` | no | Draw the overlay your config produces, to a PNG |
 | `sima-vision init <task>` | no | Write a documented `config.yaml` here |
@@ -129,95 +243,7 @@ tuning and its errors.
 | `sima-vision segment` | **yes** | Run segmentation, with the optional blur |
 | `sima-vision fall` | **yes** | Run fall detection, with SMTP alerts |
 
-`sima-vision <command> --help` lists every flag.
-
-<a id="reference"></a>
-
-## Reference
-
-#### Where settings come from
-
-Three layers, each beating the one above it:
-
-```
-built-in defaults        a complete, runnable configuration
-      ↓
-config.yaml              whatever the file sets
-      ↓
-command-line flags       whatever you typed
-```
-
-So a config file is **optional**. These are equivalent:
-
-```bash
-sima-vision detect --model assets/models/yolo26m-det.tar.gz \
-                   --source assets/videos/mall.h264 --conf 0.4
-sima-vision detect --config config.yaml --conf 0.4
-```
-
-With no `--config`, the CLI picks up `config.yaml` from the directory you run in, which
-is what `sima-vision init` writes. `--no-config` ignores it and runs on defaults plus
-flags alone.
-
-#### Common adjustments
-
-The things people actually change, and the two ways to change each. A flag is for one
-run; the config key is for every run after it.
-
-| I want | Flag | Config key |
-|:--|:--|:--|
-| Fewer spurious boxes | `--conf 0.5` | `decode.score_threshold` |
-| To catch more, at the cost of noise | `--conf 0.15` | `decode.score_threshold` |
-| A short test run | `--frames 100` | `runtime.frames` |
-| No video file | `--no-video` | `output.video.enable` |
-| No stills | `--no-save` | `output.save.enable` |
-| Fewer stills | `--save-every 30` | `output.save.every` |
-| To see where the time goes | `--profile` | `runtime.profile` |
-| A live view in Neat Insight | `--insight` | `output.insight.enable` |
-| A stronger background blur | `--blur-strength 81` | `blur.kernel` |
-| A pixelated background | `--blur-method pixelate` | `blur.method` |
-| Only people kept sharp | `--keep-classes person` | `blur.keep_classes` |
-| People blurred, scene sharp | `--anonymise --keep-classes person` | `blur.invert` |
-| No blur, just masks | `--no-blur` | `blur.enable` |
-| To track something other than people | `--classes person forklift` | `tracking.classes` |
-| Falls confirmed faster | `--confirm 0.8` | `fall.confirm_seconds` |
-| An email when someone falls | `--alert-to me@example.com --send` | `alerts.*` |
-
-**When it runs too slowly**, in the order worth trying: `blur.downscale: 4` (the biggest
-single win at 1080p), `output.save.every: 30`, `--no-save`, then `blur.feather: 0`.
-
-**When a run stops part-way through a clip**, that is the decoder running out of buffers.
-Lower `runtime.output_buffers`, and use `sima-vision segment --minimal` to tell "the app
-is too slow" apart from "the graph is wrong" in a single run.
-
-Every one of these can be checked before deploying:
-
-```bash
-sima-vision segment --conf 0.5 --blur-strength 81 --validate   # does it parse?
-sima-vision preview --task segment --conf 0.5                  # what does it look like?
-```
-
-#### Check a config without a board
-
-`--validate` parses everything, resolves it and prints the result. It loads neither
-pyneat nor the model, so it runs on your laptop, in the SDK container, anywhere:
-
-```bash
-sima-vision segment --config config.yaml --validate
-```
-
-```
-config OK: config.yaml
-  model: assets/models/yolo26m-seg-bf16-mla_tess-b1.tar.gz
-  family=yolo26-seg -> BoxDecodeType.YoloV26Seg
-  source: type=video uri=assets/videos/people-walking-outside-mall.h264
-  decode: conf=0.3 iou=0.6 max_det=50
-  segmentation: masks=on source=auto space=auto threshold=0.5 net=<from the first mask>
-  blur: background | method=gaussian kernel=41 sigma=auto down=2 feather=9
-  output: video=segmentation.mp4 stills=frames/ every=10
-```
-
-#### Flags every app takes
+**Shared flags:**
 
 | Flag | Config key | What it does |
 |:--|:--|:--|
@@ -226,60 +252,94 @@ config OK: config.yaml
 | `--model`, `-m` | `model.path` | Compiled model archive |
 | `--labels` | `model.labels` | Class names. Defaults to the packaged COCO list |
 | `--family` | `model.family` | Detection head. Must match the model |
-| `--conf` | `decode.score_threshold` | Minimum confidence |
-| `--iou` | `decode.nms_iou` | NMS IoU threshold |
-| `--max-det` | `decode.max_detections` | Top-K per frame |
+| `--conf` / `--iou` / `--max-det` | `decode.*` | Confidence, NMS IoU, top-K |
 | `--frames`, `-n` | `runtime.frames` | Stop after N frames |
 | `--profile` | `runtime.profile` | Per-stage timings |
-| `--video` / `--no-video` | `output.video.*` | The annotated recording |
+| `--video-path` / `--no-video` | `output.video.*` | The annotated recording |
 | `--save-dir` / `--save-every` / `--no-save` | `output.save.*` | Annotated stills |
 | `--insight` / `--insight-host` | `output.insight.*` | The live Neat Insight feed |
 | `--config`, `-c` / `--no-config` | — | Which config file, or none |
 | `--validate` | — | Check and print, then exit |
 
-#### Flags per app
+`--validate` loads neither pyneat nor the model, so it runs anywhere:
 
-```bash
-# segment
---blur / --no-blur          --blur-method gaussian|pixelate|none
---blur-strength PX          --keep-classes person car
---anonymise                 # blur the instances instead of the background
---mask-threshold T          --no-masks       --minimal
-
-# fall
---classes person            --confirm S      --no-fall
---alert-to EMAIL...         --alert-from EMAIL
---alerts                    --send           # --send is required to really email
---smtp-host / --smtp-port / --smtp-user      --site NAME
+```
+config OK: config.yaml
+  model: assets/models/yolo26m-seg-bf16-mla_tess-b1.tar.gz
+  family=yolo26-seg -> BoxDecodeType.YoloV26Seg
+  source: type=video uri=assets/videos/people-walking-outside-mall.h264
+  decode: conf=0.3 iou=0.6 max_det=50
+  segmentation: masks=on source=auto space=auto threshold=0.5
+  blur: background | method=gaussian kernel=41 sigma=auto down=2 feather=9
+  output: video=segmentation.mp4 stills=frames/ every=10
 ```
 
-`--anonymise --keep-classes person` blurs people and leaves the scene sharp.
+</details>
 
-Alerts stay a dry run until you pass `--send`, and the SMTP password is only ever read
-from `$FALL_ALERT_SMTP_PASSWORD` — never from a config file, which is committed.
+<details>
+<summary>How it works</summary>
 
-#### Drawing on your own image
+The pipeline is a Neat `Graph`, not a single `Model.run`, because it has several stages,
+named public endpoints and a branch with a fan-in:
 
-`preview` normally paints a synthetic scene. Point it at a photo instead and it will
-draw over that, which is the quickest way to see how a caption size or a blur reads
-against real content:
+```
+source ──> branch ──> frame ──────────────┐
+              │                           ├──> combine("<task>_output")
+              └───> model ──> results ────┘
 
-```bash
-sima-vision preview --task fall --source my-photo.jpg
+<task>_output ──> parse ──> overlay ──> video file + stills
+                        ├─> MetadataSender  (JSON over UDP)
+                        └─> VideoSender     (H.264 RTP over UDP)
 ```
 
-Anything OpenCV can open works. Raw `.h264` cannot be — it has no container to parse —
-so those fall back to the synthetic scene with a warning.
+Frames come off the hardware decoder, whose buffer pool is small — the boot log prints
+`BufferNum=8`. Everything expensive therefore happens on a sink thread, so the pull loop
+hands each buffer back immediately. Holding one across a `pull()` is what deadlocks the
+decoder part-way through a clip.
 
-## License
+```
+sima_vision/
+  cli.py        the command line          api.py     the Python API
+  config.py     loading and validation    scene.py   the preview scene
+  media.py      H.264 and geometry        neat.py    graph assembly
+  samples.py    decoding a sample         masks.py   masks and compositing
+  draw.py       the overlay               sinks.py   video, stills, Insight
+  runloop.py    the pull loop
+  tasks/        detect.py   segment.py   fall.py
+```
 
-The models used here for testing are **Ultralytics YOLO26**, released under **AGPL-3.0**.
-All other parts of this code are released under **Apache-2.0**.
+Each task supplies only what is its own; everything above it is written once. See
+[docs/detect.md](docs/detect.md#how-the-app-works) for the long version.
 
-## Credits
+</details>
 
-- [SiMa.ai on GitHub](https://github.com/SiMa-ai): Modalix, the Palette SDK and Neat
-- [Ultralytics](https://github.com/ultralytics/ultralytics): YOLO26 models
+<details>
+<summary>Contributing</summary>
+
+```bash
+git clone https://github.com/RizwanMunawar/sima-projects.git
+cd sima-projects
+pip install -e ".[dev,preview]"
+
+ruff check sima_vision tests
+pytest -q
+```
+
+The tests need no board: the mask decoding, compositing, overlay, tracker and fall rules
+are plain numpy and OpenCV, so they run anywhere. CI covers Python 3.10 to 3.13, builds
+the wheel and installs it clean.
+
+</details>
+
+## <div align="center">License</div>
+
+The models used here for testing are **Ultralytics YOLO26**, under **AGPL-3.0**. All other
+parts of this repository are under **Apache-2.0** — see [LICENSE](LICENSE).
+
+## <div align="center">Credits</div>
+
+- [SiMa.ai](https://github.com/SiMa-ai) — Modalix, the Palette SDK and Neat
+- [Ultralytics](https://github.com/ultralytics/ultralytics) — YOLO26 models
 
 <div align="center">
 

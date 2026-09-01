@@ -23,7 +23,7 @@ import smtplib
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -1036,6 +1036,12 @@ class FallTask(Task):
             "--site", dest="alerts.site", metavar="NAME",
             help="Human name for this camera, put in the alert subject and body.",
         )
+        parser.add_argument(
+            "--test-alert", action="store_true",
+            help="Send one fake alert and exit. Proves the SMTP settings and the "
+                 "password environment variable work, without waiting for a fall "
+                 "-- or for a board.",
+        )
 
     def link_overrides(self, overrides: dict) -> dict:
         # Naming a recipient or a sender only makes sense if alerts are on, and
@@ -1083,6 +1089,39 @@ class FallTask(Task):
     def prepare(self, cfg: FallAppConfig, pipeline: FallPipeline, step) -> None:
         step(describe_fall(cfg))
         step(describe_alerts(cfg))
+
+    def early_exit(self, cfg: FallAppConfig, args) -> int | None:
+        """``--test-alert``: send one fake alert now and report what happened.
+
+        Deliberately synchronous and outside the pipeline. This is the command
+        you run when mail is not arriving, so it has to surface the real
+        exception rather than queue the work and return 0.
+        """
+        if not getattr(args, "test_alert", False):
+            return None
+        if not cfg.alerts.enable:
+            print(
+                "[ERR] alerts.enable is off, so there is nothing to test.\n"
+                "      Pass --alerts, or --alert-to somebody@example.com.",
+                file=sys.stderr,
+            )
+            return 1
+        # enable=False keeps AlertSender from starting its worker thread; this
+        # send happens on this thread so a failure is raised, not logged.
+        sender = AlertSender(replace(cfg.alerts, enable=False))
+        probe = Alert(
+            track_id=0, label="person", box=(100, 100, 400, 700),
+            signals={"aspect": True, "collapse": False, "descent": False,
+                     "aspect_value": 1.35, "descent_value": 0.0},
+            frame_index=0,
+        )
+        print(describe_alerts(cfg))
+        sender.send_now(probe)
+        print(
+            "test alert composed (dry_run is on, nothing left the board)."
+            if cfg.alerts.dry_run else "test alert sent."
+        )
+        return 0
 
     def runtime(self, cfg, pipeline) -> TaskRuntime:
         return FallRuntime()

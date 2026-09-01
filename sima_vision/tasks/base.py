@@ -92,6 +92,15 @@ class Task:
         """
         return overrides
 
+    def early_exit(self, cfg, args) -> int | None:
+        """Handle a flag that answers a question instead of running.
+
+        Runs after the config is resolved and before pyneat is loaded, so it
+        works off the board. Return an exit code to stop there, or None to go
+        on and run the pipeline.
+        """
+        return None
+
     def post_process(self, cfg, args):
         """Adjust the finished config from flags that are not config keys.
 

@@ -1,4 +1,6 @@
-"""Render what a config will look like, without a board and without a model.
+"""The synthetic scene behind ``sima-vision preview``.
+
+Renders what a config will look like, without a board and without a model.
 
 The overlay, the masks and the background blur are plain numpy and OpenCV. Only
 inference needs the MLA. So the appearance of a run can be produced anywhere,
@@ -142,3 +144,41 @@ def render(task, cfg, frame, subjects, labels: list[str]):
     pipeline.fps = cfg.source_fps or 25
     results = task.sample_results(cfg, pipeline, frame, boxes_from(subjects))
     return task.runtime(cfg, pipeline).render(cfg, pipeline, frame, results, 24.0)
+
+
+def placeholder_overrides(config: Path | None, use_file: bool) -> dict:
+    """Fill in only the required keys a preview never actually uses.
+
+    A preview loads no model and opens no source, but the config it previews
+    still has to pass the ordinary validation. Reading the file first means a
+    real value is never shadowed by a placeholder.
+    """
+    from .config import discover_config, read_config_file
+
+    raw = read_config_file(discover_config(config) if use_file else None)
+    overrides = {}
+    if not (raw.get("model") or {}).get("path"):
+        overrides["model.path"] = "<preview: no model is run>"
+    if not (raw.get("source") or {}).get("uri"):
+        overrides["source.uri"] = "<preview>"
+    return overrides
+
+
+def build_frame(source: str | None, size: tuple[int, int]):
+    """Get a frame to draw on, and the subjects to draw over it.
+
+    Args:
+        source: An image or video to use, or None for the synthetic scene.
+        size: Synthetic scene size, used when ``source`` cannot be read.
+
+    Returns:
+        A ``(frame, subjects, origin, unreadable)`` tuple. ``origin`` describes
+        where the frame came from; ``unreadable`` is True when a source was
+        given but could not be opened, which the CLI turns into a warning.
+    """
+    frame = read_first_frame(source) if source else None
+    if frame is not None:
+        _, subjects = build_scene(frame.shape[1], frame.shape[0])
+        return frame, subjects, str(source), False
+    frame, subjects = build_scene(*size)
+    return frame, subjects, f"synthetic scene {size[0]}x{size[1]}", bool(source)

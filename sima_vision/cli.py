@@ -37,10 +37,15 @@ examples:
   sima-vision segment --source clip.h264 --model yolo26m-seg.tar.gz --blur
   sima-vision segment --source clip.h264 --anonymise --keep-classes person
   sima-vision fall    --source rtsp://cam/live --alert-to ops@example.com
-  sima-vision detect  --config object-detection/config.yaml --validate
 
-Run from inside an app folder, or from the repo root, and config.yaml is found
-automatically. Everything runs on the DevKit; --validate works anywhere.
+without a board:
+  sima-vision init segment                    write a documented config.yaml
+  sima-vision preview --task segment          see what that config looks like
+  sima-vision segment --validate              check it
+  sima-vision doctor                          what is installed, and what it allows
+
+config.yaml in the working directory is picked up automatically. Running a task
+needs the DevKit; everything under "without a board" does not.
 """
 
 
@@ -116,7 +121,7 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
 
     out = parser.add_argument_group("output")
     out.add_argument(
-        "--video", dest="output.video.path", metavar="PATH",
+        "--video-path", dest="output.video.path", metavar="PATH",
         help="Where to write the annotated recording on the DevKit.",
     )
     out.add_argument(
@@ -149,21 +154,31 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
         help="Insight address as the DevKit sees it. Default 127.0.0.1.",
     )
 
-    config = parser.add_mutually_exclusive_group()
-    config.add_argument(
+
+def add_config_arguments(parser: argparse.ArgumentParser) -> None:
+    """Which config file to read, or none at all."""
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
         "--config", "-c", type=Path, metavar="PATH",
-        help="Config file. Defaults to ./config.yaml, then <app-dir>/config.yaml.",
+        help="Config file. Defaults to ./config.yaml in the working directory.",
     )
-    config.add_argument(
+    group.add_argument(
         "--no-config", action="store_true",
-        help="Ignore any config file and run on the built-in defaults plus these "
+        help="Ignore any config file and use the built-in defaults plus these "
              "flags, even when a config.yaml is sitting right there.",
     )
+
+
+def add_task_arguments(parser: argparse.ArgumentParser, task) -> None:
+    """Everything one task understands: the shared flags plus its own."""
+    add_shared_arguments(parser)
+    add_config_arguments(parser)
     parser.add_argument(
         "--validate", action="store_true",
         help="Parse and check the config, print what it resolved to, and exit. "
              "Needs neither pyneat nor the board, so it works on a laptop.",
     )
+    task.add_arguments(parser.add_argument_group(f"{task.name} options"))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -185,10 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
             epilog=EPILOG,
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
-        add_shared_arguments(sub)
-        group_title = f"{name} options"
-        task_group = sub.add_argument_group(group_title)
-        task.add_arguments(task_group)
+        add_task_arguments(sub, task)
         sub.set_defaults(_task=task_cls)
 
     add_init_parser(subparsers)
@@ -269,28 +281,24 @@ def add_preview_parser(subparsers) -> None:
         "--task", "-t", choices=list(TASKS), default="detect",
         help="Which app's overlay to draw. Default detect.",
     )
-    group = sub.add_mutually_exclusive_group()
-    group.add_argument(
-        "--config", "-c", type=Path, metavar="PATH",
-        help="Config to preview. Defaults to ./config.yaml, then <app-dir>/config.yaml.",
-    )
-    group.add_argument(
-        "--no-config", action="store_true",
-        help="Preview the built-in defaults, ignoring any config file.",
-    )
-    sub.add_argument(
-        "--source", "-s", metavar="PATH",
-        help="Image or video to draw on. Anything OpenCV can open; raw .h264 "
-             "cannot be, and falls back to the synthetic scene.",
-    )
     sub.add_argument(
         "--out", "-o", type=Path, default=Path("preview.png"), metavar="PATH",
         help="Where to write the PNG. Default preview.png.",
     )
     sub.add_argument(
         "--size", default="1280x720", metavar="WxH",
-        help="Synthetic scene size. Default 1280x720.",
+        help="Synthetic scene size, used unless --source gives a readable image.",
     )
+    # Everything a run understands, so a setting can be tried inline:
+    #   sima-vision preview --task segment --blur-strength 81
+    # Every task's flags are added, not just the chosen one's, because --task
+    # can be given last. A flag belonging to another task writes a config
+    # section this one never reads, and is ignored.
+    add_shared_arguments(sub)
+    add_config_arguments(sub)
+    for task_cls in TASKS.values():
+        task = task_cls()
+        task.add_arguments(sub.add_argument_group(f"{task.name} options"))
     sub.set_defaults(_command="preview")
 
 
@@ -384,46 +392,33 @@ def load_drawing_dependencies() -> None:
 
 def run_preview(args) -> int:
     """Draw one frame the way a real run would, and write it to a PNG."""
-    from . import preview as preview_module
-    from .config import discover_config, read_config_file
+    from .scene import build_frame, placeholder_overrides, render
     from .sinks import load_labels
 
     load_drawing_dependencies()
     task = TASKS[args.task]()
     use_file = not args.no_config
 
-    # A preview runs no model and opens no source, but the config it previews
-    # still has to pass the ordinary validation. Fill in only what is missing,
-    # so a real config's values are never shadowed by a placeholder.
-    found = discover_config(args.config) if use_file else None
-    raw = read_config_file(found)
-    overrides = {}
-    if not (raw.get("model") or {}).get("path"):
-        overrides["model.path"] = "<preview: no model is run>"
-    if not (raw.get("source") or {}).get("uri"):
-        overrides["source.uri"] = "<preview>"
-
-    cfg = task.load(args.config, overrides, use_file=use_file)
+    # `--source` doubles as the image to draw on: it is the same question it
+    # answers for a run, so there is no second flag for it.
+    source = vars(args).get("source.uri")
+    overrides = {
+        **placeholder_overrides(args.config, use_file),
+        **collect_overrides(args),
+    }
+    cfg = task.post_process(task.load(args.config, overrides, use_file=use_file), args)
     labels = load_labels(cfg.labels_path)
 
-    frame = preview_module.read_first_frame(args.source) if args.source else None
-    if frame is not None:
-        height, width = frame.shape[:2]
-        _, subjects = preview_module.build_scene(width, height)
-        origin = args.source
-    else:
-        if args.source:
-            print(
-                f"[warn] OpenCV could not read {args.source}; using the synthetic "
-                f"scene instead.\n       Raw .h264 is expected to fail here -- it "
-                f"has no container for OpenCV to parse.",
-                file=sys.stderr,
-            )
-        width, height = parse_size(args.size)
-        frame, subjects = preview_module.build_scene(width, height)
-        origin = f"synthetic scene {width}x{height}"
+    frame, subjects, origin, unreadable = build_frame(source, parse_size(args.size))
+    if unreadable:
+        print(
+            f"[warn] OpenCV could not read {source}; using the synthetic "
+            f"scene instead.\n       Raw .h264 is expected to fail here -- it "
+            f"has no container for OpenCV to parse.",
+            file=sys.stderr,
+        )
 
-    annotated = preview_module.render(task, cfg, frame, subjects, labels)
+    annotated = render(task, cfg, frame, subjects, labels)
 
     out = args.out
     if out.parent != Path("."):
@@ -539,6 +534,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.validate:
             print_validation(task, cfg)
             return 0
+
+        early = task.early_exit(cfg, args)
+        if early is not None:
+            return early
 
         load_runtime_dependencies()
         if cfg.profile:
