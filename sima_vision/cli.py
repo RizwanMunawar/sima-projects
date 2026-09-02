@@ -29,7 +29,12 @@ from . import __version__, runtime
 from .devkit import DEVKIT_ENV, run_pull, run_push, run_remote
 from .neat import describe_preprocess
 from .runloop import Stopper
-from .runtime import FAMILY_DECODE_TOKENS, load_runtime_dependencies
+from .runtime import (
+    FAMILY_DECODE_TOKENS,
+    find_pyneat_env,
+    load_runtime_dependencies,
+    missing_pyneat_message,
+)
 from .setup_commands import run_fetch, run_init
 from .tasks import TASKS
 
@@ -578,6 +583,14 @@ def run_doctor() -> int:
         if not ok:
             print(f"  {'':<5}{'':<{width}}  needed for: {needed_for} -- {fix}")
 
+    # pyneat lives in a venv of its own, so "not importable here" and "not on
+    # this machine" are different answers and the fix differs completely.
+    site, note = find_pyneat_env()
+    reachable = have["pyneat"] or site is not None
+    if not have["pyneat"]:
+        print(f"  {mark_for(reachable)}  {'pyneat venv':<{width}}  {note}")
+        have["pyneat"] = reachable
+
     dist = glob.glob("/usr/lib/python3*/dist-packages")
     board = dist[0] if dist else "(not a DevKit, which is fine)"
     print(f"\n  {mark_for(bool(dist))}  {'board packages':<{width}}  {board}")
@@ -596,9 +609,15 @@ def run_doctor() -> int:
         print(f"  {mark_for(ok)}  {command:<30}  {what}")
 
     if not have["pyneat"]:
+        print("\n" + missing_pyneat_message(note))
+    elif site is not None:
+        # site is <root>/lib/pythonX.Y/site-packages, so the venv root is three
+        # up. Two up is <root>/lib, and `<root>/lib/bin/pip` helps nobody.
+        root = site.parents[2]
         print(
-            "\npyneat is an aarch64 wheel that ships with the Palette SDK and is not on\n"
-            "PyPI, so inference only runs on the DevKit. Everything else works here."
+            f"\npyneat is not in this interpreter, but {root} has it and will be\n"
+            f"used automatically. To skip the search, install into that venv instead:\n"
+            f"  {root}/bin/pip install sima-vision"
         )
     return 0
 
@@ -669,15 +688,18 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         return 130
     except ImportError as exc:
-        # pyneat is aarch64-only and cv2 comes from the board's system packages,
-        # so this is what running on the wrong machine looks like.
-        print(
-            f"[ERR] {exc}\n"
-            "This app runs on the DevKit, not in the SDK container or on your "
-            "laptop:\n  pyneat is compiled for aarch64 and OpenCV comes from the "
-            "board's system\n  packages. Use --validate to check a config from here.",
-            file=sys.stderr,
-        )
+        # load_runtime_dependencies already worked out which of the two this is
+        # -- wrong machine, or right machine and the wrong interpreter -- and
+        # said so. Anything else that fails to import gets the generic half.
+        message = str(exc)
+        if "pyneat" not in message:
+            message = (
+                f"{exc}\n"
+                "A run needs numpy and OpenCV as well. On the DevKit both come "
+                "from the board's\nsystem packages; anywhere else, use "
+                "`sima-vision <task> --validate` instead."
+            )
+        print(f"[ERR] {message}", file=sys.stderr)
         return 1
     except Exception as exc:
         print(f"[ERR] {exc}", file=sys.stderr)

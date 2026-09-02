@@ -66,15 +66,26 @@ pip install sima-vision
 
 | Where | Install | Why |
 |:--|:--|:--|
-| **On the DevKit** | `pip install sima-vision` | The board already provides numpy and OpenCV |
+| **On the DevKit** | `~/pyneat/bin/pip install sima-vision` | Into the venv that has `pyneat`. See below |
 | **Your laptop** | `pip install "sima-vision[preview]"` | Adds numpy and OpenCV so `preview` can draw |
 | **Contributing** | `pip install -e ".[dev,preview]"` | Also ruff and pytest |
+
+> [!IMPORTANT]
+> **On the DevKit, install into the `pyneat` venv.** `sima-cli sdk setup` puts `pyneat` in
+> a virtualenv of its own at `~/pyneat`, and `pip` installs into whichever Python you ran
+> `pip` with. Install anywhere else and a run stops at `ModuleNotFoundError: pyneat`.
+>
+> If you already installed it elsewhere, it still works: the run looks for that venv and
+> uses it, printing `[pyneat] using pyneat from ~/pyneat` when it does. Set
+> `SIMA_VISION_PYNEAT` if yours is somewhere unusual. `sima-vision doctor` says which of
+> these applies to you.
 
 > [!CAUTION]
 > **On the board, never let pip pull numpy 2.x.** `pyneat` and every `simaai-*` package
 > need `numpy<2`. `sima-vision` depends on neither numpy nor OpenCV precisely so that
-> installing it cannot upgrade them. If something already broke it:
-> `pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"`
+> installing it cannot upgrade them, which is also why installing it into the `pyneat`
+> venv is safe. If something already broke it:
+> `~/pyneat/bin/pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"`
 
 Check what you have:
 
@@ -100,9 +111,9 @@ so what you are judging is styling, not accuracy. Nothing here touches the netwo
 ### On the DevKit
 
 ```bash
-pip install sima-vision
-sima-cli login                # once, the model packs need a community.sima.ai account
-sima-vision detect            # that is the whole thing
+~/pyneat/bin/pip install sima-vision      # the venv that has pyneat
+sima-cli login                            # once, for the model packs
+~/pyneat/bin/sima-vision detect           # that is the whole thing
 ```
 
 No arguments. Each task has a default sample clip and model archive, and the first run
@@ -393,6 +404,7 @@ the input length.
 | Variable | What it does |
 |:--|:--|
 | `SIMA_VISION_ASSETS` | Where clips and models are downloaded. Default `./assets` |
+| `SIMA_VISION_PYNEAT` | The `pyneat` virtualenv, when it is not at `~/pyneat` |
 | `SIMA_VISION_DEVKIT` | The board, as `user@address`, so `push`, `pull` and `remote` stop asking |
 | `FALL_ALERT_SMTP_PASSWORD` | The only place the SMTP password is ever read from |
 
@@ -608,8 +620,17 @@ quietly:
 ssh sima@<devkit-ip> "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat.__version__)'"
 ```
 
-A version means you are done. `No such file or directory` means pairing never installed
-it, almost always because networking was not fixed first. Re-run
+A version means you are done, and it also tells you where `pyneat` lives: that venv is
+what to install into.
+
+```bash
+ssh sima@<devkit-ip>
+~/pyneat/bin/pip install sima-vision
+~/pyneat/bin/sima-vision doctor      # every row should say yes
+```
+
+`No such file or directory` from the check above means pairing never installed it, almost
+always because networking was not fixed first. Re-run
 `sima-cli sdk setup --devkit <devkit-ip>` from WSL now that it works.
 
 ### Five rules that prevent most problems
@@ -668,8 +689,10 @@ the host key changed, that is expected: `ssh-keygen -R <devkit-ip>`.
 
 | Symptom | Fix |
 |:--|:--|
-| `ModuleNotFoundError: pyneat` | You are on your PC, or pairing never ran. Inference only happens on the board |
-| `pyneat requires numpy<2` | `pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"` |
+| `ModuleNotFoundError: pyneat` **on the board** | You installed into a Python that is not the `pyneat` venv. `~/pyneat/bin/pip install sima-vision`, or set `SIMA_VISION_PYNEAT`. `sima-vision doctor` confirms which |
+| `ModuleNotFoundError: pyneat` **on your PC** | Expected. Inference only happens on the board; use `sima-vision remote -- detect` to drive it from here |
+| `pyneat` missing after pairing | Pairing never installed it, almost always because networking was not fixed first. Re-run `sima-cli sdk setup --devkit <ip>` from WSL |
+| `pyneat requires numpy<2` | `~/pyneat/bin/pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"` |
 | `model archive not found` | `sima-cli login`, then run again. It fetches the pack itself |
 | `sima-cli download did not produce ...` | Not logged in. `sima-cli login`, or pass `--model` with a path or URL |
 | `source file not found` | The error lists what is actually in the folder. Paths are relative to where you launch |
