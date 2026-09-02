@@ -35,7 +35,6 @@ FOREIGN_FLAGS = {
     "--install": "wsl --install -d Ubuntu",
     "--shutdown": "wsl --shutdown",
     "--devkit": "sima-cli sdk setup --devkit",
-    "--print-architecture": "dpkg --print-architecture",
     "--now": "systemctl enable --now docker",
 }
 

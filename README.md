@@ -171,7 +171,6 @@ sima-vision detect --source rtsp://cam/live --source-type rtsp
 |:--|:--|
 | No detections at all | Check `model.family` is `yolo26`, then lower `--conf` |
 | Scores all near zero | `model.family` does not match the archive, so a raw-logit head is being decoded wrong |
-| Boxes in the wrong place | Leave `resize.mode: letterbox` and `pad_value: 114`. Do not add your own maths |
 
 </details>
 
@@ -215,7 +214,7 @@ same frame, the cause is the graph.
 | Whole frame blurred | Nothing was detected. Lower `--conf` |
 | Mask edges jagged | Raise `blur.feather`, then `segmentation.blur_mask` |
 | Masks in the wrong place | Pin `segmentation.space` to `net` or `box` instead of `source` |
-| Too slow at 1080p | `blur.downscale: 4` is the single biggest win, then `--save-every 30` |
+| Too slow at 1080p | `blur.downscale: 4` is the biggest win, then `--save-every 30` |
 
 </details>
 
@@ -275,7 +274,6 @@ board.
 | Alerts fire constantly | Raise `--confirm` first, then `alerts.cooldown_seconds` |
 | Track ids change every few frames | Lower `tracking.iou_threshold`, raise `tracking.max_age` |
 | Gmail rejects the login | App password, not the account password. `--test-alert` prints the SMTP error verbatim |
-| `ssl and starttls are both on` | 465 uses `ssl`, 587 uses `starttls`. Never both |
 
 </details>
 
@@ -557,29 +555,15 @@ sima-cli login                  # needs a community.sima.ai account
 
 ### 5. Docker and NFS
 
-The Neat SDK **is** a Docker container. No Docker, no SDK.
+The Neat SDK **is** a Docker container. No Docker, no SDK. Install Docker Engine with
+[Docker's own instructions for Ubuntu](https://docs.docker.com/engine/install/ubuntu/),
+which stay current in a way a copy here would not, then add what the SDK needs on top:
 
 ```bash
-sudo apt update && sudo apt install -y ca-certificates curl
-sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
-
-sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
-Types: deb
-URIs: https://download.docker.com/linux/ubuntu
-Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
-Components: stable
-Architectures: $(dpkg --print-architecture)
-Signed-By: /etc/apt/keyrings/docker.asc
-EOF
-
-sudo apt update
-sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 sudo apt install -y nfs-kernel-server nfs-common
 ```
 
-Docker needs systemd to survive a WSL restart:
+Two things are specific to WSL. Docker needs systemd to survive a restart:
 
 ```bash
 grep -q 'systemd=true' /etc/wsl.conf 2>/dev/null || sudo tee -a /etc/wsl.conf <<'EOF'
@@ -809,11 +793,8 @@ parts of this repository are under **Apache-2.0**. See [LICENSE](LICENSE).
 
 <br>
 
-Created with love by **Muhammad Rizwan Munawar**, passionate about implementing computer
-vision ideas and sharing my gains with the community.
-
-If this saved you an afternoon, **star the repo** and pass it on to someone else bringing
-up a DevKit.
+Built by **Muhammad Rizwan Munawar**. If this saved you an afternoon, **star the repo**
+and pass it on to someone else bringing up a DevKit.
 
 <br>
 
