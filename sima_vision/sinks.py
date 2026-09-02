@@ -32,9 +32,15 @@ class Pipeline:
 
     Attributes:
         model: The loaded ``pyneat.Model``.
-        graph: The task ``Graph``.
+        graph: The task ``Graph``. Never read after it is set, and it still
+            has to be here: ``graph.build()`` hands back a ``Run`` that keeps
+            using the C++ object behind the graph, so dropping the last Python
+            reference would let it be collected out from under a live run. The
+            same goes for ``video_graph``. A dead-code pass will offer to
+            delete both; do not.
         run: Live ``Run`` handle for the task graph.
-        video_graph: Separate graph that encodes frames for Insight.
+        video_graph: Separate graph that encodes frames for Insight. Held for
+            the same reason as ``graph``.
         video_run: Live ``Run`` handle for the video graph.
         metadata_sender: ``MetadataSender`` publishing results as JSON.
         labels: Class names, indexed by class id.

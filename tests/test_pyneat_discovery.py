@@ -217,17 +217,25 @@ def test_doctor_names_the_venv_root_not_its_lib_directory(tmp_path, monkeypatch,
     assert "/lib/bin/pip" not in out
 
 
-def test_the_boards_opencv_path_is_added_on_any_machine(monkeypatch):
-    """The dist-packages behaviour, exercised where that directory cannot exist.
+#: Not a real path anywhere, on purpose. A test that names the board's actual
+#: dist-packages passes or fails on whether the host happens to have it and
+#: whether it is already on sys.path, neither of which is what is being tested.
+FAKE_DIST = "/nowhere/sima-vision-test/dist-packages"
 
-    Two tests here have now been written to pass on a machine where
-    `/usr/lib/python3*/dist-packages` matches nothing, and failed on Linux for
-    it. Faking the glob makes the board's branch run everywhere, so the next
-    one is caught before CI.
+
+def test_whatever_the_glob_finds_goes_on_the_path(monkeypatch):
+    """The board's OpenCV branch, exercised on every platform.
+
+    Three tests in this file have now been written to pass on the author's
+    machine for a reason that had nothing to do with the behaviour: twice
+    because `/usr/lib/python3*/dist-packages` does not exist on Windows, and
+    once because on Linux it is already on `sys.path` so inserting it adds
+    nothing. Faking the glob with a path that exists nowhere and is on no
+    `sys.path` removes the host from the question entirely.
     """
     monkeypatch.setattr(runtime, "pyneat", None)
     monkeypatch.setattr(sys, "path", list(sys.path))
-    monkeypatch.setattr(runtime.glob, "glob", lambda _p: ["/usr/lib/python3/dist-packages"])
+    monkeypatch.setattr(runtime.glob, "glob", lambda _p: [FAKE_DIST])
     monkeypatch.setitem(sys.modules, "pyneat", type(sys)("pyneat"))
     before = list(sys.path)
     try:
@@ -235,5 +243,19 @@ def test_the_boards_opencv_path_is_added_on_any_machine(monkeypatch):
     finally:
         runtime.pyneat = None
 
-    added = [p for p in sys.path if p not in before]
-    assert added == ["/usr/lib/python3/dist-packages"]
+    assert [p for p in sys.path if p not in before] == [FAKE_DIST]
+
+
+def test_a_path_already_present_is_not_added_twice(monkeypatch):
+    """Repeated runs in one process must not grow sys.path."""
+    monkeypatch.setattr(runtime, "pyneat", None)
+    monkeypatch.setattr(sys, "path", [FAKE_DIST, *sys.path])
+    monkeypatch.setattr(runtime.glob, "glob", lambda _p: [FAKE_DIST])
+    monkeypatch.setitem(sys.modules, "pyneat", type(sys)("pyneat"))
+    before = list(sys.path)
+    try:
+        runtime.load_runtime_dependencies()
+    finally:
+        runtime.pyneat = None
+
+    assert sys.path == before

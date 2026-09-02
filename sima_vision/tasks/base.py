@@ -211,6 +211,8 @@ class Task:
         )
         if cfg.profile:
             step(f"Backend:\n{graph.describe_backend()}")
+        # Kept on the pipeline, not just used here: the Run below outlives
+        # this scope and goes on using what the Graph owns. See Pipeline.graph.
         pipeline.graph = graph
         pipeline.run = graph.build(make_run_options(cfg))
         step("graph built")

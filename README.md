@@ -23,16 +23,6 @@ pip install sima-vision
 sima-vision detect          # sample clip and model fetched for you, then run
 ```
 
-<div align="center">
-
-| <img src="assets/preview-detect.png" width="270"> | <img src="assets/preview-segment.png" width="270"> | <img src="assets/preview-fall.png" width="270"> |
-|:--:|:--:|:--:|
-| **`detect`**<br><sub>boxes, labels, confidence</sub> | **`segment`**<br><sub>masks and a background blur</sub> | **`fall`**<br><sub>tracking, falls, email alerts</sub> |
-
-<sub>Drawn on a laptop by <code>sima-vision preview</code>. No board, no model.</sub>
-
-</div>
-
 > **Inference needs the board. Nothing else does.** Checking a config and seeing exactly
 > what the overlay will look like both run on your laptop, so you can set the whole thing
 > up before you own any hardware.
@@ -167,8 +157,6 @@ drawing and sinks. A task supplies only what is genuinely its own.
 
 <br>
 
-<img src="assets/sima-devkit-docs-logo-object-detection.png" alt="Object detection on a Modalix DevKit 3.0" width="560">
-
 The simplest thing that proves the whole chain works. No task-specific flags: everything
 it understands is in [Settings](#settings).
 
@@ -189,8 +177,6 @@ sima-vision detect --source rtsp://cam/live --source-type rtsp
 <summary><b>segment</b> &nbsp;&middot;&nbsp; masks, and a background blur</summary>
 
 <br>
-
-<img src="assets/sima-devkit-docs-logo-instance-segmentation.png" alt="Instance segmentation on a Modalix DevKit 3.0" width="560">
 
 Needs a `-seg` model pack. A plain detect head carries no mask data, and the run says so
 rather than guessing.
@@ -233,8 +219,6 @@ same frame, the cause is the graph.
 <summary><b>fall</b> &nbsp;&middot;&nbsp; tracking, a fall state machine, SMTP alerts</summary>
 
 <br>
-
-<img src="assets/sima-devkit-docs-logo-fall-detection.png" alt="Fall detection on a Modalix DevKit 3.0" width="560">
 
 Tracks people across frames and watches three signals from the plain bounding box: the
 box turning wide-and-short, its height collapsing, and how fast its centre is dropping. A

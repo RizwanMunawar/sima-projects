@@ -169,6 +169,35 @@ def test_internal_links_resolve():
     assert not broken, f"broken links {broken}"
 
 
+def test_every_image_exists():
+    """`<img src>` is not markdown link syntax, so the check above never saw it.
+
+    Six images were deleted from the repo while the README still pointed at all
+    six, and every test passed. GitHub renders that as a row of broken-image
+    icons at the top of the page, which is the first thing anyone sees.
+    """
+    text = README.read_text(encoding="utf-8")
+    sources = re.findall(r'<img[^>]+src="([^"]+)"', text)
+    assert sources, "the header logo at least should be there"
+    missing = [
+        src
+        for src in sources
+        if not src.startswith("http") and not (README.parent / src).resolve().is_file()
+    ]
+    assert not missing, f"README shows images that are not in the repo: {missing}"
+
+
+def test_no_asset_is_left_unused():
+    """An image nothing shows is dead weight in every clone of the repo."""
+    text = README.read_text(encoding="utf-8")
+    unused = [
+        path.relative_to(REPO).as_posix()
+        for path in sorted((REPO / "assets").rglob("*"))
+        if path.is_file() and path.relative_to(REPO).as_posix() not in text
+    ]
+    assert not unused, f"assets/ holds files the README never shows: {unused}"
+
+
 def test_every_section_link_resolves():
     """A `#contents` row pointing at a heading that was renamed is a dead end."""
     text = README.read_text(encoding="utf-8")
