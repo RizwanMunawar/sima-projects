@@ -148,8 +148,15 @@ def test_every_message_is_ascii():
 
 
 def test_a_working_interpreter_is_never_interfered_with(monkeypatch):
-    """If `import pyneat` succeeds, nothing is added to sys.path."""
+    """If `import pyneat` succeeds, no venv is searched for or put on the path.
+
+    The board's `/usr/lib/python3*/dist-packages` is still added, because that
+    is where its OpenCV lives and every run needs it. What must not happen is a
+    second environment appearing underneath an interpreter that was already
+    working.
+    """
     monkeypatch.setattr(runtime, "pyneat", None)
+    monkeypatch.setattr(sys, "path", list(sys.path))
     before = list(sys.path)
 
     def refuse():
@@ -161,7 +168,10 @@ def test_a_working_interpreter_is_never_interfered_with(monkeypatch):
         runtime.load_runtime_dependencies()
     finally:
         runtime.pyneat = None
-    assert [p for p in sys.path if p not in before] == []
+
+    added = [p for p in sys.path if p not in before]
+    assert all("dist-packages" in p for p in added), added
+    assert not any("site-packages" in p for p in added), added
 
 
 def test_the_venv_goes_ahead_of_the_current_environment(tmp_path, monkeypatch, capsys):
@@ -205,3 +215,25 @@ def test_doctor_names_the_venv_root_not_its_lib_directory(tmp_path, monkeypatch,
     out = capsys.readouterr().out.replace("\\", "/")
     assert f"{str(root).replace(chr(92), '/')}/bin/pip install sima-vision" in out
     assert "/lib/bin/pip" not in out
+
+
+def test_the_boards_opencv_path_is_added_on_any_machine(monkeypatch):
+    """The dist-packages behaviour, exercised where that directory cannot exist.
+
+    Two tests here have now been written to pass on a machine where
+    `/usr/lib/python3*/dist-packages` matches nothing, and failed on Linux for
+    it. Faking the glob makes the board's branch run everywhere, so the next
+    one is caught before CI.
+    """
+    monkeypatch.setattr(runtime, "pyneat", None)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setattr(runtime.glob, "glob", lambda _p: ["/usr/lib/python3/dist-packages"])
+    monkeypatch.setitem(sys.modules, "pyneat", type(sys)("pyneat"))
+    before = list(sys.path)
+    try:
+        runtime.load_runtime_dependencies()
+    finally:
+        runtime.pyneat = None
+
+    added = [p for p in sys.path if p not in before]
+    assert added == ["/usr/lib/python3/dist-packages"]
