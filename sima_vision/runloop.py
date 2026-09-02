@@ -52,7 +52,7 @@ class Stopper:
 
     def _handle(self, signum, _frame) -> None:
         if not self.stop:
-            print(f"\n[signal {signum}] stopping, closing Run…", flush=True)
+            print(f"\n[signal {signum}] stopping, closing Run...", flush=True)
         self.stop = True
 
 

@@ -39,7 +39,10 @@ def probe_ffprobe(uri: str) -> tuple[int, int, int]:
         "-of", "default=nw=1", uri,
     ]
     try:
-        result = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=10)
+        result = subprocess.run(
+            cmd, check=False, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=10,
+        )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return 0, 0, 0
     if result.returncode != 0:
@@ -474,7 +477,8 @@ def check_source_file(cfg) -> None:
         raise RuntimeError(f"source file is empty: {path}")
 
     if is_elementary_h264(cfg.source_uri):
-        head = path.open("rb").read(12)
+        with path.open("rb") as handle:
+            head = handle.read(12)
         # Annex-B streams open with a 3 or 4 byte start code. An MP4 carries
         # "ftyp" at offset 4, which is what a rename rather than a convert looks
         # like, and h264parse would simply never produce a frame.

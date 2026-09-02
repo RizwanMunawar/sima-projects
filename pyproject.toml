@@ -74,7 +74,6 @@ packages = ["sima_vision"]
 include = [
     "/sima_vision",
     "/tests",
-    "/docs",
     "/README.md",
     "/LICENSE",
 ]

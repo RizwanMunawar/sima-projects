@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 
 from . import __version__, runtime
+from .devkit import DEVKIT_ENV, run_pull, run_push, run_remote
 from .neat import describe_preprocess
 from .runloop import Stopper
 from .runtime import FAMILY_DECODE_TOKENS, load_runtime_dependencies
@@ -46,6 +47,11 @@ without a board:
   sima-vision preview --task segment          see what that config looks like
   sima-vision segment --validate              check it
   sima-vision doctor                          what is installed, and what it allows
+
+driving the board from your PC:
+  sima-vision push clip.h264                  copy files over
+  sima-vision remote -- detect --frames 200   run it there, watch it here
+  sima-vision pull                            bring the results back
 
 config.yaml in the working directory is picked up automatically, and so is
 ./assets -- a clip or model that is missing there is downloaded on the first
@@ -217,7 +223,97 @@ def build_parser() -> argparse.ArgumentParser:
     add_fetch_parser(subparsers)
     add_preview_parser(subparsers)
     add_doctor_parser(subparsers)
+    add_push_parser(subparsers)
+    add_pull_parser(subparsers)
+    add_remote_parser(subparsers)
     return parser
+
+
+def add_host_argument(parser: argparse.ArgumentParser) -> None:
+    """Which board. The same flag on all three transfer commands."""
+    parser.add_argument(
+        "--host", "-H", metavar="USER@ADDR",
+        help=f"The DevKit, as ssh takes it. Defaults to ${DEVKIT_ENV} so you "
+             f"only say it once.",
+    )
+
+
+def add_push_parser(subparsers) -> None:
+    """``push`` -- copy files to the board."""
+    sub = subparsers.add_parser(
+        "push",
+        help="Copy files or folders to the DevKit",
+        description=(
+            "Copy local files to the DevKit's home directory with scp. Folders "
+            "are copied whole. On Windows this is also the way to avoid scp "
+            "reading a drive letter as a hostname."
+        ),
+        epilog=(
+            "examples:\n"
+            "  sima-vision push config.yaml\n"
+            "  sima-vision push my-clip.h264 my-model.tar.gz\n"
+            "  sima-vision push assets --dest '~/'\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub.add_argument("paths", nargs="+", type=Path, metavar="PATH",
+                     help="Files or folders to copy.")
+    sub.add_argument("--dest", default="~/", metavar="DIR",
+                     help="Where to put them on the board. Default ~/.")
+    add_host_argument(sub)
+    sub.set_defaults()
+
+
+def add_pull_parser(subparsers) -> None:
+    """``pull`` -- copy results back."""
+    sub = subparsers.add_parser(
+        "pull",
+        help="Copy results back from the DevKit",
+        description=(
+            "Copy a run's output back to this machine. With no names it asks "
+            "for everything any task could have written -- the annotated video, "
+            "frames/, alerts/ and config.yaml -- and takes whatever is there, "
+            "so it does not need to be told which task ran."
+        ),
+        epilog=(
+            "examples:\n"
+            "  sima-vision pull\n"
+            "  sima-vision pull detections.mp4\n"
+            "  sima-vision pull --into results/\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub.add_argument("names", nargs="*", metavar="NAME",
+                     help="Names on the board, relative to its home directory.")
+    sub.add_argument("--into", type=Path, default=Path("."), metavar="DIR",
+                     help="Where to put them here. Default the current directory.")
+    add_host_argument(sub)
+    sub.set_defaults()
+
+
+def add_remote_parser(subparsers) -> None:
+    """``remote`` -- run a task on the board from here."""
+    sub = subparsers.add_parser(
+        "remote",
+        help="Run a sima-vision command on the DevKit over SSH",
+        description=(
+            "Run `sima-vision <args>` on the board and watch it here. It always "
+            "asks for a pty, so Ctrl-C actually reaches the task and it releases "
+            "the MLA -- without that the next launch fails with a busy device."
+        ),
+        epilog=(
+            "examples:\n"
+            "  sima-vision remote -- detect --frames 200\n"
+            "  sima-vision remote -- segment --blur-strength 81\n"
+            "  sima-vision remote -- doctor\n"
+            "\nEverything after -- is passed to sima-vision on the board.\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub.add_argument("argv", nargs=argparse.REMAINDER, metavar="-- ARGS",
+                     help="The command to run there, after a literal --.")
+    add_host_argument(sub)
+    sub.set_defaults()
 
 
 def add_init_parser(subparsers) -> None:
@@ -523,6 +619,14 @@ def main(argv: list[str] | None = None) -> int:
                 return run_init(args.task, args.out, args.force)
             if args.command == "fetch":
                 return run_fetch(args.task, args.into)
+            if args.command == "push":
+                return run_push(args.paths, args.host, args.dest)
+            if args.command == "pull":
+                return run_pull(args.names, args.host, args.into)
+            if args.command == "remote":
+                # argparse.REMAINDER keeps the literal `--`; ssh does not want it.
+                argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
+                return run_remote(argv, args.host)
             return run_preview(args)
         except KeyboardInterrupt:
             return 130

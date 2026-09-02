@@ -139,7 +139,7 @@ segmentation:
   # box-shaped regions and says so once. Turn this off to fail loudly instead.
   fallback_to_boxes: on
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # OPTIONAL: blur everything outside the masks.
 #
 # This app is a segmenter. It finds instances and draws their masks whatever is
@@ -157,7 +157,7 @@ segmentation:
 # With no detections in a frame there is no foreground, so the whole frame is
 # background and the whole frame is treated. That is the definition working, not
 # a bug.
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 blur:
   enable: on                 # off = segmentation only, no background treatment
   opacity: 1.0               # strength of the treatment, 0.0 to 1.0
@@ -191,7 +191,7 @@ runtime:
   # It does NOT set the buffer counts in the pipeline the app prints at startup:
   # `max-buffers=4` on the appsinks and `num-buffers=4` on preproc and the MLA
   # are fixed inside pyneat and read the same at 1 as at 3. So this is not the
-  # knob for "the run stops after N frames and then times out" — measured on a
+  # knob for "the run stops after N frames and then times out"  - measured on a
   # Modalix DevKit with the yolo26m-seg pack, 3 stalled at 22 frames and 1 at
   # 17, which is the same stall with different noise.
   #
