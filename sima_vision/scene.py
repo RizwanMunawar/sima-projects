@@ -146,24 +146,6 @@ def render(task, cfg, frame, subjects, labels: list[str]):
     return task.runtime(cfg, pipeline).render(cfg, pipeline, frame, results, 24.0)
 
 
-def placeholder_overrides(config: Path | None, use_file: bool) -> dict:
-    """Fill in only the required keys a preview never actually uses.
-
-    A preview loads no model and opens no source, but the config it previews
-    still has to pass the ordinary validation. Reading the file first means a
-    real value is never shadowed by a placeholder.
-    """
-    from .config import discover_config, read_config_file
-
-    raw = read_config_file(discover_config(config) if use_file else None)
-    overrides = {}
-    if not (raw.get("model") or {}).get("path"):
-        overrides["model.path"] = "<preview: no model is run>"
-    if not (raw.get("source") or {}).get("uri"):
-        overrides["source.uri"] = "<preview>"
-    return overrides
-
-
 def build_frame(source: str | None, size: tuple[int, int]):
     """Get a frame to draw on, and the subjects to draw over it.
 

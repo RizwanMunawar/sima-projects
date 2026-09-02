@@ -63,7 +63,7 @@ whoever is on shift, with a snapshot attached.
 |:--|:--|
 | [See it before you deploy](#see-it-before-you-deploy) | The overlay on a laptop, no hardware |
 | [Run it in three commands](#run-it-in-three-commands) | Push, run, pull the result back |
-| [Get a model and a test video](#get-a-model-and-a-test-video) | Both land in `assets/`, ready to run |
+| [Get a model and a test video](#get-a-model-and-a-test-video) | What the first run fetches into `assets/`, by hand |
 | [Set up email alerts](#set-up-email-alerts) | SMTP, the password rule, `--test-alert` |
 | [Deploy and run](#deploy-and-run) | `scp` the app over and run it |
 | [See the result](#see-the-result) | Pull `falls.mp4`, `frames/` and `alerts/` back |
@@ -99,17 +99,25 @@ the detections are placed for you so there is something to draw.
 On the DevKit. There is nothing to clone and nothing to `scp`:
 
 ```bash
-pip install sima-vision                     # 1. install
+pip install sima-vision       # 1. install
 
-sima-vision fetch fall                    # 2. sample clips + the model command
+sima-cli login                # 2. the model packs need a community.sima.ai account
 
-sima-vision fall \
-  --source assets/videos/people-walking-outside-mall.h264 \
-  --model  assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
+sima-vision fall              # 3. run it
 ```
 
-`fetch` downloads the clips and prints the one `sima-cli download` line for the model,
-which needs a community.sima.ai login. Then pull the result back and look at it:
+Step 3 needs no arguments. The sample clip and the model archive are this task's
+defaults; both land in `./assets/` on the first run, the clip straight from a public
+GitHub release and the model through `sima-cli`, and every run after that reuses them.
+
+To use your own instead, pass a path or an `https` URL:
+
+```bash
+sima-vision fall --source my-clip.h264 --model my-model.tar.gz
+sima-vision fall --source https://example.com/my-clip.h264
+```
+
+Then pull the result back and look at it:
 
 ```bash
 scp sima@<devkit-ip>:~/falls.mp4 .
@@ -117,7 +125,7 @@ scp sima@<devkit-ip>:~/falls.mp4 .
 
 Coloured boxes that follow people means the whole chain works.
 
-A config file is optional — the flags above are enough. For a persistent setup:
+A config file is optional, and so are the flags. For a setup you keep:
 
 ```bash
 sima-vision init fall      # documented config.yaml, here
@@ -146,7 +154,8 @@ MODELS=https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yolo26-detecti
 MODEL=yolo26m-det-bf16-mla_tess-b1.tar.gz
 
 mkdir -p assets/models
-cd assets/models && sima-cli download "$MODELS/$MODEL" && cd ../../../
+mkdir -p assets/models
+(cd assets/models && sima-cli download "$MODELS/$MODEL")
 ```
 
 ```bash
@@ -161,7 +170,8 @@ curl -L -o assets/videos/people-walking-outside-mall.h264 \
 
 > [!IMPORTANT]
 > **`sima-cli download` writes into the current directory**, which is the whole reason for
-> the `cd`. The trailing `cd ../../../` puts you back at the repo root. Downloading from
+> the subshell -- it keeps the `cd` from leaking into the rest of your session.
+> Downloading from
 > anywhere else, including the container's `/workspace`, is how the pack ends up
 > [somewhere `config.yaml` cannot see](setup.md#paths).
 
@@ -583,7 +593,7 @@ Problems with a **running fall detector**. Bring-up problems are in the
 | `falls=0` on footage that has a fall | Lower `fall.confirm_seconds` and `fall.aspect_ratio`; check the person is being tracked at all |
 | Alerts fire constantly | Raise `fall.confirm_seconds` first, then `alerts.cooldown_seconds` |
 | Ids change every few frames | Lower `tracking.iou_threshold`, raise `tracking.max_age` |
-| `model archive not found` | Run from `~/fall-detection`, and check `find assets -type f` |
+| `model archive not found` | `sima-cli login`, then run again -- it fetches the pack itself. Check `find assets -type f` |
 | `is not a raw H.264 elementary stream` | You renamed a `.mp4` instead of converting it |
 | Device busy | Orphaned run: `ssh sima@<ip> pkill -f sima-vision` |
 | Recording is a few frames long | See the [detector's note](detect.md#questions-people-ask); usually `output.insight` |

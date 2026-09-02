@@ -22,6 +22,7 @@ from pathlib import Path
 
 import yaml
 
+from .assets import default_model_path, default_source_uri, is_url
 from .runtime import (
     AUTO_FLAGS,
     COLOR_FORMATS,
@@ -435,6 +436,10 @@ class TaskDefaults:
     Attributes:
         family: Default ``model.family``. Detect heads for ``detect`` and
             ``fall``, a segment head for ``segment``.
+        task: The task these belong to, used to look up its default model and
+            clip in :data:`sima_vision.assets.CATALOGUE`. Empty leaves
+            ``model.path`` and ``source.uri`` unset, which is what a task with
+            no entry there wants.
         run_preset: Default ``runtime.preset``.
         overflow_policy: Default ``runtime.overflow_policy``.
         save_dir: Default ``output.save.dir``.
@@ -444,6 +449,7 @@ class TaskDefaults:
     """
 
     family: str = "yolo26"
+    task: str = ""
     run_preset: str = "auto"
     overflow_policy: str = "auto"
     save_dir: str = "frames"
@@ -461,13 +467,18 @@ class BaseConfig:
     sections; nothing here knows which task it belongs to.
 
     Attributes:
-        model_path: Path to the compiled model archive on the DevKit.
+        model_path: Path to the compiled model archive on the DevKit. Unset
+            means this task's default in ``assets/models/``, which
+            :func:`sima_vision.assets.ensure_model` downloads on the first run.
         labels_path: Path to the newline-separated class label file.
         family: Head token, mapped by ``FAMILY_DECODE_TOKENS``.
         decode_type_option: Head packing override. Normally ``auto``.
         num_classes: Class count override. 0 reads it from the archive.
         source_type: One of ``video``, ``rtsp`` or ``usb``.
-        source_uri: File path or stream URL, as seen on the DevKit.
+        source_uri: File path, ``http(s)`` URL or stream URL, as seen on the
+            DevKit. Unset with ``source_type=video`` means this task's sample
+            clip in ``assets/videos/``, downloaded on the first run; unset with
+            ``usb`` means the DevKit camera.
         source_fps: Frame rate. 0 probes it from the source.
         source_width: Frame width. 0 probes it.
         source_height: Frame height. 0 probes it.
@@ -583,6 +594,9 @@ def resolve_asset_path(value: str, config_path: Path | None) -> str:
     try the literal path first -- which keeps every existing relative path
     working unchanged -- then the same path relative to the config file.
 
+    A URL is not a path and is handed straight back; :mod:`sima_vision.assets`
+    turns it into a local file at run time.
+
     Args:
         value: The raw config string.
         config_path: Path to the config file being loaded, or None.
@@ -591,7 +605,7 @@ def resolve_asset_path(value: str, config_path: Path | None) -> str:
         The first candidate that exists, or ``value`` unchanged so the caller
         still reports the name the user actually wrote.
     """
-    if not value or config_path is None:
+    if not value or config_path is None or is_url(value):
         return value
     given = Path(value)
     if given.is_absolute() or given.exists():
@@ -630,17 +644,27 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
     save = _section(output, "save")
     video = _section(output, "video")
     insight = _section(output, "insight")
+    source_type = _str(source, "type", "video").lower()
+
+    # An unset path is not an error any more: it means "the default for this
+    # task", which `sima_vision.assets` downloads on the first run. Resolving it
+    # here rather than at run time keeps `--validate` honest about what a run
+    # would actually open, without it fetching anything.
+    model_default = default_model_path(defaults.task) if defaults.task else ""
+    clip_default = default_source_uri(defaults.task) if defaults.task else ""
 
     return BaseConfig(
-        model_path=resolve_asset_path(_str(model, "path"), path),
+        model_path=resolve_asset_path(_str(model, "path") or model_default, path),
         labels_path=resolve_labels_path(_str(model, "labels", str(PACKAGED_LABELS)), path),
         family=_str(model, "family", defaults.family).lower(),
         decode_type_option=_str(model, "decode_type_option", "auto").lower(),
         num_classes=_int(model, "num_classes", 0),
-        source_type=_str(source, "type", "video").lower(),
+        source_type=source_type,
+        # Only a file source gets a default. An empty `uri` on `usb` means the
+        # DevKit camera, and filling in a clip there would be wrong.
         source_uri=(
-            resolve_asset_path(_str(source, "uri"), path)
-            if _str(source, "type", "video").lower() == "video"
+            resolve_asset_path(_str(source, "uri") or clip_default, path)
+            if source_type == "video"
             else _str(source, "uri")
         ),
         source_fps=_int(source, "fps", 0),

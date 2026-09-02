@@ -987,6 +987,7 @@ class FallTask(Task):
     result_label = "detections"
     output_label = "detector_output"
     defaults = TaskDefaults(
+        task="fall",
         family="yolo26",
         save_dir="frames",
         video_path="falls.mp4",

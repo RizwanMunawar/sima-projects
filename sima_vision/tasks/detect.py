@@ -58,6 +58,7 @@ class DetectTask(Task):
     result_label = "detections"
     output_label = "detector_output"
     defaults = TaskDefaults(
+        task="detect",
         family="yolo26",
         save_dir="frames",
         video_path="detections.mp4",

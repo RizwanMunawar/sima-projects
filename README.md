@@ -81,16 +81,26 @@ what you are judging is styling, not accuracy.
 
 ```bash
 pip install sima-vision
-sima-vision fetch detect                          # sample clips + the model command
-
-sima-vision detect \
-  --source assets/videos/people-walking-outside-mall.h264 \
-  --model  assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
+sima-cli login                                    # the model packs need an account
+sima-vision detect                                # that is the whole thing
 ```
 
-`fetch` downloads the clips and prints the one `sima-cli download` line for the model,
-which needs a [community.sima.ai](https://community.sima.ai) login. Out comes
-`detections.mp4` and a `frames/` directory; `scp` them back and look.
+No arguments. A sample clip and the right model archive are the defaults for each
+task, and the first run puts both in `./assets/` — the clip from a public GitHub
+release, the model through `sima-cli`, which holds your
+[community.sima.ai](https://community.sima.ai) login. Every run after that reuses them.
+Out comes `detections.mp4` and a `frames/` directory; `scp` them back and look.
+
+Your own clip and model, as a path or an `https` URL:
+
+```bash
+sima-vision detect --source my-clip.h264 --model my-model.tar.gz
+sima-vision detect --source https://example.com/my-clip.h264
+```
+
+A URL is downloaded into `assets/` once and reused. There is **one** `assets/` for all
+three tasks, not one per task: they share the clips, and `detect` and `fall` share the
+archive outright.
 
 > **New board?** It gets brought up once — cabling, WSL2, Docker, the 12.6 GB Neat SDK.
 > That is **[docs/setup.md](docs/setup.md)**, about two hours. Nothing above needs it.
@@ -126,7 +136,8 @@ preview("segment", out="blur.png", blur_strength=81, keep_classes=["person"])
 cfg = validate("detect", conf=0.5, max_det=20)
 print(cfg.score_threshold, cfg.video_path)
 
-# On the DevKit: run it.
+# On the DevKit: run it. Both arguments are optional -- leave them off and the
+# sample clip and this task's model are fetched into ./assets/ on the first run.
 run("detect", source="clip.h264", model="det.tar.gz", conf=0.5, frames=200)
 ```
 
@@ -147,8 +158,8 @@ Three layers, each beating the one above it:
 built-in defaults   →   config.yaml   →   flags / keywords
 ```
 
-So **a config file is optional** — `--model` and `--source` are enough to run. For a setup
-you keep:
+So **everything is optional** — with no file and no flags you get this task's sample
+clip and model. For a setup you keep:
 
 ```bash
 sima-vision init detect     # a documented config.yaml, right here
@@ -238,7 +249,7 @@ Alerts stay a dry run until `--send`, and the SMTP password is only ever read fr
 | `sima-vision init <task>` | no | Write a documented `config.yaml` here |
 | `sima-vision <task> --validate` | no | Parse and check a config, print what it resolved to |
 | `sima-vision doctor` | no | What is installed, and what it lets you do |
-| `sima-vision fetch [task]` | no | Download the sample clips, print the model command |
+| `sima-vision fetch [task]` | no | Download the sample clips up front, print the model command |
 | `sima-vision detect` | **yes** | Run detection on the MLA |
 | `sima-vision segment` | **yes** | Run segmentation, with the optional blur |
 | `sima-vision fall` | **yes** | Run fall detection, with SMTP alerts |
@@ -247,9 +258,9 @@ Alerts stay a dry run until `--send`, and the SMTP password is only ever read fr
 
 | Flag | Config key | What it does |
 |:--|:--|:--|
-| `--source`, `-s` | `source.uri` | File, RTSP URL, or nothing for the camera |
+| `--source`, `-s` | `source.uri` | File, `https` URL, RTSP URL, or nothing for the sample clip |
 | `--source-type` | `source.type` | `video`, `rtsp` or `usb` |
-| `--model`, `-m` | `model.path` | Compiled model archive |
+| `--model`, `-m` | `model.path` | Compiled model archive, or an `https` URL to one |
 | `--labels` | `model.labels` | Class names. Defaults to the packaged COCO list |
 | `--family` | `model.family` | Detection head. Must match the model |
 | `--conf` / `--iou` / `--max-det` | `decode.*` | Confidence, NMS IoU, top-K |
@@ -301,12 +312,15 @@ decoder part-way through a clip.
 sima_vision/
   cli.py        the command line          api.py     the Python API
   config.py     loading and validation    scene.py   the preview scene
-  media.py      H.264 and geometry        neat.py    graph assembly
-  samples.py    decoding a sample         masks.py   masks and compositing
-  draw.py       the overlay               sinks.py   video, stills, Insight
-  runloop.py    the pull loop
+  assets.py     clips and model archives  media.py   H.264 and geometry
+  neat.py       graph assembly            samples.py decoding a sample
+  masks.py      masks and compositing     draw.py    the overlay
+  sinks.py      video, stills, Insight    runloop.py the pull loop
   tasks/        detect.py   segment.py   fall.py
 ```
+
+`assets.py` is the only module that reaches the network, and only from a run. A
+`--validate` or a `preview` resolves the same paths and fetches nothing.
 
 Each task supplies only what is its own; everything above it is written once. See
 [docs/detect.md](docs/detect.md#how-the-app-works) for the long version.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..assets import ensure_assets
 from ..config import (
     BaseConfig,
     TaskDefaults,
@@ -230,11 +231,16 @@ class Task:
     def run(self, cfg, stopper: Stopper) -> int:
         """Build and run, closing the pipeline whatever happens.
 
+        This is the only place that fetches anything. A missing clip or model
+        is downloaded into ``assets/`` here, so ``--validate`` and ``preview``
+        -- which resolve exactly the same paths -- stay offline.
+
         The ``finally`` covers a failure part-way through :meth:`build` as well
         as one during the run, which is why :attr:`pipeline` is published early:
         by the time the graph is built the Run holds the MLA, and leaving it
         held makes the *next* launch fail with a busy device.
         """
+        cfg = ensure_assets(cfg, self.name)
         try:
             pipeline = self.build(cfg)
             return run_pipeline(pipeline, cfg, stopper, self.runtime(cfg, pipeline))

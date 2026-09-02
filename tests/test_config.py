@@ -49,7 +49,12 @@ def test_shipped_config_describes(name, path):
 
 
 def test_defaults_alone_are_a_complete_config():
-    """No file, no flags: everything but model.path and source.uri has a default."""
+    """A TaskDefaults with no catalogue entry is the one case still missing a model.
+
+    The three real tasks name themselves, so `model.path` defaults into
+    `assets/`; see test_assets. A bare TaskDefaults stands for a task that has
+    no default archive, and that one still has to be told.
+    """
     cfg = load_base_config({}, None, TaskDefaults())
     assert isinstance(cfg, BaseConfig)
     with pytest.raises(ValueError, match="model.path must be set"):

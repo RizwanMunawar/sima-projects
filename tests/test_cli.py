@@ -140,9 +140,17 @@ def test_validate_exits_zero_without_a_board():
 
 
 def test_a_bad_config_exits_one(capsys):
-    code = main(["detect", "--no-config", "--validate"])   # no model.path
+    code = main(["detect", "--no-config", "--conf", "5", "--validate"])
     assert code == 1
-    assert "model.path must be set" in capsys.readouterr().err
+    assert "decode.score_threshold" in capsys.readouterr().err
+
+
+def test_no_flags_at_all_still_validates(capsys):
+    """Neither --model nor --source is required: both default into assets/."""
+    assert main(["detect", "--no-config", "--validate"]) == 0
+    out = capsys.readouterr().out
+    assert "assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz" in out
+    assert "assets/videos/people-walking-outside-mall.h264" in out
 
 
 # ── init and fetch ──
@@ -181,14 +189,14 @@ def test_init_can_write_elsewhere(tmp_path, monkeypatch):
 
 def test_fetch_prints_a_runnable_model_command():
     """The model is behind a login, so the command has to be exact."""
-    from sima_vision.setup_commands import MODELS, model_command
+    from sima_vision.assets import CATALOGUE, model_command
 
     for name in TASKS:
-        assert name in MODELS
+        assert name in CATALOGUE
         command = model_command(name)
         assert "sima-cli download" in command
-        assert MODELS[name][1] in command
-        # It must land where the printed run command then looks for it.
+        assert CATALOGUE[name].model_file in command
+        # It must land where a run then looks for it.
         assert "assets/models" in command
 
 
@@ -202,12 +210,12 @@ def test_fetch_reports_a_download_failure(tmp_path, monkeypatch, capsys):
     """A half-written file must not be left behind looking like a good one."""
     import urllib.error
 
-    from sima_vision import setup_commands
+    from sima_vision import assets, setup_commands
 
     def boom(url, timeout=0):
         raise urllib.error.URLError("no route to host")
 
-    monkeypatch.setattr(setup_commands.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(assets.urllib.request, "urlopen", boom)
     monkeypatch.chdir(tmp_path)
     assert setup_commands.run_fetch("detect", tmp_path / "assets") == 1
     assert "FAIL" in capsys.readouterr().err
@@ -216,17 +224,17 @@ def test_fetch_reports_a_download_failure(tmp_path, monkeypatch, capsys):
 
 
 def test_fetch_does_not_redownload(tmp_path, monkeypatch, capsys):
-    from sima_vision import setup_commands
+    from sima_vision import assets, setup_commands
 
     videos = tmp_path / "assets" / "videos"
     videos.mkdir(parents=True)
-    for name in setup_commands.SAMPLE_VIDEOS:
+    for name in assets.SAMPLE_VIDEOS:
         (videos / name).write_bytes(b"already here")
 
     def boom(url, timeout=0):
         raise AssertionError("should not have been fetched")
 
-    monkeypatch.setattr(setup_commands.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(assets.urllib.request, "urlopen", boom)
     monkeypatch.chdir(tmp_path)
     assert setup_commands.run_fetch("segment", tmp_path / "assets") == 0
     assert "have" in capsys.readouterr().out

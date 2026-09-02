@@ -615,6 +615,7 @@ class SegmentTask(Task):
     result_label = "instances"
     output_label = "segmenter_output"
     defaults = TaskDefaults(
+        task="segment",
         family="yolo26-seg",
         save_dir="frames",
         video_path="segmentation.mp4",

@@ -3,47 +3,21 @@
 Between them these replace the part of the old workflow that was manual: copying
 a config out of the repo by hand, and curl-ing sample clips into the right
 directory. Neither needs the repo to be cloned.
+
+``fetch`` is now the eager version of what a run does on its own -- everything
+here is also reachable through :func:`sima_vision.assets.ensure_assets`, which
+fetches the same files lazily on the first run. It stays because getting the
+13 MB clip out of the way while you still have good wifi is worth a command, and
+because it is the natural place to print the model line.
 """
 
 from __future__ import annotations
 
 import shutil
-import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 
+from .assets import CATALOGUE, SAMPLE_RELEASE, SAMPLE_VIDEOS, download, model_command
 from .config import packaged_config
-
-#: Sample clips, already raw H.264 so they skip the Neat 0.3.0 demuxer bug.
-SAMPLE_RELEASE = "https://github.com/RizwanMunawar/sima-projects/releases/download/0.0.1"
-SAMPLE_VIDEOS = {
-    "people-walking-outside-mall.h264": "1920x1080 @ 24 fps, 13 MB. The usual default",
-    "people-walking-inside-mall.h264": "1920x1080 @ 30 fps, 1.2 MB. Quicker smoke test",
-}
-
-#: Where the SDK publishes compiled model packs, by task.
-MODEL_BASE = "https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix"
-MODELS = {
-    "detect": ("yolo26-detection", "yolo26m-det-bf16-mla_tess-b1.tar.gz"),
-    "segment": ("yolo26-segmentation", "yolo26m-seg-bf16-mla_tess-b1.tar.gz"),
-    "fall": ("yolo26-detection", "yolo26m-det-bf16-mla_tess-b1.tar.gz"),
-}
-
-
-def model_command(task: str) -> str:
-    """The one line that downloads the right model pack for a task.
-
-    ``sima-cli download`` needs a community.sima.ai login and writes into the
-    working directory, which is why this is printed rather than run: it is not
-    ours to authenticate, and getting the directory wrong is the single most
-    common way to end up with a pack the config cannot see.
-    """
-    directory, name = MODELS[task]
-    return (
-        f"mkdir -p assets/models && cd assets/models && \\\n"
-        f"  sima-cli download {MODEL_BASE}/{directory}/{name} && cd ../.."
-    )
 
 
 def run_init(task: str, out: Path, force: bool) -> int:
@@ -68,44 +42,13 @@ def run_init(task: str, out: Path, force: bool) -> int:
     return 0
 
 
-def download(url: str, out: Path) -> bool:
-    """Fetch one file, reporting progress. Returns False on any HTTP failure."""
-    if out.exists():
-        print(f"  have  {out}  ({out.stat().st_size / 1e6:.1f} MB)")
-        return True
-    out.parent.mkdir(parents=True, exist_ok=True)
-    part = out.with_suffix(out.suffix + ".part")
-    # A carriage-return progress line is only readable on a terminal. Piped to a
-    # file or a CI log it just repeats the whole line hundreds of times.
-    live = sys.stdout.isatty()
-    try:
-        with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310
-            total = int(response.headers.get("Content-Length") or 0)
-            done = 0
-            with part.open("wb") as handle:
-                while chunk := response.read(1 << 16):
-                    handle.write(chunk)
-                    done += len(chunk)
-                    if live and total:
-                        print(
-                            f"\r  ...   {out.name}  {done / 1e6:5.1f} / {total / 1e6:.1f} MB",
-                            end="", flush=True,
-                        )
-        print(f"{chr(13) if live else ''}  got   {out}  ({done / 1e6:.1f} MB)          ")
-        part.replace(out)
-        return True
-    except (urllib.error.URLError, OSError, TimeoutError) as exc:
-        part.unlink(missing_ok=True)
-        print(f"\r  FAIL  {out.name}: {exc}", file=sys.stderr)
-        return False
-
-
 def run_fetch(task: str, into: Path) -> int:
     """Download the sample clips, then say how to get the model.
 
     The clips are on a public GitHub release, so they can just be fetched. The
     model packs are behind a community.sima.ai login, so the command is printed
-    for you to run rather than attempted here.
+    for you to run rather than attempted here -- a run will try it through
+    ``sima-cli`` on its own, and this way you can do it first and watch it work.
     """
     print(f"sample clips -> {(into / 'videos').resolve()}")
     ok = True
@@ -115,11 +58,12 @@ def run_fetch(task: str, into: Path) -> int:
 
     print("\nNow the model. It needs a community.sima.ai login, so run this yourself:\n")
     print("  sima-cli login")
-    print(f"  {model_command(task)}")
-    print("\nThen:\n")
-    default = next(iter(SAMPLE_VIDEOS))
-    _, model_name = MODELS[task]
+    print(f"  {model_command(task, into)}")
+    print("\nThen, from here:\n")
+    print(f"  sima-vision {task}")
+    print("\nThat picks both of them up on its own. To use something else:\n")
+    entry = CATALOGUE[task]
     print(f"  sima-vision {task} \\")
-    print(f"    --source {into.as_posix()}/videos/{default} \\")
-    print(f"    --model {into.as_posix()}/models/{model_name}")
+    print(f"    --source {(into / 'videos' / entry.clip).as_posix()} \\")
+    print(f"    --model {(into / 'models' / entry.model_file).as_posix()}")
     return 0 if ok else 1

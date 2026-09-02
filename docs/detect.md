@@ -49,7 +49,7 @@ the app draws a box, a centre marker and a labelled caption on every frame.
 |:--|:--|
 | [See it before you deploy](#see-it-before-you-deploy) | The overlay on a laptop, no hardware |
 | [Run it in three commands](#run-it-in-three-commands) | Push, run, pull the result back |
-| [Get a model and a test video](#get-a-model-and-a-test-video) | Both land in `assets/`, ready to run |
+| [Get a model and a test video](#get-a-model-and-a-test-video) | What the first run fetches into `assets/`, by hand |
 | [Deploy and run](#deploy-and-run) | `scp` the app over and run it |
 | [See the result](#see-the-result) | Pull `detections.mp4` and `frames/` back |
 | [The overlay](#the-overlay) | Every box, caption and FPS badge setting |
@@ -83,17 +83,25 @@ the detections are placed for you so there is something to draw.
 On the DevKit. There is nothing to clone and nothing to `scp`:
 
 ```bash
-pip install sima-vision                     # 1. install
+pip install sima-vision       # 1. install
 
-sima-vision fetch detect                    # 2. sample clips + the model command
+sima-cli login                # 2. the model packs need a community.sima.ai account
 
-sima-vision detect \
-  --source assets/videos/people-walking-outside-mall.h264 \
-  --model  assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
+sima-vision detect            # 3. run it
 ```
 
-`fetch` downloads the clips and prints the one `sima-cli download` line for the model,
-which needs a community.sima.ai login. Then pull the result back and look at it:
+Step 3 needs no arguments. The sample clip and the model archive are this task's
+defaults; both land in `./assets/` on the first run, the clip straight from a public
+GitHub release and the model through `sima-cli`, and every run after that reuses them.
+
+To use your own instead, pass a path or an `https` URL:
+
+```bash
+sima-vision detect --source my-clip.h264 --model my-model.tar.gz
+sima-vision detect --source https://example.com/my-clip.h264
+```
+
+Then pull the result back and look at it:
 
 ```bash
 scp sima@<devkit-ip>:~/detections.mp4 .
@@ -101,7 +109,7 @@ scp sima@<devkit-ip>:~/detections.mp4 .
 
 Boxes on it means the whole chain works. Repeat after every edit.
 
-A config file is optional — the flags above are enough. For a persistent setup:
+A config file is optional, and so are the flags. For a setup you keep:
 
 ```bash
 sima-vision init detect      # documented config.yaml, here
@@ -113,9 +121,9 @@ Every setting has a flag too, and flags win over the file. See
 
 ## Get a model and a test video
 
-`sima-vision fetch` above already did the video. Here is what it does, and the model
-step it cannot do for you. Both land in `assets/`, which is where `config.yaml`
-already looks.
+A run does both of these on its own. Here is the same thing by hand, for when you want
+your own model, a specific size, or to see where the files come from. Both land in
+`./assets/`, which is the one place every task looks -- there is no per-task copy.
 
 **The model:**
 
@@ -131,7 +139,8 @@ MODELS=https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yolo26-detecti
 MODEL=yolo26m-det-bf16-mla_tess-b1.tar.gz
 
 mkdir -p assets/models
-cd assets/models && sima-cli download "$MODELS/$MODEL" && cd ../../../
+mkdir -p assets/models
+(cd assets/models && sima-cli download "$MODELS/$MODEL")
 ```
 
 Swap `yolo26m` for `n`, `s`, `l` or `x` to trade speed against accuracy. `family` stays
@@ -139,8 +148,8 @@ Swap `yolo26m` for `n`, `s`, `l` or `x` to trade speed against accuracy. `family
 
 > [!IMPORTANT]
 > **`sima-cli download` writes into the current directory**, which is the whole reason for
-> the `cd`. The trailing `cd ../../../` puts you back at the repo root, ready for the
-> `scp` in the next step. Downloading from anywhere else, including the container's
+> the subshell -- it keeps the `cd` from leaking into the rest of your session.
+> Downloading from anywhere else, including the container's
 > `/workspace`, is how the pack ends up
 > [somewhere `config.yaml` cannot see](setup.md#paths).
 
@@ -386,7 +395,7 @@ model:
 
 source:
   type: video                          # video | rtsp | usb
-  uri: assets/videos/people-walking-outside-mall.h264   # relative to ~/object-detection
+  uri: assets/videos/people-walking-outside-mall.h264   # relative to where you launch from
 
 decode:
   score_threshold: 0.30                # lower it if detections are missing
@@ -599,9 +608,9 @@ checking a new model or clip without waiting out a whole video.
 <details>
 <summary><b>Where do the outputs go?</b></summary>
 
-Onto the **board**, relative to wherever you launched `app.py`, which is normally
-`~/object-detection`. So `detections.mp4` and `frames/` sit next to `config.yaml` on the
-DevKit. Pull them back with `scp`; nothing is written on your PC by the run itself.
+Onto the **board**, relative to wherever you launched `sima-vision`. So
+`detections.mp4`, `frames/` and `assets/` all sit next to `config.yaml` on the DevKit.
+Pull them back with `scp`; nothing is written on your PC by the run itself.
 
 </details>
 
@@ -685,7 +694,7 @@ Problems with a **running detector**. Bring-up problems are in the
 
 | Symptom | Fix |
 |:--|:--|
-| `model archive not found` | Run from `~/object-detection`, and check `find assets -type f` |
+| `model archive not found` | `sima-cli login`, then run again -- it fetches the pack itself. Check `find assets -type f` |
 | `source file not found` | The path is relative to where you launch `app.py`. The error lists what is actually in the folder |
 | `is not a raw H.264 elementary stream` | You renamed a `.mp4` instead of converting it. Use the ffmpeg command in the error |
 | `No src-element named "nN_demux"` | `.mp4` demuxer bug. [Convert to `.h264`](setup.md#video-must-be-raw-h264) |

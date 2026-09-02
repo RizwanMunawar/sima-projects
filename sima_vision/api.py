@@ -137,6 +137,10 @@ def validate(task: str, config: str | Path | None = None, **settings):
 def run(task: str, config: str | Path | None = None, **settings) -> int:
     """Run one task to completion. **Needs the DevKit.**
 
+    A clip or model archive that is missing is downloaded into ``assets/``
+    first; see :mod:`sima_vision.assets`. ``validate`` and ``preview`` resolve
+    the same paths and never fetch anything.
+
     Args:
         task: ``detect``, ``segment`` or ``fall``.
         config: Path to a config file, or None to look for ``./config.yaml``.
@@ -186,17 +190,15 @@ def preview(task: str = "detect", config: str | Path | None = None,
     """
     from . import runtime
     from .cli import load_drawing_dependencies
-    from .scene import build_frame, placeholder_overrides, render
+    from .scene import build_frame, render
     from .sinks import load_labels
 
     load_drawing_dependencies()
     handle = _task(task)
     config_path = Path(config) if config else None
-    overrides = {
-        **placeholder_overrides(config_path, use_config_file),
-        **settings_to_overrides(handle, settings),
-    }
-    cfg = handle.load(config_path, overrides, use_file=use_config_file)
+    cfg = handle.load(
+        config_path, settings_to_overrides(handle, settings), use_file=use_config_file
+    )
 
     frame, subjects, _origin, _ = build_frame(source, size)
     annotated = render(handle, cfg, frame, subjects, load_labels(cfg.labels_path))

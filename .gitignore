@@ -225,12 +225,14 @@ sima/
 backup/
 videos/
 
-# Model archives and media are large binaries. Fetch models with sima-cli and
-# generate the .h264 streams locally with ffmpeg.
+# Model archives and media are large binaries. `sima-vision` downloads both into
+# ./assets on the first run -- the clips from a GitHub release, the model packs
+# through sima-cli -- so none of it needs committing.
 #
-# NOTE: a pattern containing a slash is anchored to this file's directory, so
-# `assets/video/` would only match <repo-root>/assets/video and would miss
-# yolo-detector/assets/video. Use `**/` to match at any depth.
+# There is one assets/ for the whole project, at the root, which is why these
+# are anchored rather than `**/`: `assets/models/` here means exactly
+# <repo-root>/assets/models. A run launched somewhere else writes its own
+# assets/ next to itself, and the extension rules below cover that.
 *.tar.gz
 *.mp4
 *.mkv
@@ -238,13 +240,12 @@ videos/
 *.h264
 *.264
 *.avc
-**/assets/models/
-**/assets/video/
+assets/models/
+assets/videos/
 
-# Application output. Each app writes these next to its own config.yaml on the
-# DevKit, so the patterns need `**/` for the same anchoring reason as above:
-# a bare `frames/` matches only <repo-root>/frames and would miss
-# instance-segmentation/frames.
+# Application output. A run writes these into whatever directory it was
+# launched from, which on the DevKit is wherever config.yaml lives -- so these
+# do need `**/` to match at any depth.
 sandbox/
 **/frames/
 **/alerts/

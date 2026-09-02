@@ -1,11 +1,18 @@
 # SiMa Neat object detection
 #
-# Paths are DevKit paths, relative to where you launch app.py (~/object-detection).
+# Every setting below is the built-in default written out, so deleting a line
+# changes nothing. Paths are relative to the directory you launch from.
 # Windows paths (C:\ D:\) cannot work: the app runs on Linux.
 
 model:
+  # Where the compiled archive is. This is the default, and if it is not there
+  # yet the first run fetches it with `sima-cli` -- so you can delete the line.
+  # An https URL works too, and is downloaded into assets/models/ once.
   path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
-  labels: src/coco_labels.txt
+
+  # Class names, one per line. Unset uses the COCO list inside the package,
+  # which is what these models were compiled against.
+  # labels: my-classes.txt
 
   # Detection head. Must match your model or you get no detections.
   # yolo | yolov5 | yolov6 | yolov7 | yolov8 | yolov9 | yolov10 
@@ -18,7 +25,10 @@ model:
 
 source:
   type: video                          # video | rtsp | usb
-  # Fetched by step 7 of the README. .h264 only, see note below.
+
+  # A file, or an https URL to one, or empty for the sample clip below --
+  # which is on a public GitHub release and is fetched on the first run.
+  # Downloads land in assets/videos/. .h264 only for files, see the note below.
   uri: assets/videos/people-walking-outside-mall.h264
 
   # Leave these at 0. For .h264 the app reads the real geometry out of the

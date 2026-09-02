@@ -12,9 +12,10 @@ Overrides are written into the parsed YAML *before* the loaders run, so a CLI
 flag goes through exactly the same defaulting and validation a config file
 does, and cannot reach a state a config file could not.
 
-Config is optional. The dataclass defaults are a complete configuration, so
-``--model`` and ``--source`` are enough to run with no YAML at all; a file adds
-to that, and flags win over both.
+Config is optional, and so are the flags. The dataclass defaults are a
+complete configuration down to a model and a clip -- see
+:mod:`sima_vision.assets` -- so ``sima-vision detect`` runs with no YAML and no
+arguments at all; a file adds to that, and flags win over both.
 """
 
 from __future__ import annotations
@@ -33,7 +34,9 @@ from .tasks import TASKS
 
 EPILOG = """\
 examples:
+  sima-vision detect                       the sample clip and model, fetched
   sima-vision detect  --source clip.h264 --model yolo26m-det.tar.gz
+  sima-vision detect  --source https://example.com/clip.h264
   sima-vision segment --source clip.h264 --model yolo26m-seg.tar.gz --blur
   sima-vision segment --source clip.h264 --anonymise --keep-classes person
   sima-vision fall    --source rtsp://cam/live --alert-to ops@example.com
@@ -44,8 +47,10 @@ without a board:
   sima-vision segment --validate              check it
   sima-vision doctor                          what is installed, and what it allows
 
-config.yaml in the working directory is picked up automatically. Running a task
-needs the DevKit; everything under "without a board" does not.
+config.yaml in the working directory is picked up automatically, and so is
+./assets -- a clip or model that is missing there is downloaded on the first
+run. Running a task needs the DevKit; everything under "without a board" does
+not, and none of it touches the network.
 """
 
 
@@ -54,8 +59,9 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     source = parser.add_argument_group("source")
     source.add_argument(
         "--source", "-s", dest="source.uri", metavar="URI",
-        help="Video file, RTSP URL, or empty for the DevKit camera. Raw .h264 only "
-             "for files; see the README on converting.",
+        help="Video file, https URL, RTSP URL, or empty for this task's sample "
+             "clip. An https URL is downloaded into assets/videos/ once and "
+             "reused. Raw .h264 only for files; see the README on converting.",
     )
     source.add_argument(
         "--source-type", dest="source.type", choices=("video", "rtsp", "usb"),
@@ -77,7 +83,9 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     model = parser.add_argument_group("model")
     model.add_argument(
         "--model", "-m", dest="model.path", metavar="PATH",
-        help="Compiled model archive (.tar.gz) as seen on the DevKit.",
+        help="Compiled model archive (.tar.gz), or an https URL to one. Empty "
+             "uses this task's default in assets/models/, fetched with sima-cli "
+             "on the first run.",
     )
     model.add_argument(
         "--labels", dest="model.labels", metavar="PATH",
@@ -244,7 +252,9 @@ def add_fetch_parser(subparsers) -> None:
             "Download the two sample videos into ./assets/videos/. They are on a "
             "public GitHub release, so they need no login. The model packs do "
             "need a community.sima.ai login, so that command is printed for you "
-            "to run rather than attempted here."
+            "to run rather than attempted here. A run fetches both on its own "
+            "when they are missing, so this is only for getting the 13 MB clip "
+            "out of the way first."
         ),
     )
     sub.add_argument(
@@ -394,7 +404,7 @@ def load_drawing_dependencies() -> None:
 
 def run_preview(args) -> int:
     """Draw one frame the way a real run would, and write it to a PNG."""
-    from .scene import build_frame, placeholder_overrides, render
+    from .scene import build_frame, render
     from .sinks import load_labels
 
     load_drawing_dependencies()
@@ -404,11 +414,9 @@ def run_preview(args) -> int:
     # `--source` doubles as the image to draw on: it is the same question it
     # answers for a run, so there is no second flag for it.
     source = vars(args).get("source.uri")
-    overrides = {
-        **placeholder_overrides(args.config, use_file),
-        **collect_overrides(args),
-    }
-    cfg = task.post_process(task.load(args.config, overrides, use_file=use_file), args)
+    cfg = task.post_process(
+        task.load(args.config, collect_overrides(args), use_file=use_file), args
+    )
     labels = load_labels(cfg.labels_path)
 
     frame, subjects, origin, unreadable = build_frame(source, parse_size(args.size))
