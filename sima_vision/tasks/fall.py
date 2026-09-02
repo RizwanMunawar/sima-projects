@@ -868,7 +868,8 @@ class FallRuntime(TaskRuntime):
     unit = "people"
 
     def decode(self, pipeline: FallPipeline, cfg: FallAppConfig, sample, index: int):
-        payload, _ = extract_bbox_payload(sample)
+        # The result field, not the whole bundle -- see DetectRuntime.decode.
+        payload, _ = extract_bbox_payload(joined_field(sample, "detections", 1))
         boxes = parse_boxes(payload, pipeline.frame_w, pipeline.frame_h, cfg.max_detections)
         frame = frame_to_bgr(first_tensor(joined_field(sample, "frame", 0)))
         stamp_pts = getattr(sample, "pts_ns", -1)
@@ -879,7 +880,11 @@ class FallRuntime(TaskRuntime):
         # Track, then judge. Both need a clock, and the source's own timestamps
         # are the honest one: with overflow_policy block the run is slower than
         # realtime, so wall-clock seconds would make every descent look slow.
-        now = stamp_pts / 1e9 if stamp_pts >= 0 else index / float(pipeline.fps or 25)
+        # index is 1-based; the elapsed time before the first frame is 0.
+        now = (
+            stamp_pts / 1e9 if stamp_pts >= 0
+            else (index - 1) / float(pipeline.fps or 25)
+        )
         people = person_boxes(cfg, pipeline, boxes, pipeline.frame_h)
         tracks = pipeline.tracker.update(people, now)
         fallen_now = (

@@ -733,10 +733,13 @@ class SegmentTask(Task):
         curved edge, which is where ``feather`` and ``mask_alpha`` show.
         """
         cv2, np = runtime.cv2, runtime.np
+        height, width = frame.shape[:2]
         instances = []
         for box in boxes:
-            x1, y1 = int(box["x1"]), int(box["y1"])
-            x2, y2 = int(box["x2"]), int(box["y2"])
+            # Clipped the same way build_instances does, so the mask and the
+            # region it is composited into cannot disagree on shape.
+            x1, y1 = max(0, int(box["x1"])), max(0, int(box["y1"]))
+            x2, y2 = min(width, int(box["x2"])), min(height, int(box["y2"]))
             w, h = x2 - x1, y2 - y1
             if w <= 1 or h <= 1:
                 continue

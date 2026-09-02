@@ -17,6 +17,7 @@ that is where the MLA is.
 from __future__ import annotations
 
 import argparse
+from functools import cache
 from pathlib import Path
 
 from .tasks import TASKS
@@ -29,6 +30,12 @@ def _task(name: str):
 
 
 def _alias_table(task) -> tuple[dict[str, str], set[str]]:
+    """Cached by task class -- the flags cannot change between calls."""
+    return _build_alias_table(type(task))
+
+
+@cache
+def _build_alias_table(task_cls) -> tuple[dict[str, str], set[str]]:
     """Map Python keyword -> config path, straight off this task's CLI flags.
 
     Returns the table and the set of keywords whose boolean has to be flipped:
@@ -38,6 +45,7 @@ def _alias_table(task) -> tuple[dict[str, str], set[str]]:
     """
     from .cli import add_shared_arguments
 
+    task = task_cls()
     parser = argparse.ArgumentParser(add_help=False)
     add_shared_arguments(parser)
     task.add_arguments(parser.add_argument_group("task"))
@@ -137,12 +145,19 @@ def run(task: str, config: str | Path | None = None, **settings) -> int:
     Returns:
         The number of frames processed.
     """
+    import os
+
     from .runloop import Stopper
     from .runtime import load_runtime_dependencies
 
     handle = _task(task)
     cfg = load(task, config, **settings)
     load_runtime_dependencies()
+    # The same two side effects the command line has, so `run(...)` and
+    # `sima-vision <task>` really are the same run.
+    if cfg.profile:
+        os.environ.setdefault("SIMA_GST_ELEMENT_TIMINGS", "1")
+        os.environ.setdefault("SIMA_GST_FLOW_DEBUG", "1")
     if cfg.save_enable:
         Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
     return handle.run(cfg, Stopper())
@@ -150,7 +165,8 @@ def run(task: str, config: str | Path | None = None, **settings) -> int:
 
 def preview(task: str = "detect", config: str | Path | None = None,
             out: str | Path = "preview.png", source: str | None = None,
-            size: tuple[int, int] = (1280, 720), **settings) -> Path:
+            size: tuple[int, int] = (1280, 720), use_config_file: bool = True,
+            **settings) -> Path:
     """Draw the overlay a config produces, and write it to a PNG. **No board.**
 
     Runs no model: the detections are synthetic and exist only to give the
@@ -162,6 +178,7 @@ def preview(task: str = "detect", config: str | Path | None = None,
         out: Where to write the PNG.
         source: An image or video to draw on. None paints a synthetic scene.
         size: Synthetic scene size, ignored when ``source`` is readable.
+        use_config_file: False ignores any file, like ``--no-config``.
         **settings: Anything the CLI takes, as a keyword.
 
     Returns:
@@ -176,10 +193,10 @@ def preview(task: str = "detect", config: str | Path | None = None,
     handle = _task(task)
     config_path = Path(config) if config else None
     overrides = {
-        **placeholder_overrides(config_path, True),
+        **placeholder_overrides(config_path, use_config_file),
         **settings_to_overrides(handle, settings),
     }
-    cfg = handle.load(config_path, overrides)
+    cfg = handle.load(config_path, overrides, use_file=use_config_file)
 
     frame, subjects, _origin, _ = build_frame(source, size)
     annotated = render(handle, cfg, frame, subjects, load_labels(cfg.labels_path))

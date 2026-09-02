@@ -189,7 +189,9 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=f"sima-vision {__version__}")
-    subparsers = parser.add_subparsers(dest="task", metavar="COMMAND")
+    # dest="command", not "task": `preview --task` and the `init`/`fetch`
+    # positional are both called task, and would overwrite it.
+    subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     for name, task_cls in TASKS.items():
         task = task_cls()
@@ -230,7 +232,7 @@ def add_init_parser(subparsers) -> None:
     sub.add_argument(
         "--force", "-f", action="store_true", help="Overwrite an existing file.",
     )
-    sub.set_defaults(_command="init")
+    sub.set_defaults()
 
 
 def add_fetch_parser(subparsers) -> None:
@@ -253,7 +255,7 @@ def add_fetch_parser(subparsers) -> None:
         "--into", type=Path, default=Path("assets"), metavar="DIR",
         help="Where to put them. Default ./assets.",
     )
-    sub.set_defaults(_command="fetch")
+    sub.set_defaults()
 
 
 def add_preview_parser(subparsers) -> None:
@@ -299,7 +301,7 @@ def add_preview_parser(subparsers) -> None:
     for task_cls in TASKS.values():
         task = task_cls()
         task.add_arguments(sub.add_argument_group(f"{task.name} options"))
-    sub.set_defaults(_command="preview")
+    sub.set_defaults()
 
 
 def add_doctor_parser(subparsers) -> None:
@@ -313,7 +315,7 @@ def add_doctor_parser(subparsers) -> None:
             "separate from the parts needed to run inference on the DevKit."
         ),
     )
-    sub.set_defaults(_command="doctor")
+    sub.set_defaults()
 
 
 def parse_size(text: str) -> tuple[int, int]:
@@ -501,23 +503,27 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if not getattr(args, "task", None):
+    if not args.command:
         parser.print_help()
         return 2
 
-    command = getattr(args, "_command", None)
-    if command is not None:
+    if args.command not in TASKS:
         try:
-            if command == "doctor":
+            if args.command == "doctor":
                 return run_doctor()
-            if command == "init":
+            if args.command == "init":
                 return run_init(args.task, args.out, args.force)
-            if command == "fetch":
+            if args.command == "fetch":
                 return run_fetch(args.task, args.into)
             return run_preview(args)
         except KeyboardInterrupt:
             return 130
         except SystemExit as exc:
+            # These carry a message, not a status: `raise SystemExit("...")` is
+            # how the setup commands refuse. An int code is argparse's, and is
+            # already the answer.
+            if isinstance(exc.code, int):
+                return exc.code
             print(f"[ERR] {exc}", file=sys.stderr)
             return 1
         except Exception as exc:

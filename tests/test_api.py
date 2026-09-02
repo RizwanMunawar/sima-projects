@@ -35,9 +35,7 @@ def test_every_cli_flag_has_a_python_keyword(name):
     """If a flag exists, Python can set it. That is the whole contract."""
     task = TASKS[name]()
     aliases, _ = _alias_table(task)
-    parser = build_parser()
-    sub = parser.parse_args([name, "--no-config", "--validate"])
-    assert sub.task == name
+    assert build_parser().parse_args([name, "--no-config", "--validate"]).command == name
 
     # Collect every dotted dest the subcommand can write...
     import argparse

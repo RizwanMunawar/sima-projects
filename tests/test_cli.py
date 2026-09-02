@@ -21,7 +21,23 @@ def test_every_task_has_a_subcommand():
     parser = build_parser()
     for name in TASKS:
         args = parser.parse_args([name, "--no-config", "--validate"])
-        assert args.task == name
+        assert args.command == name
+
+
+def test_the_subcommand_name_survives_a_task_flag():
+    """`preview --task` and the init/fetch positional are both called `task`.
+
+    They used to share argparse's dest with the subcommand itself, so which one
+    won came down to parse order.
+    """
+    parser = build_parser()
+    assert parser.parse_args(["preview", "--task", "segment"]).command == "preview"
+    assert parser.parse_args(["preview", "--task", "segment"]).task == "segment"
+    assert parser.parse_args(["preview"]).task == "detect"
+    assert parser.parse_args(["init", "fall"]).command == "init"
+    assert parser.parse_args(["init", "fall"]).task == "fall"
+    assert parser.parse_args(["fetch"]).task == "detect"
+    assert parser.parse_args(["doctor"]).command == "doctor"
 
 
 def test_no_command_prints_help_and_fails():
@@ -180,3 +196,37 @@ def test_every_command_is_reachable():
     parser = build_parser()
     for name in [*TASKS, "init", "fetch", "preview", "doctor"]:
         assert name in parser.format_help()
+
+
+def test_fetch_reports_a_download_failure(tmp_path, monkeypatch, capsys):
+    """A half-written file must not be left behind looking like a good one."""
+    import urllib.error
+
+    from sima_vision import setup_commands
+
+    def boom(url, timeout=0):
+        raise urllib.error.URLError("no route to host")
+
+    monkeypatch.setattr(setup_commands.urllib.request, "urlopen", boom)
+    monkeypatch.chdir(tmp_path)
+    assert setup_commands.run_fetch("detect", tmp_path / "assets") == 1
+    assert "FAIL" in capsys.readouterr().err
+    assert not list((tmp_path / "assets").rglob("*.part"))
+    assert not list((tmp_path / "assets").rglob("*.h264"))
+
+
+def test_fetch_does_not_redownload(tmp_path, monkeypatch, capsys):
+    from sima_vision import setup_commands
+
+    videos = tmp_path / "assets" / "videos"
+    videos.mkdir(parents=True)
+    for name in setup_commands.SAMPLE_VIDEOS:
+        (videos / name).write_bytes(b"already here")
+
+    def boom(url, timeout=0):
+        raise AssertionError("should not have been fetched")
+
+    monkeypatch.setattr(setup_commands.urllib.request, "urlopen", boom)
+    monkeypatch.chdir(tmp_path)
+    assert setup_commands.run_fetch("segment", tmp_path / "assets") == 0
+    assert "have" in capsys.readouterr().out

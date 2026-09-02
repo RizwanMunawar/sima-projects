@@ -28,7 +28,10 @@ class DetectRuntime(TaskRuntime):
     unit = "detections"
 
     def decode(self, pipeline: Pipeline, cfg, sample, index: int):
-        payload, _ = extract_bbox_payload(sample)
+        # The result field, not the whole bundle: the bundle also holds the
+        # decoded frame, and asking for "the BBOX tensor somewhere in here" is
+        # a weaker question than the graph can already answer.
+        payload, _ = extract_bbox_payload(joined_field(sample, "detections", 1))
         boxes = parse_boxes(payload, pipeline.frame_w, pipeline.frame_h, cfg.max_detections)
         frame = frame_to_bgr(first_tensor(joined_field(sample, "frame", 0)))
         # `boxes` and `frame` are copies, so the decoder's buffer is free from

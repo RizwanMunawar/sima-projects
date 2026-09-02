@@ -32,12 +32,22 @@ class Stopper:
         stop: Set to True once a signal has been received.
     """
 
+    #: Looked up by name, not by attribute. ``signal.SIGHUP`` does not exist on
+    #: Windows, and naming it directly raised AttributeError while building the
+    #: tuple -- before the try block that was meant to tolerate exactly that.
+    SIGNALS = ("SIGINT", "SIGTERM", "SIGHUP")
+
     def __init__(self) -> None:
         self.stop = False
-        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        for name in self.SIGNALS:
+            number = getattr(signal, name, None)
+            if number is None:
+                continue
             try:
-                signal.signal(sig, self._handle)
-            except (AttributeError, ValueError, OSError):
+                signal.signal(number, self._handle)
+            except (ValueError, OSError):
+                # ValueError: not the main thread, which is fine -- the run
+                # loop still checks `stop`, it just cannot be set by a signal.
                 pass
 
     def _handle(self, signum, _frame) -> None:

@@ -153,11 +153,22 @@ def frame_to_bgr(tensor):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def tensor_bbox_payload(sample, tensor=None) -> bytes:
+def tensor_bbox_payload(sample, tensor=None, require_tag: bool = False) -> bytes:
+    """The bytes of one BBOX tensor.
+
+    Args:
+        sample: The sample owning the tensor, for its payload tag.
+        tensor: The tensor, or None to take ``sample.tensor``.
+        require_tag: When True, an *untagged* tensor is rejected too. A decoded
+            frame is untagged, and accepting one here would parse an image as
+            box records; see :func:`extract_bbox_payload`.
+    """
     tensor = tensor if tensor is not None else getattr(sample, "tensor", None)
     if tensor is None:
         raise RuntimeError("detection sample carries no tensor")
     fmt = sample_payload_tag(sample, tensor)
+    if require_tag and fmt not in BBOX_TAGS:
+        raise RuntimeError(f"not a tagged BBOX tensor (tag {fmt or '<none>'})")
     if fmt and fmt not in BBOX_TAGS:
         raise RuntimeError(
             f"expected a BBOX tensor but got {fmt}. If this is `raw_output_heads`, "
@@ -169,8 +180,18 @@ def tensor_bbox_payload(sample, tensor=None) -> bytes:
     return payload
 
 
-def extract_bbox_payload(sample) -> tuple[bytes, object]:
+def extract_bbox_payload(sample, require_tag: bool = False) -> tuple[bytes, object]:
     """Find the BBOX tensor in a sample tree.
+
+    A tensor that carries no payload tag at all is accepted, because not every
+    head tags its output -- but only once nothing *explicitly* tagged BBOX has
+    been found. A joined sample carries the decoded frame as well, and that
+    frame is untagged: taking the first untagged tensor would parse an image as
+    box records and produce coordinates in the millions.
+
+    Args:
+        sample: A tensor, tensor set or bundle.
+        require_tag: Internal. Restricts a pass to explicitly tagged tensors.
 
     Returns:
         A ``(payload, tensor)`` pair. The tensor is handed back so the mask
@@ -179,25 +200,28 @@ def extract_bbox_payload(sample) -> tuple[bytes, object]:
     """
     pyneat = runtime.pyneat
     if sample.kind == pyneat.SampleKind.Bundle:
-        for candidate in sample.fields:
-            try:
-                return extract_bbox_payload(candidate)
-            except RuntimeError:
-                continue
+        # Tagged first, untagged only as a fallback.
+        for strict in ((True, False) if not require_tag else (True,)):
+            for candidate in sample.fields:
+                try:
+                    return extract_bbox_payload(candidate, require_tag=strict)
+                except RuntimeError:
+                    continue
         raise RuntimeError("bundle has no BBOX field")
     if sample.kind == pyneat.SampleKind.TensorSet and sample.tensors:
         # A segment head packs several tensors into one set. The box tensor is
         # normally first, but scan rather than assume: an unexpected order would
         # otherwise be parsed as boxes and produce garbage coordinates.
-        for tensor in sample.tensors:
-            try:
-                return tensor_bbox_payload(sample, tensor), tensor
-            except RuntimeError:
-                continue
+        for strict in ((True, False) if not require_tag else (True,)):
+            for tensor in sample.tensors:
+                try:
+                    return tensor_bbox_payload(sample, tensor, require_tag=strict), tensor
+                except RuntimeError:
+                    continue
         raise RuntimeError("tensor set has no BBOX tensor")
     if sample.kind != pyneat.SampleKind.Tensor:
         raise RuntimeError(f"unexpected sample kind {sample.kind}")
-    return tensor_bbox_payload(sample), sample.tensor
+    return tensor_bbox_payload(sample, require_tag=require_tag), sample.tensor
 
 
 def parse_boxes(payload: bytes, img_w: int, img_h: int, expected_topk: int) -> list[dict]:
