@@ -81,19 +81,41 @@ def test_the_starter_configs_are_ascii():
         assert not offenders, f"{name}.yaml has non-ASCII: {offenders}"
 
 
-def test_a_windows_style_path_survives_a_flag(tmp_path, monkeypatch):
-    r"""`--source C:\clips\a.h264` must reach the config unchanged."""
+def test_a_windows_style_path_is_passed_through_verbatim():
+    r"""`--source C:\clips\a.h264` must arrive spelled exactly as it was written.
+
+    Only Windows can resolve that string to a file, so turning it into a path
+    and comparing is a Windows-only assertion. What holds everywhere is that
+    nothing on the way mangles it: no escape processing, no separator
+    rewriting, and `is_url` does not read the drive letter's colon as a scheme.
+    """
+    from sima_vision.tasks import TASKS
+
+    source = r"C:\clips\a.h264"
+    model = r"D:\packs\yolo26m-det.tar.gz"
+    assert not assets.is_url(source), "a drive letter is not a URL scheme"
+
+    cfg = TASKS["detect"]().load(
+        None, {"source.uri": source, "model.path": model}, use_file=False
+    )
+    assert cfg.source_uri == source
+    assert cfg.model_path == model
+
+
+def test_a_native_path_to_a_real_file_resolves(tmp_path, monkeypatch):
+    """The same journey with this platform's own separator, and a file at the end."""
     monkeypatch.chdir(tmp_path)
-    clip = tmp_path / "a.h264"
+    clip = tmp_path / "clips" / "a.h264"
+    clip.parent.mkdir()
     clip.write_bytes(b"\x00\x00\x00\x01")
 
     from sima_vision.tasks import TASKS
 
-    windows_style = str(clip).replace("/", "\\")
     cfg = TASKS["detect"]().load(
-        None, {"source.uri": windows_style, "model.path": "m.tar.gz"}, use_file=False
+        None, {"source.uri": str(clip), "model.path": "m.tar.gz"}, use_file=False
     )
     assert Path(cfg.source_uri) == clip
+    assert assets.ensure_source(cfg.source_uri) == str(clip), "an existing file is not fetched"
 
 
 def test_the_assets_directory_takes_an_absolute_path(tmp_path, monkeypatch):
