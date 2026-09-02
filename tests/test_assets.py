@@ -89,11 +89,12 @@ def test_only_http_urls_count_as_downloadable():
 
 def test_a_source_url_is_downloaded_once(here, offline):
     first = assets.ensure_source("https://example.com/clip.h264")
-    assert Path(first) == Path("assets/videos/clip.h264")
+    assert Path(first).parent == Path("assets/videos")
     assert Path(first).is_file()
+    assert Path(first).suffix == ".h264", "the extension still says what it is"
 
     second = assets.ensure_source("https://example.com/clip.h264")
-    assert second == first
+    assert second == first, "the same URL is the same file"
     assert len(offline) == 1, "the second call must reuse the file on disk"
 
 
@@ -138,8 +139,9 @@ def test_a_failed_source_download_says_so(here, monkeypatch):
 
 def test_a_model_url_is_downloaded(here, offline):
     path = assets.ensure_model("https://example.com/det.tar.gz", "detect")
-    assert Path(path) == Path("assets/models/det.tar.gz")
+    assert Path(path).parent == Path("assets/models")
     assert Path(path).is_file()
+    assert Path(path).name.endswith(".tar.gz"), "a double extension survives intact"
 
 
 def test_an_existing_model_is_used_as_it_stands(here, monkeypatch):
@@ -238,3 +240,123 @@ def test_ensure_assets_fills_in_both_defaults(here, offline, monkeypatch):
     assert Path(resolved.source_uri).is_file()
     assert Path(resolved.model_path).is_file()
     assert offline == [f"{assets.SAMPLE_RELEASE}/{CLIP}"]
+
+
+# -- the cache must not confuse two URLs, or accept half a file --
+
+
+def test_two_urls_ending_in_the_same_name_are_two_files(here, monkeypatch):
+    """Keying on the last path segment ran one host's video for another's."""
+    bodies = {"host-a": b"AAAA", "host-b": b"BBBB"}
+    fetched = []
+
+    class Body:
+        headers = {"Content-Length": "4"}
+
+        def __init__(self, url):
+            self.left = [bodies["host-a" if "host-a" in url else "host-b"]]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, _size):
+            return self.left.pop() if self.left else b""
+
+    def urlopen(url, timeout=0):
+        fetched.append(url)
+        return Body(url)
+
+    monkeypatch.setattr(assets.urllib.request, "urlopen", urlopen)
+
+    a = assets.ensure_source("https://host-a.example/clip.h264")
+    b = assets.ensure_source("https://host-b.example/clip.h264")
+
+    assert a != b, "different URLs must not share a cache entry"
+    assert len(fetched) == 2, "the second URL must actually be fetched"
+    assert Path(a).read_bytes() == b"AAAA"
+    assert Path(b).read_bytes() == b"BBBB"
+
+
+def test_the_cache_name_is_stable_and_readable():
+    once = assets.cache_name("https://example.com/clip.h264")
+    assert once == assets.cache_name("https://example.com/clip.h264")
+    assert once.startswith("clip-") and once.endswith(".h264")
+    # A double extension is not split down the middle.
+    assert assets.cache_name("https://x/yolo26m-det.tar.gz").endswith(".tar.gz")
+    # A query string is not part of the filename.
+    assert "?" not in assets.cache_name("https://x/clip.h264?token=abc")
+
+
+def test_a_truncated_download_is_not_kept(here, monkeypatch, capsys):
+    """A server that stops early ends the read loop exactly like success does.
+
+    Accepting it renames a partial file into place, and every later run then
+    reuses it, because an existing file is trusted without being re-checked.
+    """
+    class Truncated:
+        headers = {"Content-Length": "13000000"}
+
+        def __init__(self):
+            self.left = [b"only the first bit"]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, _size):
+            return self.left.pop() if self.left else b""
+
+    monkeypatch.setattr(assets.urllib.request, "urlopen", lambda *a, **k: Truncated())
+
+    assert assets.download("https://example.com/clip.h264", Path("a.h264")) is False
+    assert not Path("a.h264").exists(), "no partial file may be left behind"
+    assert not list(Path(".").glob("*.part"))
+    assert "cut short" in capsys.readouterr().err
+
+
+def test_a_truncated_source_raises_rather_than_running_on_it(here, monkeypatch):
+    class Truncated:
+        headers = {"Content-Length": "999"}
+
+        def __init__(self):
+            self.left = [b"short"]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, _size):
+            return self.left.pop() if self.left else b""
+
+    monkeypatch.setattr(assets.urllib.request, "urlopen", lambda *a, **k: Truncated())
+    with pytest.raises(RuntimeError, match="could not download"):
+        assets.ensure_source("https://example.com/clip.h264")
+
+
+def test_a_length_the_server_does_not_give_is_still_accepted(here, monkeypatch):
+    """Chunked responses carry no Content-Length. That is not an error."""
+    class NoLength:
+        headers: dict[str, str] = {}
+
+        def __init__(self):
+            self.left = [b"payload"]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, _size):
+            return self.left.pop() if self.left else b""
+
+    monkeypatch.setattr(assets.urllib.request, "urlopen", lambda *a, **k: NoLength())
+    assert assets.download("https://example.com/clip.h264", Path("a.h264")) is True
+    assert Path("a.h264").read_bytes() == b"payload"

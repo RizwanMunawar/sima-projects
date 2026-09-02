@@ -26,6 +26,7 @@ same paths and never touch the network; only :meth:`Task.run
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -174,6 +175,18 @@ def download(url: str, out: Path) -> bool:
                             f"\r  ...   {out.name}  {done / 1e6:5.1f} / {total / 1e6:.1f} MB",
                             end="", flush=True,
                         )
+        # A server that closes early, or a proxy that truncates, ends the read
+        # loop exactly like a finished transfer does. Without this the partial
+        # file is renamed into place and every later run reuses it, because the
+        # first thing this function does is trust a file that already exists.
+        if total and done != total:
+            part.unlink(missing_ok=True)
+            print(
+                f"\r  FAIL  {out.name}: got {done} of {total} bytes, "
+                f"the transfer was cut short",
+                file=sys.stderr,
+            )
+            return False
         print(f"{chr(13) if live else ''}  got   {out}  ({done / 1e6:.1f} MB)          ")
         part.replace(out)
         return True
@@ -181,6 +194,26 @@ def download(url: str, out: Path) -> bool:
         part.unlink(missing_ok=True)
         print(f"\r  FAIL  {out.name}: {exc}", file=sys.stderr)
         return False
+
+
+def cache_name(url: str) -> str:
+    """A local filename for a URL that cannot collide with another URL's.
+
+    ``--source https://a.example/clip.h264`` and the same name on another host
+    are different videos. Keying the cache on the last path segment alone meant
+    the second one silently ran the first one's footage, and the download was
+    skipped because the file was already there.
+
+    The digest goes before the extension rather than after, so the suffix still
+    says what the file is and `.tar.gz` survives intact::
+
+        clip.h264            ->  clip-1a2b3c4d.h264
+        yolo26m-det.tar.gz   ->  yolo26m-det-1a2b3c4d.tar.gz
+    """
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:8]
+    name = Path(url.split("?")[0]).name or "download"
+    head, dot, tail = name.partition(".")
+    return f"{head}-{digest}{dot}{tail}"
 
 
 def fetch(url: str, out: Path, what: str) -> Path:
@@ -217,7 +250,7 @@ def ensure_source(uri: str, source_type: str = "video") -> str:
     if source_type != "video" or not uri:
         return uri
     if is_url(uri):
-        return str(fetch(uri, videos_dir() / Path(uri).name, "source video"))
+        return str(fetch(uri, videos_dir() / cache_name(uri), "source video"))
     path = Path(uri)
     if path.exists():
         return uri
@@ -241,7 +274,7 @@ def ensure_model(path: str, task: str) -> str:
             the command to run by hand.
     """
     if is_url(path):
-        return str(fetch(path, models_dir() / Path(path).name, "model archive"))
+        return str(fetch(path, models_dir() / cache_name(path), "model archive"))
     if not path or Path(path).exists():
         return path
 
