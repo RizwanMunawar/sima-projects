@@ -1,16 +1,20 @@
 name: Release
 
-# Publishing is deliberately manual: nothing reaches PyPI until a `v*` tag is
-# pushed on purpose.
+# Releasing is one line in one file. Bump `__version__` in
+# sima_vision/__init__.py, open a PR, merge it, and this publishes to PyPI and
+# tags the commit. Nothing else to remember, and no tag to push by hand.
 #
-#   git tag v0.1.0 && git push origin v0.1.0
+# `__init__.py` is the only place the version is written: pyproject.toml reads
+# it through `[tool.hatch.version]`. A second copy could ship a wheel labelled
+# with the version you did not bump.
 #
-# The tag must point at the commit you mean. `git tag` tags whatever HEAD is,
-# so if `git pull` failed you will tag the wrong thing, and a tag on a commit
-# without this file cannot start this workflow at all.
+# Nothing is published unless that line actually changed. The check compares
+# the merge commit with its first parent and then refuses anyway if a `v<X>`
+# tag already exists, so a re-run, a revert or a doc-only merge cannot publish
+# twice. `skip-existing` on the upload is the last line of defence.
 #
-# Authentication is PyPI Trusted Publishing (OIDC), so there is no API token to
-# store or rotate. Before the first release, add a pending publisher at
+# Authentication is PyPI Trusted Publishing (OIDC): no API token to store or
+# rotate. Before the first release, add a pending publisher at
 # https://pypi.org/manage/account/publishing/ with:
 #
 #   PyPI project name : sima-vision
@@ -23,19 +27,81 @@ name: Release
 # is what a missing publisher looks like rather than a permissions error.
 #
 # There is no TestPyPI rehearsal. What that step was really checking is that
-# the artifact uploads and installs, so `install` now does the second half for
-# real on all three platforms, and it gates the publish. A version number on
-# PyPI can never be reused, even after deletion, so nothing should reach it
-# that has not been installed from a wheel first.
+# the artifact uploads and installs, so `install` does the second half for real
+# on all three platforms and gates the publish. A version number on PyPI can
+# never be reused, even after deletion.
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Publish the current version even if it did not change"
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  version:
+    name: has the version changed?
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      publish: ${{ steps.check.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The parent commit has to be here to diff against, and tags have to
+          # be here to answer "have we already published this one".
+          fetch-depth: 0
+
+      - id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          read_version() {
+            git show "$1:sima_vision/__init__.py" 2>/dev/null \
+              | sed -n 's/^__version__ = "\(.*\)"/\1/p' | head -1
+          }
+
+          now="$(read_version HEAD)"
+          test -n "$now" || { echo "::error::no __version__ in sima_vision/__init__.py"; exit 1; }
+          echo "version=$now" >> "$GITHUB_OUTPUT"
+
+          # First parent, so a merge is compared with what main was before it
+          # rather than with the branch that was merged in.
+          before="$(read_version HEAD^ || true)"
+          echo "before=${before:-<none>} now=$now"
+
+          publish=false
+          if [ "${{ inputs.force }}" = "true" ]; then
+            reason="forced by hand"
+            publish=true
+          elif [ "$now" = "$before" ]; then
+            reason="__version__ is unchanged at $now"
+          elif git rev-parse -q --verify "refs/tags/v$now" >/dev/null; then
+            reason="v$now is already tagged, so it has been released"
+          else
+            reason="__version__ went ${before:-<none>} -> $now"
+            publish=true
+          fi
+
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Release check"
+            echo ""
+            echo "- version: \`$now\`"
+            echo "- publish: **$publish** ($reason)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   build:
-    name: build
+    name: build ${{ needs.version.outputs.version }}
+    needs: version
+    if: needs.version.outputs.publish == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,21 +121,20 @@ jobs:
           ruff check sima_vision tests
           pytest -q
 
-      - name: Check the tag matches the package version
-        # A tag that disagrees with pyproject.toml publishes the wrong version
-        # under the right name, and PyPI will not let you take it back.
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          tag="${GITHUB_REF_NAME#v}"
-          pkg="$(python -c 'import tomllib,pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
-          echo "tag=$tag pyproject=$pkg"
-          test "$tag" = "$pkg" || {
-            echo "::error::tag $GITHUB_REF_NAME does not match pyproject version $pkg"
-            exit 1
-          }
-
       - name: Build
         run: python -m build
+
+      - name: Check the version the artifacts actually carry
+        # pyproject reads __init__.py, so these agree by construction. Checked
+        # anyway: this is the number that becomes permanent on PyPI.
+        run: |
+          set -euo pipefail
+          want="${{ needs.version.outputs.version }}"
+          ls dist/
+          test -f "dist/sima_vision-$want-py3-none-any.whl" \
+            || { echo "::error::no wheel for $want"; exit 1; }
+          test -f "dist/sima_vision-$want.tar.gz" \
+            || { echo "::error::no sdist for $want"; exit 1; }
 
       - name: Check the metadata PyPI will see
         run: twine check dist/*
@@ -81,7 +146,7 @@ jobs:
 
   install:
     name: install the wheel (${{ matrix.os }})
-    needs: build
+    needs: [version, build]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -109,7 +174,7 @@ jobs:
         shell: bash
         working-directory: ${{ runner.temp }}
         run: |
-          sima-vision --version
+          sima-vision --version | grep -F "${{ needs.version.outputs.version }}"
           sima-vision doctor
           sima-vision detect --validate
           sima-vision segment --validate
@@ -117,11 +182,8 @@ jobs:
           test ! -d assets   # --validate must not have downloaded anything
 
   pypi:
-    name: publish to PyPI
-    needs: install
-    # Only a real tag publishes. A manual run builds, tests and installs the
-    # wheel, then stops, which is the rehearsal TestPyPI used to be.
-    if: startsWith(github.ref, 'refs/tags/v')
+    name: publish ${{ needs.version.outputs.version }} to PyPI
+    needs: [version, install]
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -136,12 +198,12 @@ jobs:
 
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          # A re-run of the same tag should not fail the whole release.
+          # A re-run must not fail the whole release on "already uploaded".
           skip-existing: true
 
-  github-release:
-    name: attach the artifacts to the GitHub release
-    needs: pypi
+  tag:
+    name: tag v${{ needs.version.outputs.version }}
+    needs: [version, pypi]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -151,7 +213,12 @@ jobs:
           name: dist
           path: dist/
 
+      # The tag is created after the upload, not before, so its existence
+      # means "this version is on PyPI" and the version job can rely on it.
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ needs.version.outputs.version }}
+          name: v${{ needs.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
           files: dist/*
           generate_release_notes: true

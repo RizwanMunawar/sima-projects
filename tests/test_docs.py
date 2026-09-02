@@ -238,3 +238,28 @@ def test_no_em_dashes():
         if ch in "—–‒―"
     }
     assert not offenders, f"README contains dashes that should be ASCII: {offenders}"
+
+
+def test_the_version_is_written_in_exactly_one_place():
+    """Releasing is triggered by `__version__` changing, so nothing may shadow it.
+
+    pyproject.toml declares the version dynamic and points hatchling at
+    `sima_vision/__init__.py`. A literal `version = "..."` creeping back into
+    pyproject would build a wheel labelled with whichever of the two was not
+    bumped, and that number is permanent once it reaches PyPI.
+    """
+    import re as _re
+
+    from sima_vision import __version__
+
+    pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'dynamic = ["version"]' in pyproject
+    assert 'path = "sima_vision/__init__.py"' in pyproject
+    assert not _re.search(r'(?m)^version\s*=', pyproject), (
+        "pyproject.toml has a literal version again; it must stay dynamic"
+    )
+    # The shape the release workflow greps for, not just any assignment.
+    init = (REPO / "sima_vision" / "__init__.py").read_text(encoding="utf-8")
+    found = _re.findall(r'(?m)^__version__ = "(.*)"$', init)
+    assert found == [__version__], f"expected one __version__ line, got {found}"
+    assert _re.fullmatch(r"\d+\.\d+\.\d+([ab]\d+|rc\d+)?", __version__), __version__

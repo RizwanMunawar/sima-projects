@@ -4,7 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sima-vision"
-version = "0.1.0"
+# Read from sima_vision/__init__.py, which is the one place the version is
+# written. Releasing is triggered by that line changing, so a second copy here
+# could ship a wheel labelled with the version you did not bump.
+dynamic = ["version"]
 description = "Live YOLO computer vision on a SiMa Modalix DevKit 3.0: detection, segmentation and fall detection"
 readme = "README.md"
 license = "Apache-2.0"
@@ -66,6 +69,9 @@ Issues = "https://github.com/RizwanMunawar/sima-projects/issues"
 # NOT `sima-cli`: that name belongs to SiMa.ai's own CLI, which the setup guide
 # installs to pair the board. Shadowing it would break the DevKit workflow.
 sima-vision = "sima_vision.cli:main"
+
+[tool.hatch.version]
+path = "sima_vision/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["sima_vision"]
