@@ -2,8 +2,6 @@
 
 <img src="assets/sima-devkit-docs-logo-home.png" alt="sima-vision: live YOLO computer vision on a SiMa Modalix DevKit 3.0" width="640">
 
-<br>
-
 [![SiMa.ai](https://img.shields.io/badge/SiMa.ai-Modalix_DevKit_3.0-E63946?style=for-the-badge)](https://sima.ai)
 [![Palette SDK](https://img.shields.io/badge/Palette_SDK-2.1.2-457B9D?style=for-the-badge)](https://docs.sima.ai)
 [![Neat](https://img.shields.io/badge/Neat-0.3.0-2A9D8F?style=for-the-badge)](https://docs.sima.ai)
@@ -14,7 +12,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-6C757D?style=flat-square)](LICENSE)
 [![YOLO26](https://img.shields.io/badge/Ultralytics-YOLO26-FFB703?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)
 
-<h3>Live YOLO26 on the MLA of a SiMa.ai Modalix DevKit 3.0.<br>Three apps, one pipeline, one command.</h3>
+<h3>YOLO26 on the MLA of a SiMa.ai Modalix DevKit 3.0.<br>Three apps, one pipeline, one command.</h3>
 
 </div>
 
@@ -23,28 +21,21 @@ pip install sima-vision
 sima-vision detect          # sample clip and model fetched for you, then run
 ```
 
-> **Inference needs the board. Nothing else does.** Checking a config and seeing exactly
-> what the overlay will look like both run on your laptop, so you can set the whole thing
-> up before you own any hardware.
-
-<br>
+**Inference needs the board. Nothing else does.** Checking a config and seeing exactly
+what the overlay will look like both run on your laptop, so you can set the whole thing up before you own any hardware.
 
 ## Contents
 
-| | |
-|:--|:--|
-| [Install](#install) | pip, and what each extra buys you |
-| [Quickstart](#quickstart) | Without a board, then with one |
-| [The three tasks](#the-three-tasks) | What each does, and its own flags |
-| [Commands](#commands) | Every subcommand in one table |
-| [Settings](#settings) | Flags, Python keywords, `config.yaml` |
-| [Python API](#python-api) | The same three verbs, importable |
-| [Driving the board from your PC](#driving-the-board-from-your-pc) | `push`, `remote`, `pull` |
-| [Set up a new DevKit](#set-up-a-new-devkit) | One time, about two hours |
-| [Troubleshooting](#troubleshooting) | Symptom to fix, in one table |
-| [How it works](#how-it-works) | The pipeline, and why it is shaped that way |
-
-<br>
+- [Install](#install)
+- [Quickstart](#quickstart)
+- [The three tasks](#the-three-tasks)
+- [Commands](#commands)
+- [Settings](#settings)
+- [Python API](#python-api)
+- [Driving the board from your PC](#driving-the-board-from-your-pc)
+- [Set up a new DevKit](#set-up-a-new-devkit)
+- [Troubleshooting](#troubleshooting)
+- [How it works](#how-it-works)
 
 ## Install
 
@@ -82,8 +73,6 @@ Check what you have:
 ```bash
 sima-vision doctor
 ```
-
-<br>
 
 ## Quickstart
 
