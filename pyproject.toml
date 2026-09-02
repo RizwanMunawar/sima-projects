@@ -1,0 +1,93 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sima-vision"
+version = "0.1.0"
+description = "Live YOLO computer vision on a SiMa Modalix DevKit 3.0: detection, segmentation and fall detection"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "Muhammad Rizwan Munawar" }]
+keywords = [
+    "sima", "modalix", "devkit", "yolo", "ultralytics", "neat", "palette-sdk",
+    "computer-vision", "object-detection", "instance-segmentation", "edge-ai",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+
+# pyneat is not here on purpose: it is an aarch64 wheel that ships with the
+# Palette SDK and is not on PyPI, so listing it would make `pip install
+# sima-vision` fail everywhere including the DevKit. Same for OpenCV, which the
+# board provides in /usr/lib/python3*/dist-packages -- installing
+# opencv-python would pull numpy 2.x and break every simaai-* package.
+# `sima-vision <task> --validate` needs neither, which is the point.
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# Everything `sima-vision preview` and `sima-vision doctor` need to draw on a
+# laptop. Not needed on the DevKit, which provides both system-wide.
+preview = [
+    "numpy>=1.24",
+    "opencv-python>=4.7",
+]
+# Only for a board that is somehow missing them. numpy is capped here because
+# pyneat 0.3.0 requires numpy<2, and installing 2.x breaks every simaai-*
+# package on the DevKit.
+board = [
+    "numpy>=1.24,<2",
+    "opencv-python>=4.7,<5",
+]
+dev = [
+    "pytest>=7.4",
+    "ruff>=0.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/RizwanMunawar/sima-projects"
+Repository = "https://github.com/RizwanMunawar/sima-projects"
+Issues = "https://github.com/RizwanMunawar/sima-projects/issues"
+
+[project.scripts]
+# NOT `sima-cli`: that name belongs to SiMa.ai's own CLI, which the setup guide
+# installs to pair the board. Shadowing it would break the DevKit workflow.
+sima-vision = "sima_vision.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["sima_vision"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/sima_vision",
+    "/tests",
+    "/README.md",
+    "/LICENSE",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+    "E741",   # ambiguous variable name: `l` is not used, but `I` reads fine here
+    "B008",   # function call in default argument: frozen dataclasses are fine
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

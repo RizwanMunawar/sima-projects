@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/sima-devkit-docs-logo-home.png" alt="SiMa Neat SDK: live YOLO computer vision on a Modalix DevKit 3.0" width="640">
+<img src="assets/sima-devkit-docs-logo-home.png" alt="sima-vision: live YOLO computer vision on a SiMa Modalix DevKit 3.0" width="640">
 
 <br>
 
@@ -8,133 +8,495 @@
 [![Palette SDK](https://img.shields.io/badge/Palette_SDK-2.1.2-457B9D?style=for-the-badge)](https://docs.sima.ai)
 [![Neat](https://img.shields.io/badge/Neat-0.3.0-2A9D8F?style=for-the-badge)](https://docs.sima.ai)
 
-![Windows](https://img.shields.io/badge/Windows_11-0078D6?style=flat-square&logo=windows11&logoColor=white)
-![WSL2](https://img.shields.io/badge/WSL2-E95420?style=flat-square&logo=ubuntu&logoColor=white)
-![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
-![Python](https://img.shields.io/badge/Python_3.10+-3776AB?style=flat-square&logo=python&logoColor=white)
-![YOLO](https://img.shields.io/badge/Ultralytics_YOLO26-FFB703?style=flat-square&labelColor=333)
+[![CI](https://github.com/RizwanMunawar/sima-projects/actions/workflows/ci.yml/badge.svg)](https://github.com/RizwanMunawar/sima-projects/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/badge/pip_install-sima--vision-3775A9?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/sima-vision/)
+[![Python](https://img.shields.io/badge/python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-6C757D?style=flat-square)](LICENSE)
+[![YOLO26](https://img.shields.io/badge/Ultralytics-YOLO26-FFB703?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)
 
-![Setup](https://img.shields.io/badge/setup-~2h-6C757D?style=flat-square)
-![Download](https://img.shields.io/badge/download-12.6_GB-DC3545?style=flat-square)
+<h3>Live YOLO26 on the MLA of a SiMa.ai Modalix DevKit 3.0.<br>Three apps, one pipeline, one command.</h3>
 
 </div>
 
-## What this is
-
-**The setup guide for a Modalix DevKit 3.0**, written while actually bringing one up.
-Every warning marks somewhere real time was lost.
-
-This page gets you from a boxed board to a paired one that can run anything in this repo.
-It does **not** cover any individual app: each app has its own README, and you go there
-once the board answers.
-
-```
-   ┌──────────────┐        ┌──────────────────┐        ┌───────────────────┐
-   │  WINDOWS PC  │        │   WSL2 · UBUNTU  │        │  MODALIX DEVKIT   │
-   ├──────────────┤        ├──────────────────┤        ├───────────────────┤
-   │  play .mp4   │<──────>│  sima-cli        │<──────>│  MLA              │
-   │  serial      │  scp   │  Docker + SDK    │ ssh /  │  your app         │
-   │              │        │                  │  scp   │  the output .mp4  │
-   └──────────────┘        └──────────────────┘        └───────────────────┘
-        review               build + deploy                 inference
-```
-
-Your app runs **on the DevKit**. It writes an annotated `.mp4` and annotated stills on
-the board; you copy them back and look at them.
-
 ```bash
-git clone https://github.com/RizwanMunawar/sima-projects.git
-cd sima-projects
+pip install sima-vision
+sima-vision detect          # sample clip and model fetched for you, then run
 ```
 
-## Apps in this repo
+> **Inference needs the board. Nothing else does.** Checking a config and seeing exactly
+> what the overlay will look like both run on your laptop, so you can set the whole thing
+> up before you own any hardware.
 
-Setup below is done **once per machine** and every app shares it. Do it, then pick an app
-and follow that README the rest of the way.
-
-| App | What it does | Model | Guide |
-|:--|:--|:--|:--|
-| [`object-detection/`](object-detection/) | Boxes, class names and confidence on every frame | YOLO26 detect | [README](object-detection/README.md) |
-| [`instance-segmentation/`](instance-segmentation/) | Per-pixel masks, and a background blur that keeps the subject sharp | YOLO26 segment | [README](instance-segmentation/README.md) |
-| [`fall-detection/`](fall-detection/) | Tracks people in a warehouse or mall and emails when one of them goes down | YOLO26 detect | [README](fall-detection/README.md) |
-
-Each app README owns its own model, video, config, overlay, tuning and errors. Nothing
-about running an app lives on this page.
-
+<br>
 
 ## Contents
 
-Setup runs once per machine, about two hours and mostly downloading.
-
-| Section | What it covers |
+| | |
 |:--|:--|
-| [Complete workflow](#complete-workflow) | Who does what, and in which order |
-| [Cable up the DevKit](#step-1) | USB serial and Ethernet, set DHCP. 15 min |
-| [Install WSL2](#step-2) | `wsl --install -d Ubuntu`. 10 min |
-| [Mirrored networking](#step-3) | So WSL can see the board at all. 5 min |
-| [Get the code and install sima-cli](#step-4) | Clone, venv, login. 5 min |
-| [Docker Engine + NFS](#step-5) | The Neat SDK is a container. 10 min |
-| [Install the Neat SDK](#step-6) | Pairs the board, 12.6 GB. 30 to 60 min |
-| [Now pick an app](#now-pick-an-app) | Where setup ends and the app guides begin |
-| [Video must be raw H.264](#video-must-be-raw-h264) | The one media rule every app shares |
-| [Known issues](#known-issues) | The `.mp4` demuxer bug in Neat 0.3.0 |
-| [Reference](#reference) | Addresses, paths, five rules |
-| [Setup questions](#setup-questions) | FAQ for the bring-up itself |
-| [Setup errors](#setup-errors) | One table, symptom to fix |
-| [Recovery](#recovery) | Firmware mismatch, missing pyneat |
-| [License](#license) | YOLO26 under AGPL-3.0, everything else Apache-2.0 |
-| [Credits](#credits) | SiMa.ai, Ultralytics, and where to find me |
+| [Install](#install) | pip, and what each extra buys you |
+| [Quickstart](#quickstart) | Without a board, then with one |
+| [The three tasks](#the-three-tasks) | What each does, and its own flags |
+| [Commands](#commands) | Every subcommand in one table |
+| [Settings](#settings) | Flags, Python keywords, `config.yaml` |
+| [Python API](#python-api) | The same three verbs, importable |
+| [Driving the board from your PC](#driving-the-board-from-your-pc) | `push`, `remote`, `pull` |
+| [Set up a new DevKit](#set-up-a-new-devkit) | One time, about two hours |
+| [Troubleshooting](#troubleshooting) | Symptom to fix, in one table |
+| [How it works](#how-it-works) | The pipeline, and why it is shaped that way |
 
-## Complete workflow
+<br>
 
-```
-┌───────────────────────────────────────────────────────────────────────────────┐
-│      WINDOWS PC        │       WSL2 · UBUNTU        │   MODALIX DEVKIT 3.0    │
-├────────────────────────┼────────────────────────────┼─────────────────────────┤
-├─────────────────────────────── ONE-TIME SETUP ────────────────────────────────┤
-│                        │                            │                         │
-│ 1  cable up  ──────────┼────────────────────────────┼───>  DHCP address       │
-│      USB + Ethernet    │                            │      board powers on    │
-│                        │                            │                         │
-│ 2  wsl --install ──────┼───>  Ubuntu ready          │                         │
-│                        │                            │                         │
-│ 3  .wslconfig  ────────┼───>  WSL takes .137.1  ────┼───>  now reachable      │
-│      mirrored mode     │        same subnet         │      both directions    │
-│                        │                            │                         │
-│                        │ 4  git clone + sima-cli    │                         │
-│                        │      repo + venv           │                         │
-│                        │                            │                         │
-│                        │ 5  docker + nfs            │                         │
-│                        │      the SDK is a container│                         │
-│                        │                            │                         │
-│                        │ 6  sima-cli sdk setup ─────┼─>  pyneat + runtime     │
-│                        │      12.6 GB image         │      installed on board │
-│                        │                            │                         │
-├──────────────────────── THEN PICK AN APP · EVERY RUN ─────────────────────────┤
-│                        │                            │                         │
-│                        │ 7  fetch model + video     │                         │
-│                        │      into <app>/assets/    │                         │
-│                        │                            │                         │
-│                        │ 8  scp -r <app>/ ──────────┼─>  ~/<app>              │
-│                        │      edit, copy, run       │      python3 src/app.py │
-│                        │                            │                         │
-│ 9  scp the result back<┼────────────────────────────┼────  annotated .mp4     │
-│      keep a local copy │      and frames/           │      on the board       │
-│                        │                            │                         │
-└────────────────────────┴────────────────────────────┴─────────────────────────┘
+## Install
+
+Python 3.10 or later. No compiler, and the only dependency is PyYAML.
+
+```bash
+pip install sima-vision
 ```
 
-Steps 1 to 6 are **this page**. Steps 7 to 9 are **the app README you pick**, and they
-are the loop you live in afterwards.
+| Where | Install | Why |
+|:--|:--|:--|
+| **On the DevKit** | `~/pyneat/bin/pip install sima-vision` | Into the venv that has `pyneat`. See below |
+| **Your laptop** | `pip install "sima-vision[preview]"` | Adds numpy and OpenCV so `preview` can draw |
+| **Contributing** | `pip install -e ".[dev,preview]"` | Also ruff and pytest |
 
-Step 3 is load-bearing. Step 6 installs onto the board over the network and fails
+> [!IMPORTANT]
+> **On the DevKit, install into the `pyneat` venv.** `sima-cli sdk setup` puts `pyneat` in
+> a virtualenv of its own at `~/pyneat`, and `pip` installs into whichever Python you ran
+> `pip` with. Install anywhere else and a run stops at `ModuleNotFoundError: pyneat`.
+>
+> If you already installed it elsewhere, it still works: the run looks for that venv and
+> uses it, printing `[pyneat] using pyneat from ~/pyneat` when it does. Set
+> `SIMA_VISION_PYNEAT` if yours is somewhere unusual. `sima-vision doctor` says which of
+> these applies to you.
+
+> [!CAUTION]
+> **On the board, never let pip pull numpy 2.x.** `pyneat` and every `simaai-*` package
+> need `numpy<2`. `sima-vision` depends on neither numpy nor OpenCV precisely so that
+> installing it cannot upgrade them, which is also why installing it into the `pyneat`
+> venv is safe. If something already broke it:
+> `~/pyneat/bin/pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"`
+
+Check what you have:
+
+```bash
+sima-vision doctor
+```
+
+<br>
+
+## Quickstart
+
+### Without a board
+
+```bash
+sima-vision preview --task segment -o blur.png    # draw the overlay your config makes
+sima-vision init segment                          # write a documented config.yaml
+sima-vision segment --validate                    # check it
+```
+
+`preview` runs **no model**. It draws synthetic detections through the real overlay code,
+so what you are judging is styling, not accuracy. Nothing here touches the network.
+
+### On the DevKit
+
+```bash
+~/pyneat/bin/pip install sima-vision      # the venv that has pyneat
+sima-cli login                            # once, for the model packs
+~/pyneat/bin/sima-vision detect           # that is the whole thing
+```
+
+No arguments. Each task has a default sample clip and model archive, and the first run
+puts both in `./assets/`: the clip comes straight from a public GitHub release, the model
+through `sima-cli`, which holds your login. Every run after that reuses them.
+
+Out comes `detections.mp4` and a `frames/` directory. Bring them back with
+[`sima-vision pull`](#driving-the-board-from-your-pc).
+
+Your own clip or model, as a path or an `https` URL:
+
+```bash
+sima-vision detect --source my-clip.h264 --model my-model.tar.gz
+sima-vision detect --source https://example.com/my-clip.h264
+```
+
+A URL is downloaded into `assets/` once and reused. There is **one** `assets/` for all
+three tasks, not one per task: they share the clips, and `detect` and `fall` share the
+model archive outright.
+
+> [!IMPORTANT]
+> **Video must be raw H.264, not `.mp4`.** The board decodes H.264 in hardware, and
+> containers hit a [demuxer bug](#known-issues) in Neat 0.3.0. Convert once, losslessly:
+>
+> ```bash
+> ffmpeg -i clip.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 clip.h264
+> ```
+>
+> Renaming an `.mp4` does not work and is caught at startup, with that command in the
+> error. Leave `source.fps`, `source.width` and `source.height` at `0`: the real geometry
+> is read out of the stream's SPS.
+
+> **New board?** Bring-up is a one-time job of about two hours, mostly downloading. That
+> is [Set up a new DevKit](#set-up-a-new-devkit). Nothing above needs it.
+
+<br>
+
+## The three tasks
+
+| Task | What it does | Model | Output |
+|:--|:--|:--|:--|
+| **`detect`** | Boxes, class names and confidence on every frame | YOLO26 detect | `detections.mp4` |
+| **`segment`** | Per-pixel masks, and a background blur that keeps the subject sharp | YOLO26 segment | `segmentation.mp4` |
+| **`fall`** | Tracks people and emails when one of them goes down | YOLO26 detect | `falls.mp4`, `alerts/` |
+
+All three share one pipeline: the same source handling, Neat graph, sample decoding,
+drawing and sinks. A task supplies only what is genuinely its own.
+
+<details>
+<summary><b>detect</b> &nbsp;&middot;&nbsp; boxes, labels and confidence</summary>
+
+<br>
+
+The simplest thing that proves the whole chain works. No task-specific flags: everything
+it understands is in [Settings](#settings).
+
+```bash
+sima-vision detect
+sima-vision detect --conf 0.5 --frames 200
+sima-vision detect --source rtsp://cam/live --source-type rtsp
+```
+
+| Problem | Fix |
+|:--|:--|
+| No detections at all | Check `model.family` is `yolo26`, then lower `--conf` |
+| Scores all near zero | `model.family` does not match the archive, so a raw-logit head is being decoded wrong |
+
+</details>
+
+<details>
+<summary><b>segment</b> &nbsp;&middot;&nbsp; masks, and a background blur</summary>
+
+<br>
+
+Needs a `-seg` model pack. A plain detect head carries no mask data, and the run says so
+rather than guessing.
+
+```bash
+sima-vision segment                                        # masks and the default blur
+sima-vision segment --blur-strength 81                     # a stronger blur
+sima-vision segment --blur-method pixelate                 # pixelate instead
+sima-vision segment --keep-classes person                  # only people stay sharp
+sima-vision segment --anonymise --keep-classes person      # the other way round
+sima-vision segment --no-blur                              # masks, no background effect
+```
+
+| Flag | What it does |
+|:--|:--|
+| `--blur` / `--no-blur` | Whether the background is treated at all |
+| `--blur-method` | `gaussian`, `pixelate` or `none` |
+| `--blur-strength PX` | Gaussian kernel width for a 1080p frame. Default 41 |
+| `--keep-classes` | Class names or ids that stay sharp. Default: everything detected |
+| `--anonymise` | Blur the instances instead of the background |
+| `--mask-threshold T` | Mask cut-off as a probability. Default 0.5; lower grows instances |
+| `--no-masks` | Blur around plain boxes. Works with a detect head |
+| `--minimal` | Pull frames and do nothing else. See below |
+
+`--minimal` is the diagnostic. If a run that stalls part-way through a clip completes
+with `--minimal`, the cause is how much work the app does per frame. If it stalls at the
+same frame, the cause is the graph.
+
+| Problem | Fix |
+|:--|:--|
+| `model.family ... is a detect head` | Point `--model` at a `-seg` pack, or pass `--no-masks` |
+| Whole frame blurred | Nothing was detected. Lower `--conf` |
+| Mask edges jagged | Raise `blur.feather`, then `segmentation.blur_mask` |
+| Masks in the wrong place | Pin `segmentation.space` to `net` or `box` instead of `source` |
+| Too slow at 1080p | `blur.downscale: 4` is the biggest win, then `--save-every 30` |
+
+</details>
+
+<details>
+<summary><b>fall</b> &nbsp;&middot;&nbsp; tracking, a fall state machine, SMTP alerts</summary>
+
+<br>
+
+Tracks people across frames and watches three signals from the plain bounding box: the
+box turning wide-and-short, its height collapsing, and how fast its centre is dropping. A
+fall has to hold for `--confirm` seconds before an alert fires, which is what keeps
+someone crouching from setting it off.
+
+```bash
+sima-vision fall                                       # track and judge, no email
+sima-vision fall --no-fall                             # track only, to tune tracking first
+sima-vision fall --confirm 0.8                         # confirm faster
+sima-vision fall --alert-to ops@example.com --send     # actually email
+sima-vision fall --test-alert                          # one fake alert now, needs no board
+```
+
+| Flag | What it does |
+|:--|:--|
+| `--classes` | Class names or ids that can fall. Default `person` |
+| `--confirm S` | How long a fall signal must hold. Default 1.5 |
+| `--no-fall` | Track without judging |
+| `--alert-to EMAIL` | Recipients. Implies `--alerts` |
+| `--alert-from EMAIL` | From address |
+| `--alerts` | Enable alerts, still a dry run |
+| `--send` | Actually connect to the SMTP server |
+| `--smtp-host` / `--smtp-port` / `--smtp-user` | Server, 587 for STARTTLS or 465 for SSL, and the login |
+| `--site NAME` | Human name for this camera, used in the subject |
+| `--test-alert` | Send one fake alert and exit |
+
+> [!WARNING]
+> Alerts stay a **dry run** until `--send`. The SMTP password is only ever read from
+> `$FALL_ALERT_SMTP_PASSWORD`, never from a config file, because config files get
+> committed.
+
+```bash
+export FALL_ALERT_SMTP_PASSWORD='your-app-password'    # macOS, Linux, the DevKit
+```
+
+```powershell
+$env:FALL_ALERT_SMTP_PASSWORD = "your-app-password"    # PowerShell
+```
+
+Gmail needs an [app password](https://support.google.com/accounts/answer/185833), not
+your account password. `--test-alert` proves the whole path synchronously and needs no
+board.
+
+| Problem | Fix |
+|:--|:--|
+| `falls=0` on footage that has one | Lower `--confirm` and `fall.aspect_ratio`; first check the person is tracked at all with `--no-fall` |
+| Alerts fire constantly | Raise `--confirm` first, then `alerts.cooldown_seconds` |
+| Track ids change every few frames | Lower `tracking.iou_threshold`, raise `tracking.max_age` |
+| Gmail rejects the login | App password, not the account password. `--test-alert` prints the SMTP error verbatim |
+
+</details>
+
+<br>
+
+## Commands
+
+| Command | Board? | What it does |
+|:--|:--:|:--|
+| `sima-vision detect` | **yes** | Run detection on the MLA |
+| `sima-vision segment` | **yes** | Run segmentation, with the optional blur |
+| `sima-vision fall` | **yes** | Run fall detection, with SMTP alerts |
+| `sima-vision preview` | no | Draw the overlay your config produces, to a PNG |
+| `sima-vision init` | no | Write a documented `config.yaml` here |
+| `sima-vision doctor` | no | What is installed, and what it lets you do |
+| `sima-vision fetch` | no | Download the sample clips up front |
+| `sima-vision push` | no | Copy files to the DevKit |
+| `sima-vision pull` | no | Copy results back |
+| `sima-vision remote` | no | Run a task on the DevKit over SSH |
+
+Add `--validate` to any task to parse and check a config, print what it resolved to, and
+exit. It loads neither pyneat nor the model, so it runs anywhere:
+
+```bash
+sima-vision segment --conf 0.5 --blur-strength 81 --validate
+```
+
+```
+config OK: config.yaml
+  model: assets/models/yolo26m-seg-bf16-mla_tess-b1.tar.gz
+  family=yolo26-seg -> BoxDecodeType.YoloV26Seg
+  source: type=video uri=assets/videos/people-walking-outside-mall.h264
+  decode: conf=0.5 iou=0.6 max_det=50
+  segmentation: masks=on source=auto space=auto threshold=0.5
+  blur: background | method=gaussian kernel=81 sigma=auto down=2 feather=9
+  output: video=segmentation.mp4 stills=frames/ every=10
+```
+
+`sima-vision <command> --help` lists every flag.
+
+<br>
+
+## Settings
+
+Three layers, each beating the one above it:
+
+```
+built-in defaults   ->   config.yaml   ->   flags / Python keywords
+```
+
+So **everything is optional**. With no file and no flags you get this task's sample clip
+and model. For a setup you keep:
+
+```bash
+sima-vision init detect     # a documented config.yaml, right here
+sima-vision detect          # picks up ./config.yaml on its own
+```
+
+Every setting has a flag and a Python keyword under the same name. Both write the same
+config key, and both go through the same validation.
+
+### What people actually change
+
+| I want | Flag | Python | Config key |
+|:--|:--|:--|:--|
+| Fewer spurious boxes | `--conf 0.5` | `conf=0.5` | `decode.score_threshold` |
+| To catch more, noisily | `--conf 0.15` | `conf=0.15` | `decode.score_threshold` |
+| A short test run | `--frames 100` | `frames=100` | `runtime.frames` |
+| No video file | `--no-video` | `video=False` | `output.video.enable` |
+| No stills | `--no-save` | `save=False` | `output.save.enable` |
+| Fewer stills | `--save-every 30` | `save_every=30` | `output.save.every` |
+| To see where the time goes | `--profile` | `profile=True` | `runtime.profile` |
+| A live Insight view | `--insight` | `insight=True` | `output.insight.enable` |
+| A stronger blur | `--blur-strength 81` | `blur_strength=81` | `blur.kernel` |
+| A pixelated background | `--blur-method pixelate` | `blur_method="pixelate"` | `blur.method` |
+| Only people kept sharp | `--keep-classes person` | `keep_classes=["person"]` | `blur.keep_classes` |
+| People blurred, scene sharp | `--anonymise` | `anonymise=True` | `blur.invert` |
+| Masks, but no blur | `--no-blur` | `blur=False` | `blur.enable` |
+| To track something else | `--classes forklift` | `classes=["forklift"]` | `tracking.classes` |
+| Falls confirmed faster | `--confirm 0.8` | `confirm=0.8` | `fall.confirm_seconds` |
+| An email on a fall | `--alert-to me@x.com --send` | `alert_to=[...], send=True` | `alerts.*` |
+
+### Shared flags
+
+| Flag | Config key | What it does |
+|:--|:--|:--|
+| `--source`, `-s` | `source.uri` | File, `https` URL, RTSP URL, or nothing for the sample clip |
+| `--source-type` | `source.type` | `video`, `rtsp` or `usb` |
+| `--fps` / `--width` / `--height` | `source.*` | Leave at 0. Read from the stream |
+| `--model`, `-m` | `model.path` | Compiled model archive, or an `https` URL to one |
+| `--labels` | `model.labels` | Class names. Defaults to the packaged COCO list |
+| `--family` | `model.family` | Detection head. Must match the model |
+| `--conf` / `--iou` / `--max-det` | `decode.*` | Confidence, NMS IoU, top-K |
+| `--frames`, `-n` | `runtime.frames` | Stop after N frames |
+| `--timeout` / `--queue-depth` | `runtime.*` | Pull timeout, and how far ahead of the sinks to run |
+| `--profile` | `runtime.profile` | Per-stage timings |
+| `--video-path` / `--no-video` | `output.video.*` | The annotated recording |
+| `--save-dir` / `--save-every` / `--no-save` | `output.save.*` | Annotated stills |
+| `--no-hud` | `output.video.hud` | Leave the frame-rate badge off |
+| `--insight` / `--insight-host` | `output.insight.*` | The live Neat Insight feed |
+| `--config`, `-c` / `--no-config` | | Which config file, or none |
+| `--validate` | | Check and print, then exit |
+
+### Cameras and streams
+
+```bash
+sima-vision detect --source-type usb                            # the DevKit camera
+sima-vision detect --source rtsp://cam/live --source-type rtsp
+```
+
+For a live source, raise `--queue-depth` and leave `runtime.overflow_policy` on `auto`.
+For a file, `auto` resolves to `block`, which keeps every frame so the recording matches
+the input length.
+
+### Environment
+
+| Variable | What it does |
+|:--|:--|
+| `SIMA_VISION_ASSETS` | Where clips and models are downloaded. Default `./assets` |
+| `SIMA_VISION_PYNEAT` | The `pyneat` virtualenv, when it is not at `~/pyneat` |
+| `SIMA_VISION_DEVKIT` | The board, as `user@address`, so `push`, `pull` and `remote` stop asking |
+| `FALL_ALERT_SMTP_PASSWORD` | The only place the SMTP password is ever read from |
+
+<br>
+
+## Python API
+
+```python
+from sima_vision import run, preview, validate
+
+# No board: draw the overlay a setting produces, and write a PNG.
+preview("segment", out="blur.png", blur_strength=81, keep_classes=["person"])
+
+# No board: resolve and check a config, then look at what it became.
+cfg = validate("detect", conf=0.5, max_det=20)
+print(cfg.score_threshold, cfg.video_path)
+
+# On the DevKit: run it. Every argument is optional, exactly like the CLI.
+run("detect")
+run("detect", source="clip.h264", model="det.tar.gz", conf=0.5, frames=200)
+```
+
+Every keyword is derived from the CLI's own flags, so `--blur-strength 81` and
+`blur_strength=81` cannot drift apart. Anything the keywords do not cover is still
+reachable by its config path:
+
+```python
+run("segment", **{"runtime.output_buffers": 2})
+```
+
+<br>
+
+## Driving the board from your PC
+
+Three wrappers around `ssh` and `scp`, so the awkward parts stop being yours.
+
+```bash
+sima-vision push my-clip.h264               # PC -> board
+sima-vision remote -- detect --frames 200   # run it there, watch it here
+sima-vision pull                            # board -> PC
+```
+
+Say the address once:
+
+```bash
+export SIMA_VISION_DEVKIT=sima@192.168.137.50     # macOS, Linux
+```
+
+```powershell
+$env:SIMA_VISION_DEVKIT = "sima@192.168.137.50"   # PowerShell
+```
+
+or pass `--host` to any of the three. Authentication is `ssh`'s own business: an agent, a
+key, or it asks you. Nothing here handles or stores a password.
+
+| Command | Notes |
+|:--|:--|
+| `sima-vision push FILE...` | Folders are copied whole. `--dest` changes where they land, default `~/` |
+| `sima-vision pull` | With no names, takes whatever a run of any task left: the video, `frames/`, `alerts/`, `config.yaml`. `--into` chooses where they land here |
+| `sima-vision pull detections.mp4` | Or name exactly what you want |
+| `sima-vision remote -- ARGS` | Everything after `--` runs as `sima-vision ARGS` on the board |
+
+Three things these get right that a hand-written `scp` usually does not:
+
+1. **On Windows, `scp D:\clips\a.h264 sima@ip:~` fails** with `could not resolve hostname
+   d:`, because `scp` reads everything before the first colon as a host. `push` never
+   passes a full local path: it groups files by folder and runs `scp` from inside each
+   one. `pull` does the same at the other end.
+2. **`ssh host cmd` without a pty means Ctrl-C never reaches the task.** It keeps running,
+   keeps the MLA, and your next launch fails with a busy device. `remote` always passes
+   `-tt`.
+3. **`pull` with no arguments cannot be one `scp`**, because `scp` fails the whole
+   transfer on a name that is not there and the outputs depend on which task ran. So the
+   names are listed over `ssh` first and only what exists is fetched.
+
+They need an OpenSSH client, which macOS and Linux ship and Windows 10/11 has under
+Settings > Apps > Optional features > OpenSSH Client.
+
+<br>
+
+## Set up a new DevKit
+
+<details>
+<summary><b>One time, about two hours, mostly downloading. Skip this if your board already runs pyneat.</b></summary>
+
+<br>
+
+Written on Windows with WSL2, which is the path SiMa's own tooling expects. Every warning
+below marks somewhere real time was lost.
+
+```
+   WINDOWS PC          WSL2 / UBUNTU              MODALIX DEVKIT 3.0
+   ----------          -------------              ------------------
+1  cable up      ----------------------------->   DHCP address
+2  wsl --install ---->  Ubuntu ready
+3  .wslconfig    ---->  WSL takes .137.1    --->  reachable both ways
+                  4    sima-cli in a venv
+                  5    docker + nfs
+                  6    sdk setup           --->   pyneat on the board
+```
+
+Step 3 is load-bearing. Step 6 installs onto the board **over the network** and fails
 silently if networking is not fixed first, which is the usual way to lose an afternoon.
 
-<a id="step-1"></a>
-### 1. Cable up the DevKit
+### 1. Cable up
 
-USB cable (serial console) + Ethernet straight to your PC. Open the
-[serial tool](https://docs.sima.ai/_static/tools/serial/index.html), set the DevKit to
+USB (serial console) plus Ethernet straight to your PC. Open the
+[serial tool](https://docs.sima.ai/_static/tools/serial/index.html) and set the DevKit to
 **DHCP**.
 
 ```powershell
@@ -142,28 +504,19 @@ arp -a | Select-String "192.168.137"     # find the board
 ping <devkit-ip>
 ```
 
-> ✅ Must reply. Nothing else works until it does.
+Must reply. Nothing else works until it does. The board's address changes between reboots;
+your PC keeps `192.168.137.1`.
 
-> [!IMPORTANT]
-> **`<devkit-ip>` appears throughout this guide and every app guide. Substitute your
-> own.** The board gets its address by DHCP, so it changes between reboots: mine has been
-> both `192.168.137.123` and `192.168.137.193`. Your PC keeps `192.168.137.1`, which is
-> why that one is written out in full.
-
-<a id="step-2"></a>
-### 2. Install WSL2
+### 2. WSL2
 
 ```powershell
 wsl --install -d Ubuntu      # PowerShell as Administrator
-wsl -l -v                    # want: Ubuntu · Running · 2
+wsl -l -v                    # want: Ubuntu, Running, 2
 ```
 
-<a id="step-3"></a>
 ### 3. Mirrored networking
 
-WSL sits behind NAT by default and **cannot see your DevKit**. Later, pairing installs
-software onto the board over the network. With no route, the PC half succeeds and the
-board half silently does nothing. You find out an hour later.
+WSL sits behind NAT by default and **cannot see your DevKit**.
 
 ```powershell
 @"
@@ -174,67 +527,39 @@ networkingMode=mirrored
 wsl --shutdown
 ```
 
-Wait 10 seconds, open a WSL terminal, then verify:
+Wait ten seconds, open a WSL terminal, then verify **both** of these:
 
 ```powershell
 wsl -- hostname -I                  # must list 192.168.137.1
 wsl -- ping -c 2 <devkit-ip>        # must reply
 ```
 
-> ✅ **Both must pass.** If they do not, check `.wslconfig` was not saved as
-> `.wslconfig.txt`, then see [Setup errors](#setup-errors).
+If they fail, check `.wslconfig` was not saved as `.wslconfig.txt`.
 
-<a id="step-4"></a>
-### 4. Get the code and install sima-cli
+### 4. sima-cli
 
 Become root **first**. `sudo su -` is a login shell, so it drops you in `/root`.
-Cloning after that puts the repo at `/root/sima-projects`, which is why every later
-step can just say `cd sima-projects`.
 
 ```bash
-# WSL
 sudo su -
 apt update && apt install -y git python3-venv python3-pip
-
-git clone https://github.com/RizwanMunawar/sima-projects.git
-cd sima-projects
-
 python3 -m venv sima
 source sima/bin/activate
 pip install sima-cli
 sima-cli login                  # needs a community.sima.ai account
 ```
 
-You now have both apps and the `sima` venv beside them. **Every command in this repo runs
-from this directory.**
+### 5. Docker and NFS
 
-<a id="step-5"></a>
-### 5. Docker Engine + NFS
-
-The Neat SDK **is** a Docker container. No Docker, no SDK.
+The Neat SDK **is** a Docker container. No Docker, no SDK. Install Docker Engine with
+[Docker's own instructions for Ubuntu](https://docs.docker.com/engine/install/ubuntu/),
+which stay current in a way a copy here would not, then add what the SDK needs on top:
 
 ```bash
-# WSL, from docs.docker.com/engine/install/ubuntu
-sudo apt update && sudo apt install -y ca-certificates curl
-sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
-
-sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
-Types: deb
-URIs: https://download.docker.com/linux/ubuntu
-Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
-Components: stable
-Architectures: $(dpkg --print-architecture)
-Signed-By: /etc/apt/keyrings/docker.asc
-EOF
-
-sudo apt update
-sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 sudo apt install -y nfs-kernel-server nfs-common
 ```
 
-Docker needs systemd to survive a WSL restart:
+Two things are specific to WSL. Docker needs systemd to survive a restart:
 
 ```bash
 grep -q 'systemd=true' /etc/wsl.conf 2>/dev/null || sudo tee -a /etc/wsl.conf <<'EOF'
@@ -244,23 +569,17 @@ systemd=true
 EOF
 ```
 
-```powershell
-wsl --shutdown          # PowerShell, then reopen WSL
-```
+Then `wsl --shutdown` in PowerShell, reopen WSL, and confirm:
 
 ```bash
 sudo systemctl enable --now docker
-sudo docker run hello-world
+sudo docker run hello-world      # must print "Hello from Docker!"
 ```
 
-> ✅ Must print **"Hello from Docker!"** If not, see [Setup errors](#setup-errors).
-
-<a id="step-6"></a>
-### 6. Install the Neat SDK
+### 6. The Neat SDK
 
 ```bash
 sudo su -
-cd sima-projects
 source sima/bin/activate
 sima-cli install ghcr:sima-neat/sdk
 sima-cli sdk setup --devkit <devkit-ip>
@@ -271,124 +590,34 @@ sima-cli sdk setup --devkit <devkit-ip>
 | Prompt | Answer |
 |:--|:--|
 | `Some system checks failed. Continue?` | `y`. The Firewall row says *Unverified*, not failed |
-| `Install Model Compiler extension?` | `Y`. Adds **9 GB**, only needed to compile your own models |
+| `Install Model Compiler extension?` | `Y`. Adds 9 GB, only needed to compile your own models |
 | `Install VSCode Extensions?` | `y` lowercase. A bare Enter is rejected |
 | `Apply passwordless sudo on DevKit?` | `y`. Required for workspace sync |
-| everything else | `Y` / Enter |
+| everything else | `Y` or Enter |
 
-Then confirm the **board half** actually happened, because it is what fails quietly:
+`mount.nfs: Connection timed out` is fine; setup falls back to rsync and carries on.
+
+Then confirm the **board half** actually happened, because that is the part that fails
+quietly:
 
 ```bash
 ssh sima@<devkit-ip> "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat.__version__)'"
 ```
 
-> ✅ Prints a version → setup is done.
-> ❌ `No such file or directory` → see [pyneat missing on the DevKit](#pyneat-missing).
+A version means you are done, and it also tells you where `pyneat` lives: that venv is
+what to install into.
 
-> [!NOTE]
-> **`mount.nfs: Connection timed out` is fine.** Setup falls back to rsync and carries
-> on. The DevKit IP also changes between reboots (DHCP), so if things hang, check with
-> `arp -a | Select-String "192.168.137"`.
-
-## Now pick an app
-
-Setup is finished. **Everything from here is app-specific**, so continue in one of these
-and do not come back except for the shared reference below.
-
-| Guide | Start here if you want |
-|:--|:--|
-| [**Object detection →**](object-detection/README.md) | Boxes, labels and confidence. The simplest thing that proves the whole chain works |
-| [**Instance segmentation →**](instance-segmentation/README.md) | Per-pixel masks and a background blur |
-| [**Fall detection →**](fall-detection/README.md) | People tracking, a fall state machine and SMTP alerts |
-
-Each of those covers, for its own app: fetching the model and a test video, deploying,
-running, pulling the result back, every config key, the overlay, tuning and its own error
-table.
-
-## Shared rules and reference
-
-The rest of this page is what both apps rely on. You should not need it until something
-breaks.
-
-<a id="video-must-be-raw-h264"></a>
-### Video must be raw H.264
-
-The DevKit decodes H.264 in hardware, and `.mp4` containers hit a
-[known bug](#known-issues). **Every app in this repo needs raw `.h264`.** Convert once,
-losslessly:
-
-```powershell
-ffmpeg -i clip.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 clip.h264
+```bash
+ssh sima@<devkit-ip>
+~/pyneat/bin/pip install sima-vision
+~/pyneat/bin/sima-vision doctor      # every row should say yes
 ```
 
-Both apps read the real geometry out of the stream's SPS, so leave `source.fps`,
-`source.width` and `source.height` at `0`. Renaming an `.mp4` to `.h264` does not work
-and is caught at startup with the command above in the error message.
+`No such file or directory` from the check above means pairing never installed it, almost
+always because networking was not fixed first. Re-run
+`sima-cli sdk setup --devkit <devkit-ip>` from WSL now that it works.
 
-Ready-made clips, already converted, are on the
-[releases page](https://github.com/RizwanMunawar/sima-projects/releases/tag/0.0.1). Each
-app README has the one-line `curl` that puts them in the right place.
-
-### Known issues
-
-<details>
-<summary><b><code>groups.video_input</code> cannot play <code>.mp4</code> · Neat 0.3.0</b></summary>
-
-```
-gst_parse_launch failed: No src-element named "n1_demux" - omitting link
-```
-
-`VideoTrackSelect` builds its fragment from one variable, so what it emits is correct:
-
-```cpp
-const std::string base = "n" + std::to_string(node_index) + "_demux";
-ss << "qtdemux name=" << base << " " << base << ".video_" << idx_;
-```
-
-The graph then appends an instance suffix, but the renamer only rewrites `name=<x>`
-declarations. `element_names()` reports just `{"n1_demux"}`, so the pad reference is
-never fixed. **Any non-empty suffix breaks it**, so reordering does not help.
-
-**Fix:** no container, no demuxer. Every app here detects `.h264` / `.264` / `.avc` /
-`.bin` and builds the chain by hand:
-
-```
-FileInput → H264Parse → Queue → SimaDecode → CapsRaw
-```
-
-A container input still uses `groups.video_input` and prints the conversion command.
-
-</details>
-
-### Reference
-
-#### Addresses
-
-| What | Value | Notes |
-|:--|:--|:--|
-| DevKit | `<devkit-ip>`, user `sima` | DHCP, changes between reboots |
-| Your PC, as the board sees it | `192.168.137.1` | Fixed by ICS, also the board's route to the internet |
-
-#### Paths
-
-| What | Where | Machine |
-|:--|:--|:--|
-| Repo | `/root/sima-projects` | WSL |
-| Repo, from Windows | `\\wsl$\Ubuntu\root\sima-projects` | Windows |
-| Shared workspace | `/workspace` | SDK container |
-| Shared workspace | `/root/workspace` | WSL |
-| SDK container name | `ghcr.io-sima-neat-sdk-latest` | WSL |
-| PyNeat venv | `~/pyneat` | DevKit |
-| An app, once deployed | `~/<app-name>` | DevKit |
-| Playbooks | `/neat-resources/apps-src/skills/` | SDK container |
-| Neat source | `/neat-resources/core-src/` | SDK container |
-
-> [!IMPORTANT]
-> **`/workspace` in the container is `/root/workspace` in WSL, not the repo.** Anything
-> downloaded there is not in `/root/sima-projects` and no app will find it. Both app
-> READMEs download straight into the repo for exactly this reason.
-
-#### Five rules that prevent most problems
+### Five rules that prevent most problems
 
 | # | Rule | Because |
 |:--|:--|:--|
@@ -396,195 +625,183 @@ A container input still uses `groups.video_input` and prints the conversion comm
 | 2 | Docker before the SDK | The SDK **is** a container |
 | 3 | `cd` after `sudo su -` | `-` is a login shell, so it drops you in `/root` |
 | 4 | Raw `.h264`, never `.mp4` | Containers hit a demuxer bug in Neat 0.3.0 |
-| 5 | Always `ssh -tt` | Ctrl-C needs a pty to reach the app and release the MLA |
+| 5 | Never leave the only copy on the board | A firmware update wipes its home directory |
 
-### Setup questions
+### Firmware version mismatch
 
-<details>
-<summary><b>Can I try anything without a DevKit?</b></summary>
+```
+ERROR: DevKit/SDK version mismatch. DevKit 2.0.0, SDK 2.1.2
+```
 
-Yes, the config half of either app:
+New boards often ship older firmware. eLxr cannot be updated remotely, so this runs **on
+the board**, which already has internet over your Ethernet cable:
 
 ```bash
-python3 object-detection/src/app.py --validate-config
-python3 instance-segmentation/src/app.py --validate-config
+ssh sima@<devkit-ip>
+sima-cli login
+sima-cli update            # menu, then "Update all packages to the latest"
 ```
 
-Both need only `pyyaml`, run on Windows or WSL, and check that the model family resolves
-to a real `BoxDecodeType` and that every setting is in range. Inference itself needs the
-board, because it runs on the MLA.
-
-</details>
-
-<details>
-<summary><b>The DevKit IP changed and nothing connects</b></summary>
-
-Expected: the board takes its address by DHCP, so it moves between reboots.
-
-```powershell
-arp -a | Select-String "192.168.137"
-```
-
-If SSH then complains the host key changed, that is the same board on a recycled
-address: `ssh-keygen -R <ip>`.
-
-</details>
-
-<details>
-<summary><b>Do I have to re-run the setup after every code change?</b></summary>
-
-No. Steps 1 to 6 are once per machine. After an edit it is `scp -r <app>/` and run again.
-You only re-pair (step 6) if the board's home directory is wiped, which a firmware update
-can do.
-
-</details>
-
-<details>
-<summary><b>Can I run both apps on the same board?</b></summary>
-
-Yes. They deploy to separate directories (`~/object-detection` and
-`~/instance-segmentation`) and never share state. Run them one at a time: both want the
-MLA, and the second one will fail with a busy device if the first is still alive.
-
-```bash
-ssh sima@<devkit-ip> pkill -f src/app.py     # before switching apps
-```
-
-</details>
-
-<details>
-<summary><b>Can I just use numpy 2?</b></summary>
-
-No. `pyneat` and every `simaai-*` package on the board need `numpy<2`, which is why every
-`requirements.txt` here pins it. If pip has already upgraded you:
-`pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"`
-
-</details>
-
-<details>
-<summary><b>Where does the SDK container fit in day to day?</b></summary>
-
-Start it from the repo root when you need `dk` or `neat`:
-
-```bash
-sudo su -
-cd sima-projects
-source sima/bin/activate
-sima-cli sdk neat
-```
-
-| Task | Command | Run in |
-|:--|:--|:--|
-| SSH to the board | `dk shell` | SDK container |
-| Check the sync method | `dk status` | SDK container |
-| Component versions | `neat` | SDK container |
-
-Deploying and running an app does **not** need the container. That is plain `scp` and
-`ssh` from WSL, and it is written out in each app README.
-
-</details>
+Budget 15 to 40 minutes plus a reboot, then re-run `sima-cli sdk setup`. If SSH complains
+the host key changed, that is expected: `ssh-keygen -R <devkit-ip>`.
 
 ### Setup errors
 
-Bring-up problems only. Anything about a running app is in that app's own error table:
-[object detection](object-detection/README.md#common-errors) ·
-[instance segmentation](instance-segmentation/README.md#common-errors) ·
-[fall detection](fall-detection/README.md#common-errors).
-
 | Symptom | Fix |
 |:--|:--|
-| `sima-cli: command not found` | Venv not active: `sudo su -`, `cd sima-projects`, `source sima/bin/activate` |
+| `sima-cli: command not found` | The venv is not active: `sudo su -`, then `source sima/bin/activate` |
 | Venv landed in `/root/sima` | You ran `cd` before `sudo su -` |
 | `externally-managed-environment` | Create the venv first |
 | `Error: No such command 'sdk'` | You ran it on the board. `sdk` is PC-side |
 | WSL cannot ping the DevKit | `.wslconfig` missing, saved as `.txt`, or WSL not restarted |
 | `Cannot connect to the Docker daemon` | `sudo systemctl start docker` |
 | Docker dead after every restart | systemd not enabled in `/etc/wsl.conf` |
-| `ssh: Could not resolve hostname d:` | Windows path used in Linux. `scp` read `D:` as a hostname |
-| `scp: Connection closed` | Usually follows the above |
-| Copy hangs | IP changed. `arp -a \| Select-String "192.168.137"` |
-| `ModuleNotFoundError: pyneat` | You are on the PC, or pairing never ran. See [below](#pyneat-missing) |
-| `pyneat requires numpy<2` | `pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"` |
-| `No src-element named "nN_demux"` | `.mp4` demuxer bug. Convert to [`.h264`](#video-must-be-raw-h264) |
-| Device busy | Orphaned run: `ssh sima@<ip> pkill -f src/app.py` |
-| DevKit/SDK version mismatch | [Firmware recovery](#recovery) below |
-
-### Recovery
-
-<details>
-<summary><b>DevKit firmware version mismatch</b></summary>
-
-```
-ERROR: DevKit/SDK version mismatch. DevKit 2.0.0, SDK 2.1.2
-```
-
-New boards often ship older firmware. **eLxr cannot be updated remotely**, so this runs
-**on the board**. It needs internet, which Windows ICS already provides over your
-Ethernet cable.
-
-```bash
-ssh sima@<devkit-ip>
-sima-cli login
-sima-cli update            # menu → "Update all packages to the latest"
-```
-
-The sudo password is the same one you SSH in with. Budget 15–40 minutes plus a reboot.
-
-> `--dryrun` ends with `No ELXR update was applied`. That is what a dry run does. Run
-> it again without the flag.
->
-> A firmware update may wipe the board's home directory. Never keep the only copy of
-> anything there.
-
-Afterwards, re-run `sima-cli sdk setup --devkit <ip>`. If SSH complains the host key
-changed, that is expected: `ssh-keygen -R <ip>`.
+| `ssh: Could not resolve hostname d:` | A Windows path went to `scp`, which read `D:` as a host. Use `sima-vision push` |
+| Copy hangs | The board's IP changed. Find it again with `arp -a` |
+| `DevKit/SDK version mismatch` | Firmware recovery, above |
 
 </details>
 
+<br>
+
+## Troubleshooting
+
 <details>
-<summary><b>pyneat missing on the DevKit</b></summary>
+<summary><b>Symptom to fix, for a running task.</b></summary>
 
-<a id="pyneat-missing"></a>
+<br>
 
-Means pairing never installed it, almost always because networking was not fixed first.
-Re-run pairing from **WSL** now that it works:
+| Symptom | Fix |
+|:--|:--|
+| `ModuleNotFoundError: pyneat` **on the board** | You installed into a Python that is not the `pyneat` venv. `~/pyneat/bin/pip install sima-vision`, or set `SIMA_VISION_PYNEAT`. `sima-vision doctor` confirms which |
+| `ModuleNotFoundError: pyneat` **on your PC** | Expected. Inference only happens on the board; use `sima-vision remote -- detect` to drive it from here |
+| `pyneat` missing after pairing | Pairing never installed it, almost always because networking was not fixed first. Re-run `sima-cli sdk setup --devkit <ip>` from WSL |
+| `pyneat requires numpy<2` | `~/pyneat/bin/pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"` |
+| `model archive not found` | `sima-cli login`, then run again. It fetches the pack itself |
+| `sima-cli download did not produce ...` | Not logged in. `sima-cli login`, or pass `--model` with a path or URL |
+| `source file not found` | The error lists what is actually in the folder. Paths are relative to where you launch |
+| `is not a raw H.264 elementary stream` | You renamed an `.mp4` instead of converting it. The error carries the ffmpeg command |
+| `No src-element named "nN_demux"` | The `.mp4` demuxer bug. Convert to `.h264` |
+| Device busy | An orphaned run still holds the MLA: `sima-vision remote -- doctor` first, then `ssh sima@<devkit-ip> pkill -f sima-vision` |
+| Stuck after `loading model` | The first load unpacks the archive. Give it a minute |
+| First run seems to hang before anything prints | That is the 13 MB clip and the model downloading. It only happens once |
+| `processed=0` and a 20 second timeout | The source caps are not negotiating. Leave `--fps`, `--width` and `--height` at 0 |
+| Output video shorter than the input, plays fast | Frames are being dropped. Set `runtime.overflow_policy: auto` |
+| Recording only a few frames long | Usually `output.insight`. Its encoder shares the codec daemon with the decoder |
+| `timed out waiting for instances` after a few frames | The graph starved the decoder's buffer pool. Lower `runtime.output_buffers`, and use `--minimal` to tell "too slow" from "wrong graph" |
+| Dropped frames on a live source | Raise `--queue-depth`, keep `overflow_policy: auto` |
+| `has unknown class` | A typo. The error suggests near matches from the labels file |
 
-```bash
-sima-cli sdk setup --devkit <devkit-ip>
+### Known issues
+
+**`groups.video_input` cannot play `.mp4`, Neat 0.3.0.**
+
+```
+gst_parse_launch failed: No src-element named "n1_demux" - omitting link
 ```
 
-Still missing? Install by hand on the board. Match the version from `neat` in the
-container, and install under `/media/nvme` because the root filesystem is too small:
+`VideoTrackSelect` builds its fragment from one variable, so what it emits is correct. The
+graph then appends an instance suffix, but the renamer only rewrites `name=<x>`
+declarations, so the pad reference is never fixed. Any non-empty suffix breaks it, and
+reordering does not help.
 
-```bash
-sudo mkdir -p /media/nvme/neat && sudo chown "$USER:$USER" /media/nvme/neat
-cd /media/nvme/neat
-sima-cli login
-sima-cli neat install core@v0.3.0
+The fix is no container, so no demuxer. `sima-vision` detects `.h264`, `.264`, `.avc` and
+`.bin` and builds the chain by hand:
+
+```
+FileInput -> H264Parse -> Queue -> SimaDecode -> CapsRaw
 ```
 
-> `sima-cli` downloads into the **current directory**, so `cd` somewhere you own first.
-> `-t pyneat` fetches only the wheel, which is not enough to run an app.
+A container input still goes through `groups.video_input` and prints the conversion
+command.
 
 </details>
+
+<br>
+
+## How it works
+
+<details>
+<summary><b>The pipeline, and why it is shaped that way.</b></summary>
+
+<br>
+
+The pipeline is a Neat `Graph`, not a single `Model.run`, because it has several stages,
+named public endpoints and a branch with a fan-in:
+
+```
+source --> branch --> frame ---------------+
+              |                            +--> combine("<task>_output")
+              +----> model --> results ----+
+
+<task>_output --> parse --> overlay --> video file + stills
+                        |-> MetadataSender  (JSON over UDP)
+                        +-> VideoSender     (H.264 RTP over UDP)
+```
+
+Frames come off the hardware decoder, whose buffer pool is small: the boot log prints
+`BufferNum=8`. Everything expensive therefore happens on a sink thread, so the pull loop
+hands each buffer back immediately. Holding one across a `pull()` is what deadlocks the
+decoder part-way through a clip, and it looks exactly like the app being slow.
+
+Boxes arrive as one UInt8 tensor tagged `BBOX`, packed as a `uint32` count followed by
+24-byte records of `x, y, w, h, score, class_id` in source-image pixels. A segment head
+packs its masks into the tail of that same buffer.
+
+```
+sima_vision/
+  cli.py        the command line          api.py      the Python API
+  config.py     loading and validation    scene.py    the preview scene
+  assets.py     clips and model archives  devkit.py   push, pull, remote
+  media.py      H.264 and geometry        neat.py     graph assembly
+  samples.py    decoding a sample         masks.py    masks and compositing
+  draw.py       the overlay               sinks.py    video, stills, Insight
+  runloop.py    the pull loop
+  tasks/        detect.py   segment.py   fall.py
+```
+
+`assets.py` and `devkit.py` are the only modules that reach the network, and `assets.py`
+only from a run. A `--validate` or a `preview` resolves the same paths and fetches
+nothing.
+
+</details>
+
+<br>
+
+## Contributing
+
+```bash
+git clone https://github.com/RizwanMunawar/sima-projects.git
+cd sima-projects
+pip install -e ".[dev,preview]"
+
+ruff check sima_vision tests
+pytest -q
+```
+
+The tests need no board. Mask decoding, compositing, the overlay, the tracker and the fall
+rules are plain numpy and OpenCV, so they run anywhere, and the `ssh` and `scp` wrappers
+are tested against a fake subprocess. CI covers Python 3.10 to 3.13 on Linux, macOS and
+Windows, builds the wheel and installs it clean.
+
+<br>
 
 ## License
 
-The models used here for testing are **Ultralytics YOLO26**, released under **AGPL-3.0**.
-All other parts of this code are released under **Apache-2.0**.
+The models used here for testing are **Ultralytics YOLO26**, under **AGPL-3.0**. All other
+parts of this repository are under **Apache-2.0**. See [LICENSE](LICENSE).
 
 ## Credits
 
-- [SiMa.ai on GitHub](https://github.com/SiMa-ai): Modalix, the Palette SDK and Neat
-- [Ultralytics](https://github.com/ultralytics/ultralytics): YOLO26 models
+- [SiMa.ai](https://github.com/SiMa-ai) for Modalix, the Palette SDK and Neat
+- [Ultralytics](https://github.com/ultralytics/ultralytics) for the YOLO26 models
 
 <div align="center">
 
-Created with ❤️ by **Muhammad Rizwan Munawar**, passionate about implementing
-computer vision ideas and sharing my gains with the community.
+<br>
 
-If this saved you an afternoon, **⭐ the repo** and pass it on to someone else
-bringing up a DevKit.
+Built by **Muhammad Rizwan Munawar**. If this saved you an afternoon, **star the repo**
+and pass it on to someone else bringing up a DevKit.
 
 <br>
 

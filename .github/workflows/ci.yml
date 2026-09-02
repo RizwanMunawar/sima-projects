@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every supported Python on Linux, plus one on macOS and Windows. The
+        # per-OS jobs are what keep the path handling, the console encoding and
+        # the ssh/scp wrappers honest; a third full cross-product would only buy
+        # the same answer four times.
+        os: [ubuntu-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        include:
+          - os: macos-latest
+            python-version: "3.12"
+          - os: windows-latest
+            python-version: "3.12"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        # opencv-python-headless and numpy are not runtime dependencies: the
+        # DevKit provides both. They are installed here so the mask, compositing
+        # and overlay tests actually run instead of being skipped.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]" numpy opencv-python-headless
+
+      - name: Lint
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: ruff check sima_vision tests
+
+      - name: Test
+        run: pytest -q
+
+  package:
+    name: build the wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Build
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+
+      - name: Check the metadata PyPI will see
+        run: twine check dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  install:
+    name: install the wheel (${{ matrix.os }})
+    needs: package
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Install it with nothing else
+        # What `pip install sima-vision` gives you on a fresh DevKit: the wheel
+        # and its one declared dependency, no numpy and no OpenCV.
+        shell: bash
+        run: pip install --quiet dist/*.whl
+
+      - name: Run it from an empty directory
+        # `--validate` must resolve a model and a clip out of the defaults, print
+        # them, and touch neither the network nor the board. Run from a temp
+        # directory so nothing in the checkout can be what makes it pass.
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          sima-vision --version
+          sima-vision detect --validate
+          sima-vision segment --validate
+          sima-vision fall --validate
+          test ! -d assets   # --validate must not have downloaded anything
