@@ -5,6 +5,10 @@ name: Release
 #
 #   git tag v0.1.0 && git push origin v0.1.0
 #
+# The tag must point at the commit you mean. `git tag` tags whatever HEAD is,
+# so if `git pull` failed you will tag the wrong thing, and a tag on a commit
+# without this file cannot start this workflow at all.
+#
 # Authentication is PyPI Trusted Publishing (OIDC), so there is no API token to
 # store or rotate. Before the first release, add a pending publisher at
 # https://pypi.org/manage/account/publishing/ with:
@@ -15,19 +19,19 @@ name: Release
 #   Workflow name     : release.yml
 #   Environment       : pypi
 #
-# The `test-pypi` job runs first on every tag, so a broken package is caught on
-# TestPyPI before it can burn a version number on the real index -- a published
-# version can never be reused, even after deletion.
+# Every claim has to match or the upload fails with `invalid-publisher`, which
+# is what a missing publisher looks like rather than a permissions error.
+#
+# There is no TestPyPI rehearsal. What that step was really checking is that
+# the artifact uploads and installs, so `install` now does the second half for
+# real on all three platforms, and it gates the publish. A version number on
+# PyPI can never be reused, even after deletion, so nothing should reach it
+# that has not been installed from a wheel first.
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
-    inputs:
-      test_only:
-        description: "Publish to TestPyPI only"
-        type: boolean
-        default: true
 
 jobs:
   build:
@@ -75,13 +79,53 @@ jobs:
           name: dist
           path: dist/
 
-  test-pypi:
-    name: publish to TestPyPI
+  install:
+    name: install the wheel (${{ matrix.os }})
     needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Install it with nothing else
+        # What `pip install sima-vision` gives you on a fresh DevKit: the wheel
+        # and its one declared dependency, no numpy and no OpenCV.
+        shell: bash
+        run: pip install --quiet dist/*.whl
+
+      - name: Run it from an empty directory
+        # Nothing in a checkout can be what makes this pass; there is no
+        # checkout in this job at all.
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          sima-vision --version
+          sima-vision doctor
+          sima-vision detect --validate
+          sima-vision segment --validate
+          sima-vision fall --validate
+          test ! -d assets   # --validate must not have downloaded anything
+
+  pypi:
+    name: publish to PyPI
+    needs: install
+    # Only a real tag publishes. A manual run builds, tests and installs the
+    # wheel, then stops, which is the rehearsal TestPyPI used to be.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment:
-      name: test-pypi
-      url: https://test.pypi.org/p/sima-vision
+      name: pypi
+      url: https://pypi.org/p/sima-vision
     permissions:
       id-token: write        # required for trusted publishing
     steps:
@@ -92,29 +136,8 @@ jobs:
 
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          repository-url: https://test.pypi.org/legacy/
           # A re-run of the same tag should not fail the whole release.
           skip-existing: true
-
-  pypi:
-    name: publish to PyPI
-    needs: test-pypi
-    # Only a real tag publishes for real; a manual run stops at TestPyPI unless
-    # test_only is explicitly turned off.
-    if: startsWith(github.ref, 'refs/tags/v') && !inputs.test_only
-    runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/p/sima-vision
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
-
-      - uses: pypa/gh-action-pypi-publish@release/v1
 
   github-release:
     name: attach the artifacts to the GitHub release
