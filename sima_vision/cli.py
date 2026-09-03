@@ -35,6 +35,7 @@ from .devkit import (
     run_watch,
 )
 from .neat import describe_preprocess
+from .netsetup import run_setup_network
 from .runloop import Stopper
 from .runtime import (
     FAMILY_DECODE_TOKENS,
@@ -58,6 +59,10 @@ without a board:
   sima-vision init segment                    write a documented config.yaml
   sima-vision segment --validate              check it
   sima-vision doctor                          what is installed, and what it allows
+
+first time, if the board has no internet:
+  sima-vision setup network                   check the sharing from PC to board
+  sima-vision setup network --apply           and set it up (Windows, as admin)
 
 driving the board from your PC:
   sima-vision push clip.h264                  copy files over
@@ -234,6 +239,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_init_parser(subparsers)
     add_fetch_parser(subparsers)
     add_doctor_parser(subparsers)
+    add_setup_parser(subparsers)
     add_push_parser(subparsers)
     add_pull_parser(subparsers)
     add_watch_parser(subparsers)
@@ -300,6 +306,43 @@ def add_pull_parser(subparsers) -> None:
     sub.add_argument("--into", type=Path, default=Path("."), metavar="DIR",
                      help="Where to put them here. Default the current directory.")
     add_host_argument(sub)
+    sub.set_defaults()
+
+
+def add_setup_parser(subparsers) -> None:
+    """``setup network`` -- share this PC's internet with the board."""
+    sub = subparsers.add_parser(
+        "setup",
+        help="One-time setup steps, starting with the network",
+        description="One-time things you do once per machine.",
+    )
+    inner = sub.add_subparsers(dest="topic", metavar="TOPIC", required=True)
+    network = inner.add_parser(
+        "network",
+        help="Share this PC's internet connection with the DevKit",
+        description=(
+            "The DevKit has no internet of its own: it is cabled to this PC, so "
+            "this PC has to pass its connection along. This works out which of "
+            "your adapters has the internet and which one the board is on, says "
+            "whether sharing is actually set up, and with --apply sets it up.\n\n"
+            "It changes nothing unless you pass --apply."
+        ),
+        epilog=(
+            "examples:\n"
+            "  sima-vision setup network\n"
+            "  sima-vision setup network --apply\n"
+            "  sima-vision setup network --host sima@192.168.137.50\n"
+            "\nWith --host it also runs the checks on the board itself, which is\n"
+            "the only answer that cannot be wrong.\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    network.add_argument(
+        "--apply", action="store_true",
+        help="Actually turn sharing on. Windows only, and needs an "
+             "Administrator terminal; without one it prints the command to run.",
+    )
+    add_host_argument(network)
     sub.set_defaults()
 
 
@@ -566,6 +609,8 @@ def main(argv: list[str] | None = None) -> int:
                 return run_init(args.task, args.out, args.force)
             if args.command == "fetch":
                 return run_fetch(args.task, args.into)
+            if args.command == "setup":
+                return run_setup_network(args.host, args.apply)
             if args.command == "push":
                 return run_push(args.paths, args.host, args.dest)
             if args.command == "pull":

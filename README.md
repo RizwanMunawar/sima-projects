@@ -37,6 +37,7 @@ sima-vision detect          # sample clip and model fetched for you, then run
 |:--|:--|
 | [Install](#install) | pip, and what each extra buys you |
 | [Quickstart](#quickstart) | Start to finish, host then DevKit |
+| [Give the DevKit internet](#give-the-devkit-internet) | One command, before anything else works |
 | [The three tasks](#the-three-tasks) | What each does, and its own flags |
 | [Commands](#commands) | Every subcommand in one table |
 | [Settings](#settings) | Flags, Python keywords, `config.yaml` |
@@ -104,6 +105,12 @@ sima-cli login                            # once, for the model packs
 ~/pyneat/bin/sima-vision detect           # that is the whole thing
 ```
 
+> [!IMPORTANT]
+> **The board needs internet for this**, to fetch the model. It has none of its own: it
+> gets yours, through the cable. If `sima-cli login` hangs or the download fails, that is
+> what is missing. One command sets it up:
+> [Give the DevKit internet](#give-the-devkit-internet).
+
 No arguments. Each task has a default sample clip and model archive, and the first run
 puts both in `./assets/`: the clip comes straight from a public GitHub release, the model
 through `sima-cli`, which holds your login. Every run after that reuses them.
@@ -136,6 +143,143 @@ model archive outright.
 
 > **New board?** Bring-up is a one-time job of about two hours, mostly downloading. That
 > is [Set up a new DevKit](#set-up-a-new-devkit). Nothing above needs it.
+
+<br>
+
+## Give the DevKit internet
+
+The board has no internet of its own. It is plugged straight into your PC, so
+your PC has to pass its connection along. Without it the board cannot download a
+model, and `sima-cli login` will not work.
+
+**One command tells you where you stand:**
+
+```bash
+sima-vision setup network
+```
+
+```
+Internet sharing, PC -> DevKit
+
+  adapters:
+    Ethernet               192.168.137.1    no way out
+    Wi-Fi                  192.168.18.15    the internet
+
+  internet comes in on:  Wi-Fi  (192.168.18.15)
+  the DevKit is on:      Ethernet  (192.168.137.1)
+
+  sharing is OFF. The board cannot reach anything through this PC.
+```
+
+It works out which of your network adapters has the internet and which one the
+board is cabled to. It changes nothing unless you ask it to.
+
+**Then turn it on.** This needs Administrator, because it is changing Windows
+networking. Right-click Start, choose **Terminal (Admin)**, and run:
+
+```bash
+sima-vision setup network --apply
+```
+
+Run it without Administrator and it prints the exact command to paste into an
+admin terminal instead, so you are never stuck.
+
+**Then, on the board**, ask for an address:
+
+```bash
+sudo dhclient -v eth0
+```
+
+**Finally, check the whole path end to end.** Give it the board's address and it
+runs the tests on the board itself, which is the only answer that cannot be wrong:
+
+```bash
+sima-vision setup network --host sima@<devkit-ip>
+```
+
+```
+  asking the board itself (sima@192.168.137.50):
+    yes  an address on the shared network
+    yes  a route out
+    yes  the PC answers
+    yes  the internet answers
+    yes  names resolve
+
+  The board is online. Nothing else to do.
+```
+
+Each line rules out one layer, so the **first** one that says `NO` tells you what
+is wrong:
+
+| First failure | What it means | What to do |
+|:--|:--|:--|
+| an address on the shared network | The board never got one from DHCP | On the board: `sudo dhclient -v eth0` |
+| a route out | It has an address but no default route | Turn sharing off and on again with `--apply` |
+| the PC answers | The cable, or the wrong adapter is shared | Check the cable; re-run `--apply` |
+| the internet answers | It reaches your PC but no further, so sharing is not forwarding | Re-run with `--apply` |
+| names resolve | Everything routes; only DNS is missing | On the board, put `nameserver 192.168.137.1` in `/etc/resolv.conf` |
+
+<details>
+<summary><b>If it says "no second network found to share with"</b></summary>
+
+<br>
+
+Nothing that looks like a DevKit is plugged in. Every adapter that is up already
+has its own way to the internet, so there is nothing to share *with*.
+
+1. Plug the Ethernet cable from the board into your PC's Ethernet port.
+2. Power the board on and give it a minute.
+3. Run `sima-vision setup network` again.
+
+If the port has no lights, try the other end of the cable, then a different
+cable. The board's link light comes on before anything else does.
+
+</details>
+
+<details>
+<summary><b>Why it says "needs Administrator to read"</b></summary>
+
+<br>
+
+Windows will not tell an ordinary program whether Internet Connection Sharing is
+on. Two things look like they answer the question and do not:
+
+* **`Forwarding: Disabled` on the adapters.** ICS does its own NAT and never
+  touches that flag, so it reads Disabled on a setup that works perfectly.
+* **`192.168.137.1` being there.** ICS assigns that address, but leaves it behind
+  when sharing is turned off, so it outlives the thing it seems to prove.
+
+Rather than guess from either, the command says it does not know and asks you to
+re-run in an admin terminal. Or skip it and use `--host`, since what the board
+can actually reach settles it either way.
+
+</details>
+
+<details>
+<summary><b>On macOS or Linux</b></summary>
+
+<br>
+
+`--apply` is Windows-only for now, but the diagnosis works everywhere and prints
+the commands for your system. On Linux, with `wlan0` as the internet and `eth0`
+going to the board:
+
+```bash
+sudo sysctl -w net.ipv4.ip_forward=1
+sudo iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE
+sudo iptables -A FORWARD -i eth0 -o wlan0 -j ACCEPT
+```
+
+You also need something to hand the board an address; `dnsmasq` on `eth0` is the
+usual choice. On macOS it is System Settings, General, Sharing, Internet Sharing.
+
+</details>
+
+> [!TIP]
+> **It stops working after every reboot?** That is Windows, not you. ICS does not
+> come back on its own unless it is told to persist, which `--apply` sets for you.
+> If it was set up by hand through the Sharing tab, re-run `--apply` once and it
+> will survive from then on.
 
 ## The three tasks
 
@@ -273,6 +417,7 @@ board.
 | `sima-vision init` | no | Write a documented `config.yaml` here |
 | `sima-vision doctor` | no | What is installed, and what it lets you do |
 | `sima-vision fetch` | no | Download the sample clips up front |
+| `sima-vision setup network` | no | Check and set up internet sharing from this PC to the board |
 | `sima-vision watch` | no | Run a task on the DevKit and watch its live video here |
 | `sima-vision push` | no | Copy files to the DevKit |
 | `sima-vision pull` | no | Copy results back |
