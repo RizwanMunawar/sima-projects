@@ -25,8 +25,15 @@ import os
 import sys
 from pathlib import Path
 
-from . import __version__, runtime
-from .devkit import DEVKIT_ENV, run_pull, run_push, run_remote
+from . import __version__
+from .devkit import (
+    DEVKIT_ENV,
+    VIDEO_PORT,
+    run_pull,
+    run_push,
+    run_remote,
+    run_watch,
+)
 from .neat import describe_preprocess
 from .runloop import Stopper
 from .runtime import (
@@ -49,13 +56,13 @@ examples:
 
 without a board:
   sima-vision init segment                    write a documented config.yaml
-  sima-vision preview --task segment          see what that config looks like
   sima-vision segment --validate              check it
   sima-vision doctor                          what is installed, and what it allows
 
 driving the board from your PC:
   sima-vision push clip.h264                  copy files over
-  sima-vision remote -- detect --frames 200   run it there, watch it here
+  sima-vision watch  -- detect                run it there, live video back here
+  sima-vision remote -- detect --frames 200   run it there, output in the terminal
   sima-vision pull                            bring the results back
 
 config.yaml in the working directory is picked up automatically, and so is
@@ -208,8 +215,8 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=f"sima-vision {__version__}")
-    # dest="command", not "task": `preview --task` and the `init`/`fetch`
-    # positional are both called task, and would overwrite it.
+    # dest="command", not "task": the `init` and `fetch` positionals are
+    # both called task, and would overwrite it.
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     for name, task_cls in TASKS.items():
@@ -226,10 +233,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_init_parser(subparsers)
     add_fetch_parser(subparsers)
-    add_preview_parser(subparsers)
     add_doctor_parser(subparsers)
     add_push_parser(subparsers)
     add_pull_parser(subparsers)
+    add_watch_parser(subparsers)
     add_remote_parser(subparsers)
     return parser
 
@@ -292,6 +299,50 @@ def add_pull_parser(subparsers) -> None:
                      help="Names on the board, relative to its home directory.")
     sub.add_argument("--into", type=Path, default=Path("."), metavar="DIR",
                      help="Where to put them here. Default the current directory.")
+    add_host_argument(sub)
+    sub.set_defaults()
+
+
+def add_watch_parser(subparsers) -> None:
+    """``watch`` -- run on the board with the live video sent back here."""
+    sub = subparsers.add_parser(
+        "watch",
+        help="Run a task on the DevKit and watch its live video here",
+        description=(
+            "Run a task on the board with its video feed aimed at this machine. "
+            "These are the real annotated frames the board is producing, not a "
+            "simulation: the same overlay that goes into the recording, encoded "
+            "as H.264 and sent over RTP while the run happens.\n\n"
+            "Nothing is decoded here. An SDP file is written and the exact "
+            "ffplay, GStreamer or VLC command printed, because those already do "
+            "that job properly."
+        ),
+        epilog=(
+            "examples:\n"
+            "  sima-vision watch -- detect\n"
+            "  sima-vision watch -- segment --blur-strength 81\n"
+            "  sima-vision watch -- fall --frames 500\n"
+            "\nEverything after -- is passed to sima-vision on the board, with\n"
+            "--insight and --insight-host added for you.\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub.add_argument("argv", nargs=argparse.REMAINDER, metavar="-- ARGS",
+                     help="The task to run there, after a literal --.")
+    sub.add_argument(
+        "--to", metavar="ADDR",
+        help="The address the board should send video to. Default: whichever "
+             "of this machine's addresses is on the board's own network, which "
+             "is not the same as the one that reaches the internet.",
+    )
+    sub.add_argument(
+        "--port", type=int, default=VIDEO_PORT, metavar="N",
+        help=f"UDP port to receive video on. Default {VIDEO_PORT}.",
+    )
+    sub.add_argument(
+        "--sdp", type=Path, metavar="PATH",
+        help="Where to write the SDP the player needs. Default ./sima-vision.sdp.",
+    )
     add_host_argument(sub)
     sub.set_defaults()
 
@@ -369,51 +420,6 @@ def add_fetch_parser(subparsers) -> None:
     sub.set_defaults()
 
 
-def add_preview_parser(subparsers) -> None:
-    """``preview`` -- render the overlay a config produces, with no board."""
-    sub = subparsers.add_parser(
-        "preview",
-        help="Render what your config looks like, with no board and no model",
-        description=(
-            "Draw one frame the way a real run would, so visualization and blur "
-            "settings can be tuned on a laptop. No model is run: the detections "
-            "are synthetic and only exist to give the drawing code something to "
-            "draw. Needs numpy and OpenCV (pip install 'sima-vision[preview]')."
-        ),
-        epilog=(
-            "examples:\n"
-            "  sima-vision preview                                  # detect, defaults\n"
-            "  sima-vision preview --task segment -o blur.png\n"
-            "  sima-vision preview --task segment "
-            "-c instance-segmentation/config.yaml\n"
-            "  sima-vision preview --task fall --source my-photo.jpg\n"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    sub.add_argument(
-        "--task", "-t", choices=list(TASKS), default="detect",
-        help="Which app's overlay to draw. Default detect.",
-    )
-    sub.add_argument(
-        "--out", "-o", type=Path, default=Path("preview.png"), metavar="PATH",
-        help="Where to write the PNG. Default preview.png.",
-    )
-    sub.add_argument(
-        "--size", default="1280x720", metavar="WxH",
-        help="Synthetic scene size, used unless --source gives a readable image.",
-    )
-    # Everything a run understands, so a setting can be tried inline:
-    #   sima-vision preview --task segment --blur-strength 81
-    # Every task's flags are added, not just the chosen one's, because --task
-    # can be given last. A flag belonging to another task writes a config
-    # section this one never reads, and is ignored.
-    add_shared_arguments(sub)
-    add_config_arguments(sub)
-    for task_cls in TASKS.values():
-        task = task_cls()
-        task.add_arguments(sub.add_argument_group(f"{task.name} options"))
-    sub.set_defaults()
-
 
 def add_doctor_parser(subparsers) -> None:
     """``doctor`` -- say what is installed and what each part enables."""
@@ -422,23 +428,12 @@ def add_doctor_parser(subparsers) -> None:
         help="Check what is installed and what you can do with it",
         description=(
             "Report which pieces are present. Nothing here is fatal on its own: "
-            "the parts needed to check a config and preview an overlay are "
-            "separate from the parts needed to run inference on the DevKit."
+            "checking a config needs almost nothing, and running inference "
+            "needs the DevKit."
         ),
     )
     sub.set_defaults()
 
-
-def parse_size(text: str) -> tuple[int, int]:
-    """Read a ``WxH`` size. Raises ValueError on anything else."""
-    width, _, height = text.lower().partition("x")
-    try:
-        size = (int(width), int(height))
-    except ValueError:
-        raise ValueError(f"--size must look like 1280x720, got {text!r}") from None
-    if size[0] < 64 or size[1] < 64:
-        raise ValueError(f"--size must be at least 64x64, got {text!r}")
-    return size
 
 
 def collect_overrides(args: argparse.Namespace) -> dict:
@@ -479,73 +474,6 @@ def print_validation(task, cfg) -> None:
     print(f"  output: {' '.join(outputs)}")
 
 
-def load_drawing_dependencies() -> None:
-    """Bind numpy and OpenCV without requiring pyneat.
-
-    ``load_runtime_dependencies`` needs all three, because a real run does. A
-    preview draws and composites but never touches the MLA, so it needs only
-    two -- which is what lets it work on a laptop.
-    """
-    from . import runtime as rt
-
-    if rt.cv2 is not None:
-        return
-    try:
-        import cv2
-        import numpy as np
-    except ImportError as exc:
-        raise SystemExit(
-            f"preview needs numpy and OpenCV, and {exc.name} is missing.\n"
-            "  pip install 'sima-vision[preview]'\n"
-            "\nOn the DevKit they come from the board's system packages instead, "
-            "so nothing needs installing there."
-        ) from None
-    rt.cv2, rt.np, rt.FONT = cv2, np, cv2.FONT_HERSHEY_SIMPLEX
-
-
-def run_preview(args) -> int:
-    """Draw one frame the way a real run would, and write it to a PNG."""
-    from .scene import build_frame, render
-    from .sinks import load_labels
-
-    load_drawing_dependencies()
-    task = TASKS[args.task]()
-    use_file = not args.no_config
-
-    # `--source` doubles as the image to draw on: it is the same question it
-    # answers for a run, so there is no second flag for it.
-    source = vars(args).get("source.uri")
-    cfg = task.post_process(
-        task.load(args.config, collect_overrides(args), use_file=use_file), args
-    )
-    labels = load_labels(cfg.labels_path)
-
-    frame, subjects, origin, unreadable = build_frame(source, parse_size(args.size))
-    if unreadable:
-        print(
-            f"[warn] OpenCV could not read {source}; using the synthetic "
-            f"scene instead.\n       Raw .h264 is expected to fail here -- it "
-            f"has no container for OpenCV to parse.",
-            file=sys.stderr,
-        )
-
-    annotated = render(task, cfg, frame, subjects, labels)
-
-    out = args.out
-    if out.parent != Path("."):
-        out.parent.mkdir(parents=True, exist_ok=True)
-    if not runtime.cv2.imwrite(str(out), annotated):
-        raise SystemExit(f"could not write {out}")
-
-    where = cfg.config_path or "<defaults only>"
-    print(f"preview: {task.name} overlay from {where}")
-    print(f"  frame:  {origin}")
-    print(f"  drew:   {len(subjects)} synthetic detections -- NO MODEL WAS RUN")
-    for line in task.describe(cfg):
-        print(f"  {line}")
-    print(f"\nwrote {out.resolve()}  ({annotated.shape[1]}x{annotated.shape[0]})")
-    print("Open it, edit the config, run this again. No board needed.")
-    return 0
 
 
 def mark_for(ok: bool) -> str:
@@ -570,8 +498,8 @@ def run_doctor() -> int:
 
     rows = [
         ("yaml", "read config files", "required", "pip install pyyaml"),
-        ("numpy", "preview, and every run", "preview", "pip install 'sima-vision[preview]'"),
-        ("cv2", "preview, and every run", "preview", "pip install 'sima-vision[preview]'"),
+        ("numpy", "draw the overlay on every frame", "a run", "the board provides it"),
+        ("cv2", "draw the overlay on every frame", "a run", "the board provides it"),
         ("pyneat", "run inference on the MLA", "DevKit", "ships with the Palette SDK"),
     ]
     have = {}
@@ -603,7 +531,7 @@ def run_doctor() -> int:
     print("\nWhat you can do right now:")
     for ok, command, what in (
         (have["yaml"], "sima-vision <task> --validate", "check a config"),
-        (drawing, "sima-vision preview", "see your overlay and blur"),
+        (True, "sima-vision watch -- <task>", "run it on the board, watch it here"),
         (drawing and have["pyneat"], "sima-vision <task>", "run inference on the MLA"),
     ):
         print(f"  {mark_for(ok)}  {command:<30}  {what}")
@@ -642,11 +570,12 @@ def main(argv: list[str] | None = None) -> int:
                 return run_push(args.paths, args.host, args.dest)
             if args.command == "pull":
                 return run_pull(args.names, args.host, args.into)
-            if args.command == "remote":
+            if args.command in ("remote", "watch"):
                 # argparse.REMAINDER keeps the literal `--`; ssh does not want it.
                 argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
+                if args.command == "watch":
+                    return run_watch(argv, args.host, args.to, args.port, args.sdp)
                 return run_remote(argv, args.host)
-            return run_preview(args)
         except KeyboardInterrupt:
             return 130
         except SystemExit as exc:

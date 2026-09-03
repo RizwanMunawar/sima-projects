@@ -19,8 +19,8 @@ answers a plain GET with a 302 to ``auth.sima.ai`` -- so those go through
 ``sima-cli``, which already holds that login, and fall back to printing the
 command when it is not installed.
 
-Nothing here runs at config time. ``--validate`` and ``preview`` resolve the
-same paths and never touch the network; only :meth:`Task.run
+Nothing here runs at config time. ``--validate`` resolves the same paths and
+never touches the network; only :meth:`Task.run
 <sima_vision.tasks.base.Task.run>` calls :func:`ensure_assets`.
 """
 
@@ -327,8 +327,8 @@ def ensure_assets(cfg, task: str):
     """Resolve ``model.path`` and ``source.uri`` to files that exist.
 
     Called once, by :meth:`Task.run <sima_vision.tasks.base.Task.run>`, so that
-    everything which does not run inference -- ``--validate``, ``preview``, the
-    Python ``validate()`` -- stays offline.
+    everything which does not run inference -- ``--validate`` and the Python
+    ``validate()`` -- stays offline.
 
     Returns:
         The config, or a copy of it with the two paths replaced.

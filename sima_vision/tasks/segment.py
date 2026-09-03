@@ -727,30 +727,3 @@ class SegmentTask(Task):
     def runtime(self, cfg, pipeline) -> TaskRuntime:
         return SegmentRuntime()
 
-    def sample_results(self, cfg, pipeline, frame, boxes: list[dict]):
-        """Boxes plus an elliptical mask each, for ``sima-vision preview``.
-
-        An ellipse is enough to judge a blur by: it gives the composite a
-        curved edge, which is where ``feather`` and ``mask_alpha`` show.
-        """
-        cv2, np = runtime.cv2, runtime.np
-        height, width = frame.shape[:2]
-        instances = []
-        for box in boxes:
-            # Clipped the same way build_instances does, so the mask and the
-            # region it is composited into cannot disagree on shape.
-            x1, y1 = max(0, int(box["x1"])), max(0, int(box["y1"]))
-            x2, y2 = min(width, int(box["x2"])), min(height, int(box["y2"]))
-            w, h = x2 - x1, y2 - y1
-            if w <= 1 or h <= 1:
-                continue
-            mask = np.zeros((h, w), np.uint8)
-            cv2.ellipse(mask, (w // 2, h // 2), (w // 2 - 1, h // 2 - 1), 0, 0, 360, 255, -1)
-            class_id = int(box["class_id"])
-            instances.append(
-                Instance(
-                    box=box, x1=x1, y1=y1, x2=x2, y2=y2, mask=mask.astype(bool),
-                    keep=pipeline.keep_ids is None or class_id in pipeline.keep_ids,
-                )
-            )
-        return instances

@@ -37,8 +37,8 @@ def run_init(task: str, out: Path, force: bool) -> int:
     lines = source.read_text(encoding="utf-8").count("\n") + 1
     print(f"wrote {out.resolve()}  ({lines} lines, every setting documented)")
     print("\nEdit it, then:")
-    print(f"  sima-vision preview --task {task}     # see the overlay, no board needed")
-    print(f"  sima-vision {task}                    # run it, on the DevKit")
+    print(f"  sima-vision {task} --validate         # check it, no board needed")
+    print(f"  sima-vision watch -- {task}           # run it on the board, watch here")
     return 0
 
 

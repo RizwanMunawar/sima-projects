@@ -110,8 +110,7 @@ def missing_pyneat_message(note: str) -> str:
             "something pip can\n  install, so inference only runs on the board. "
             "Everything else works here:\n"
             "    sima-vision <task> --validate     check a config\n"
-            "    sima-vision preview               see the overlay\n"
-            "    sima-vision remote -- <task>      run it on the board from here"
+            "    sima-vision watch -- <task>       run it on the board, watch it here"
         )
     return (
         f"pyneat is missing: {note}.\n"

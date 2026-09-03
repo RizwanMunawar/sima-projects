@@ -42,12 +42,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Everything `sima-vision preview` and `sima-vision doctor` need to draw on a
-# laptop. Not needed on the DevKit, which provides both system-wide.
-preview = [
-    "numpy>=1.24",
-    "opencv-python>=4.7",
-]
+# Running a task draws an overlay on every frame, so a run needs numpy and
+# OpenCV. On the DevKit both come from the board's system packages, which is
+# why neither is a hard dependency here: `pip install sima-vision` there must
+# not be able to pull numpy 2.x over the board's own copy. Nothing off the
+# board draws, so nothing off the board needs them except the tests.
 # Only for a board that is somehow missing them. numpy is capped here because
 # pyneat 0.3.0 requires numpy<2, and installing 2.x breaks every simaai-*
 # package on the DevKit.
@@ -55,9 +54,15 @@ board = [
     "numpy>=1.24,<2",
     "opencv-python>=4.7,<5",
 ]
+# One command gets you a working checkout: the test suite exercises the mask
+# decoding, compositing and overlay for real, so it needs numpy and OpenCV
+# even though the package itself does not. Headless, because no test opens
+# a window and the GUI build drags in system libraries CI does not have.
 dev = [
     "pytest>=7.4",
     "ruff>=0.5",
+    "numpy>=1.24",
+    "opencv-python-headless>=4.7",
 ]
 
 [project.urls]

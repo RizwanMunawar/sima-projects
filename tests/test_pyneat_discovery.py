@@ -125,7 +125,7 @@ def test_the_message_off_board_points_at_the_board(monkeypatch):
     monkeypatch.setattr(runtime.glob, "glob", lambda _pattern: [])
     message = runtime.missing_pyneat_message("no pyneat virtualenv found")
     assert "does not look like a DevKit" in message
-    assert "sima-vision remote" in message, "say how to use the board from here"
+    assert "sima-vision watch" in message, "say how to use the board from here"
 
 
 def test_the_message_on_board_gives_the_install_command(monkeypatch):

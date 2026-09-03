@@ -1,10 +1,11 @@
 """Moving files between your PC and the DevKit, and running a task over SSH.
 
-Three commands wrap `ssh` and `scp` so the awkward parts stop being yours:
+Four commands wrap `ssh` and `scp` so the awkward parts stop being yours:
 
   sima-vision push clip.h264      your PC  ->  the board
   sima-vision pull                the board  ->  your PC
-  sima-vision remote -- detect    run it there, watch it here
+  sima-vision remote -- detect    run it there, output in your terminal
+  sima-vision watch  -- detect    run it there, live video on your screen
 
 The awkward parts, in order of how much time each one costs:
 
@@ -27,9 +28,11 @@ passwords, and nothing here stores one.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 from collections import defaultdict
@@ -37,6 +40,12 @@ from pathlib import Path
 
 #: Saves retyping `--host` on every command.
 DEVKIT_ENV = "SIMA_VISION_DEVKIT"
+
+#: Where the board sends the live feed, matching the defaults in
+#: :class:`~sima_vision.config.BaseConfig`. Video is H.264 in RTP; the metadata
+#: alongside it is JSON, one datagram per frame.
+VIDEO_PORT = 9000
+METADATA_PORT = 9100
 
 #: What a run leaves in its working directory, across all three tasks. `pull`
 #: with no arguments asks for these and takes whatever is actually there, so it
@@ -168,6 +177,172 @@ def run_pull(names: list[str], host: str | None, into: Path) -> int:
         size = local.stat().st_size / 1e6 if local.is_file() else 0
         print(f"  {name}" + (f"  ({size:.1f} MB)" if size else ""))
     return 0
+
+
+def address_of(host: str) -> str:
+    """The bare address out of `user@address`."""
+    return host.rpartition("@")[2]
+
+
+def address_the_board_sees(host: str) -> str | None:
+    """Ask the board where our SSH connection comes from.
+
+    This is the whole question -- "which of this machine's addresses can the
+    board send video to" -- answered by the only party that knows, instead of
+    inferred. `$SSH_CONNECTION` is `<client ip> <client port> <server ip>
+    <server port>`, so the first field is us, as seen from there.
+
+    Returns None if it cannot be asked, leaving :func:`local_ip_seen_by` to
+    guess. A wrong answer here is silent: the run starts, the board streams
+    into a void, and no video ever appears.
+    """
+    result = subprocess.run(  # noqa: S603
+        [require("ssh"), host, "echo $SSH_CONNECTION"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        check=False, timeout=30,
+    )
+    if result.returncode != 0:
+        return None
+    fields = result.stdout.split()
+    if not fields:
+        return None
+    try:
+        return str(ipaddress.ip_address(fields[0]))
+    except ValueError:
+        return None
+
+
+def local_ip_seen_by(host: str) -> str:
+    """A guess at this PC's address on the board's network. The fallback.
+
+    Opening a UDP socket towards the board and asking what the kernel bound
+    consults the real routing table, and connect() on UDP sends nothing, so it
+    costs no packets.
+
+    It is a guess because it is only as good as the routing table's confidence.
+    Watch what happens when the board is *not* answering ARP: the on-link route
+    exists, resolution fails, the stack falls back to the default route, and
+    this cheerfully returns the Wi-Fi address, which the board cannot reach.
+    That is why :func:`address_the_board_sees` is tried first.
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect((address_of(host), 9))     # discard port, nothing is sent
+        return probe.getsockname()[0]
+    except OSError as exc:
+        raise SystemExit(
+            f"could not work out which of this machine's addresses {host} would "
+            f"reach:\n  {exc}\n"
+            "Pass --to with the address the board should send video to."
+        ) from None
+    finally:
+        probe.close()
+
+
+def player_commands(port: int, sdp: Path) -> list[tuple[str, str]]:
+    """How to open the stream, best first. Each is (tool, command).
+
+    The board sends H.264 in RTP, which needs to be told what it is: RTP carries
+    no container and a dynamic payload type means nothing on its own. ffplay
+    learns it from an SDP file, GStreamer from caps on the command line. Neither
+    is shipped here on purpose -- decoding video is not this package's job, and
+    both of these are better at it than anything that would fit in it.
+    """
+    return [
+        ("ffplay", f'ffplay -hide_banner -fflags nobuffer -flags low_delay '
+                   f'-protocol_whitelist file,rtp,udp -i "{sdp}"'),
+        ("gst-launch-1.0",
+         f"gst-launch-1.0 udpsrc port={port} "
+         f'caps="application/x-rtp,media=video,encoding-name=H264,payload=96" '
+         f"! rtpjitterbuffer latency=50 ! rtph264depay ! avdec_h264 ! "
+         f"videoconvert ! autovideosink sync=false"),
+        ("vlc", f'vlc --network-caching=50 "{sdp}"'),
+    ]
+
+
+def write_sdp(path: Path, port: int) -> Path:
+    """The three lines ffplay and VLC need to make sense of the RTP stream.
+
+    Payload type 96 and the 90 kHz clock are what `h264_rtp_udp_from_raw` on
+    the board sends; they are fixed, not guesses.
+    """
+    path.write_text(
+        "v=0\n"
+        "o=- 0 0 IN IP4 0.0.0.0\n"
+        "s=sima-vision\n"
+        "c=IN IP4 0.0.0.0\n"
+        "t=0 0\n"
+        f"m=video {port} RTP/AVP 96\n"
+        "a=rtpmap:96 H264/90000\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def run_watch(argv: list[str], host: str | None, to: str | None, port: int,
+              sdp_path: Path | None) -> int:
+    """Run a task on the board with its live video pointed at this machine.
+
+    The board already knows how to stream what it is drawing: that is the
+    Insight feed, real frames with the real overlay, and it is off by default
+    only because it is pointed at the board's own localhost where nothing is
+    listening. All this does is aim it here and start the run.
+
+    Nothing decodes video in this process. The SDP is written and the exact
+    player command printed, because ffplay and GStreamer already do that job
+    properly and a half-hearted decoder in here would be worse at it.
+    """
+    host = resolve_host(host)
+    if not argv:
+        raise SystemExit(
+            "nothing to run. Put the task after --:\n"
+            "  sima-vision watch -- detect"
+        )
+
+    # Asked, then guessed. The board's own view is right by construction; the
+    # routing-table guess is only right while the board is answering ARP, and
+    # getting it wrong produces a run that streams into a void.
+    if to:
+        target, how = to, "given with --to"
+    else:
+        asked = address_the_board_sees(host)
+        target = asked or local_ip_seen_by(host)
+        how = "as the board sees us" if asked else "guessed from the routing table"
+
+    # Absolute: the player is opened in another terminal, which will not
+    # necessarily be in this directory.
+    sdp = write_sdp(sdp_path or Path("sima-vision.sdp"), port).resolve()
+
+    print(f"live video: {host} -> {target}:{port}   ({how})")
+    print(f"            metadata on {METADATA_PORT}, same address")
+    print(f"wrote {sdp}\n")
+
+    players = player_commands(port, sdp)
+    installed = [(tool, command) for tool, command in players if shutil.which(tool)]
+
+    print("Open this in a second terminal, then come back:")
+    if installed:
+        first, *rest = installed
+        print(f"\n  {first[1]}")
+        for tool, command in rest:
+            print(f"\n  or with {tool}:\n  {command}")
+    else:
+        print(f"\n  {players[0][1]}\n")
+        print(f"  ...once one of these is installed: "
+              f"{', '.join(tool for tool, _ in players)}")
+        print("  Windows: winget install Gyan.FFmpeg")
+        print("  macOS:   brew install ffmpeg")
+        print("  Ubuntu:  sudo apt install ffmpeg")
+    print()
+
+    # --insight is off by default because its encoder shares the codec daemon
+    # with the decoder and can stall a file run. Watching is the case where you
+    # have decided that is worth it, so it is turned on here rather than being
+    # something else to remember.
+    inner = ["sima-vision", *argv, "--insight", "--insight-host", target]
+    command = [require("ssh"), "-tt", host, " ".join(shlex.quote(t) for t in inner)]
+    report(command)
+    return subprocess.run(command, check=False).returncode  # noqa: S603
 
 
 def run_remote(argv: list[str], host: str | None) -> int:

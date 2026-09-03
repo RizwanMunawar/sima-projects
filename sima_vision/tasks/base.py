@@ -150,14 +150,6 @@ class Task:
         """The pull-loop implementation for this task."""
         raise NotImplementedError
 
-    def sample_results(self, cfg, pipeline: Pipeline, frame, boxes: list[dict]):
-        """Synthetic results for ``sima-vision preview``.
-
-        Turns plain boxes into whatever this task's ``render`` expects, so a
-        preview exercises the real drawing code rather than a stand-in. Only
-        ever called by :mod:`sima_vision.preview`; no model is involved.
-        """
-        return boxes
 
     def build(self, cfg) -> Pipeline:
         """The startup sequence. Identical for all three tasks."""
@@ -234,8 +226,8 @@ class Task:
         """Build and run, closing the pipeline whatever happens.
 
         This is the only place that fetches anything. A missing clip or model
-        is downloaded into ``assets/`` here, so ``--validate`` and ``preview``
-        -- which resolve exactly the same paths -- stay offline.
+        is downloaded into ``assets/`` here, so ``--validate``, which resolves
+        exactly the same paths, stays offline.
 
         The ``finally`` covers a failure part-way through :meth:`build` as well
         as one during the run, which is why :attr:`pipeline` is published early:

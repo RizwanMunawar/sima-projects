@@ -15,9 +15,9 @@ Run them from the command line::
 
 or from Python, with the same settings under the same names::
 
-    from sima_vision import run, preview, validate
+    from sima_vision import run, validate
 
-    preview("segment", out="blur.png", blur_strength=81)   # no board needed
+    validate("detect", conf=0.5)                           # no board needed
     run("detect", source="clip.h264", model="yolo26m-det.tar.gz", conf=0.5)
 
 Everything runs **on the DevKit**, not in the x86 SDK container: ``pyneat`` is
@@ -29,6 +29,6 @@ from __future__ import annotations
 
 __version__ = "0.0.2"
 
-from .api import load, preview, run, validate
+from .api import load, run, validate
 
-__all__ = ["__version__", "load", "preview", "run", "validate"]
+__all__ = ["__version__", "load", "run", "validate"]

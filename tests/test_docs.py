@@ -39,7 +39,7 @@ FOREIGN_FLAGS = {
 }
 
 #: Commands the README has to mention by name.
-COMMANDS = [*TASKS, "preview", "init", "fetch", "doctor", "push", "pull", "remote"]
+COMMANDS = [*TASKS, "init", "fetch", "doctor", "push", "pull", "watch", "remote"]
 
 
 def command_lines(text: str) -> list[str]:

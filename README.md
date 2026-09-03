@@ -4,15 +4,18 @@
 
 <br>
 
-[![SiMa.ai](https://img.shields.io/badge/SiMa.ai-Modalix_DevKit_3.0-E63946?style=for-the-badge)](https://sima.ai)
-[![Palette SDK](https://img.shields.io/badge/Palette_SDK-2.1.2-457B9D?style=for-the-badge)](https://docs.sima.ai)
-[![Neat](https://img.shields.io/badge/Neat-0.3.0-2A9D8F?style=for-the-badge)](https://docs.sima.ai)
-
+[![SiMa.ai](https://img.shields.io/badge/SiMa.ai-Modalix_DevKit_3.0-E63946)](https://sima.ai)
+[![Palette SDK](https://img.shields.io/badge/Palette_SDK-2.1.2-457B9D)](https://docs.sima.ai)
+[![Neat](https://img.shields.io/badge/Neat-0.3.0-2A9D8F)](https://docs.sima.ai)
 [![CI](https://github.com/RizwanMunawar/sima-projects/actions/workflows/ci.yml/badge.svg)](https://github.com/RizwanMunawar/sima-projects/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/badge/pip_install-sima--vision-3775A9?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/sima-vision/)
-[![Python](https://img.shields.io/badge/python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
-[![License](https://img.shields.io/badge/license-Apache--2.0-6C757D?style=flat-square)](LICENSE)
-[![YOLO26](https://img.shields.io/badge/Ultralytics-YOLO26-FFB703?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)
+[![Python](https://img.shields.io/badge/python-3.10+-3776AB&logo=python&logoColor=white)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-6C757D)](LICENSE)
+[![YOLO26](https://img.shields.io/badge/Ultralytics-YOLO26-FFB703&labelColor=333)](https://github.com/ultralytics/ultralytics)
+
+[![Fall detection](https://img.shields.io/badge/Fall-detection-111F68?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)
+[![Segmentation and blur](https://img.shields.io/badge/Segmentation-blur-FF64DA?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)
+[![Object detection](https://img.shields.io/badge/Object-detection-042AFF?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)
 
 <h3>Live YOLO26 on the MLA of a SiMa.ai Modalix DevKit 3.0.<br>Three apps, one pipeline, one command.</h3>
 
@@ -23,9 +26,9 @@ pip install sima-vision
 sima-vision detect          # sample clip and model fetched for you, then run
 ```
 
-> **Inference needs the board. Nothing else does.** Checking a config and seeing exactly
-> what the overlay will look like both run on your laptop, so you can set the whole thing
-> up before you own any hardware.
+> **Inference runs on the board; you drive it from your PC.** `sima-vision watch -- detect`
+> starts the task on the DevKit and streams the real annotated video back to your screen.
+> Checking a config needs no hardware at all.
 
 <br>
 
@@ -34,12 +37,12 @@ sima-vision detect          # sample clip and model fetched for you, then run
 | | |
 |:--|:--|
 | [Install](#install) | pip, and what each extra buys you |
-| [Quickstart](#quickstart) | Without a board, then with one |
+| [Quickstart](#quickstart) | Start to finish, host then DevKit |
 | [The three tasks](#the-three-tasks) | What each does, and its own flags |
 | [Commands](#commands) | Every subcommand in one table |
 | [Settings](#settings) | Flags, Python keywords, `config.yaml` |
 | [Python API](#python-api) | The same three verbs, importable |
-| [Driving the board from your PC](#driving-the-board-from-your-pc) | `push`, `remote`, `pull` |
+| [Driving the board from your PC](#driving-the-board-from-your-pc) | `watch`, `push`, `pull`, `remote` |
 | [Set up a new DevKit](#set-up-a-new-devkit) | One time, about two hours |
 | [Troubleshooting](#troubleshooting) | Symptom to fix, in one table |
 | [How it works](#how-it-works) | The pipeline, and why it is shaped that way |
@@ -57,8 +60,8 @@ pip install sima-vision
 | Where | Install | Why |
 |:--|:--|:--|
 | **On the DevKit** | `~/pyneat/bin/pip install sima-vision` | Into the venv that has `pyneat`. See below |
-| **Your laptop** | `pip install "sima-vision[preview]"` | Adds numpy and OpenCV so `preview` can draw |
-| **Contributing** | `pip install -e ".[dev,preview]"` | Also ruff and pytest |
+| **Your laptop** | `pip install sima-vision` | Nothing extra. Off the board it only checks configs and drives the board |
+| **Contributing** | `pip install -e ".[dev]"` | Adds ruff, pytest, numpy and OpenCV, which the tests need |
 
 > [!IMPORTANT]
 > **On the DevKit, install into the `pyneat` venv.** `sima-cli sdk setup` puts `pyneat` in
@@ -90,13 +93,13 @@ sima-vision doctor
 ### Without a board
 
 ```bash
-sima-vision preview --task segment -o blur.png    # draw the overlay your config makes
 sima-vision init segment                          # write a documented config.yaml
-sima-vision segment --validate                    # check it
+sima-vision segment --validate                    # check it resolves and parses
+sima-vision doctor                                # what is installed, and what it allows
 ```
 
-`preview` runs **no model**. It draws synthetic detections through the real overlay code,
-so what you are judging is styling, not accuracy. Nothing here touches the network.
+That is all that is honest to do without hardware. Nothing here invents detections, and
+nothing here touches the network.
 
 ### On the DevKit
 
@@ -281,10 +284,10 @@ board.
 | `sima-vision detect` | **yes** | Run detection on the MLA |
 | `sima-vision segment` | **yes** | Run segmentation, with the optional blur |
 | `sima-vision fall` | **yes** | Run fall detection, with SMTP alerts |
-| `sima-vision preview` | no | Draw the overlay your config produces, to a PNG |
 | `sima-vision init` | no | Write a documented `config.yaml` here |
 | `sima-vision doctor` | no | What is installed, and what it lets you do |
 | `sima-vision fetch` | no | Download the sample clips up front |
+| `sima-vision watch` | no | Run a task on the DevKit and watch its live video here |
 | `sima-vision push` | no | Copy files to the DevKit |
 | `sima-vision pull` | no | Copy results back |
 | `sima-vision remote` | no | Run a task on the DevKit over SSH |
@@ -397,10 +400,7 @@ the input length.
 ## Python API
 
 ```python
-from sima_vision import run, preview, validate
-
-# No board: draw the overlay a setting produces, and write a PNG.
-preview("segment", out="blur.png", blur_strength=81, keep_classes=["person"])
+from sima_vision import run, validate
 
 # No board: resolve and check a config, then look at what it became.
 cfg = validate("detect", conf=0.5, max_det=20)
@@ -426,10 +426,47 @@ run("segment", **{"runtime.output_buffers": 2})
 Three wrappers around `ssh` and `scp`, so the awkward parts stop being yours.
 
 ```bash
+sima-vision watch  -- detect                # run it there, live video here
 sima-vision push my-clip.h264               # PC -> board
-sima-vision remote -- detect --frames 200   # run it there, watch it here
+sima-vision remote -- detect --frames 200   # run it there, output in the terminal
 sima-vision pull                            # board -> PC
 ```
+
+### Live video while it runs
+
+```bash
+sima-vision watch -- detect
+```
+
+The board is already able to stream what it draws: real annotated frames, the same
+overlay that goes into the recording, H.264 over RTP. It is off by default only because
+it points at the board's own localhost, where nothing is listening. `watch` aims it at
+this machine and starts the run.
+
+It prints the exact player command and writes the SDP file it needs:
+
+```
+live video: sima@192.168.137.50 -> 192.168.137.1:9000   (as the board sees us)
+            metadata on 9100, same address
+wrote /home/you/sima-vision.sdp
+
+Open this in a second terminal, then come back:
+
+  ffplay -hide_banner -fflags nobuffer -flags low_delay \
+    -protocol_whitelist file,rtp,udp -i "/home/you/sima-vision.sdp"
+```
+
+Nothing is decoded by `sima-vision` itself. `ffplay`, GStreamer and VLC already do that
+properly, and whichever of them you have is the one it names. Install one with
+`winget install Gyan.FFmpeg`, `brew install ffmpeg` or `sudo apt install ffmpeg`.
+
+> [!NOTE]
+> **Which address the board sends to is asked, not guessed.** A laptop cabled to a DevKit
+> has at least two addresses, and only one of them is on the board's network. `watch`
+> reads `$SSH_CONNECTION` over the SSH connection it is already making, so the answer
+> comes from the board itself. Guessing from the local routing table looks right and
+> quietly picks the Wi-Fi address whenever the board is not answering ARP, which produces
+> a run that streams into nowhere. Override with `--to` if you need to.
 
 Say the address once:
 
@@ -751,18 +788,17 @@ packs its masks into the tail of that same buffer.
 ```
 sima_vision/
   cli.py        the command line          api.py      the Python API
-  config.py     loading and validation    scene.py    the preview scene
-  assets.py     clips and model archives  devkit.py   push, pull, remote
+  config.py     loading and validation    runtime.py  finding pyneat and OpenCV
+  assets.py     clips and model archives  devkit.py   push, pull, watch, remote
   media.py      H.264 and geometry        neat.py     graph assembly
   samples.py    decoding a sample         masks.py    masks and compositing
-  draw.py       the overlay               sinks.py    video, stills, Insight
+  draw.py       the overlay               sinks.py    video, stills, live feed
   runloop.py    the pull loop
   tasks/        detect.py   segment.py   fall.py
 ```
 
 `assets.py` and `devkit.py` are the only modules that reach the network, and `assets.py`
-only from a run. A `--validate` or a `preview` resolves the same paths and fetches
-nothing.
+only from a run. A `--validate` resolves the same paths and fetches nothing.
 
 </details>
 
@@ -773,7 +809,7 @@ nothing.
 ```bash
 git clone https://github.com/RizwanMunawar/sima-projects.git
 cd sima-projects
-pip install -e ".[dev,preview]"
+pip install -e ".[dev]"
 
 ruff check sima_vision tests
 pytest -q
