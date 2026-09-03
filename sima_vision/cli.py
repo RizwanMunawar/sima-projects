@@ -35,7 +35,7 @@ from .devkit import (
     run_watch,
 )
 from .neat import describe_preprocess
-from .netsetup import run_setup_network
+from .netsetup import run_setup_board, run_setup_network
 from .runloop import Stopper
 from .runtime import (
     FAMILY_DECODE_TOKENS,
@@ -337,6 +337,21 @@ def add_setup_parser(subparsers) -> None:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    board = inner.add_parser(
+        "board",
+        help="Install sima-vision where pyneat is, on the DevKit",
+        description=(
+            "`pip install sima-vision` installs into whichever Python you ran "
+            "pip with, and on the board that is almost never the virtualenv "
+            "holding pyneat. This finds that venv and installs into it, so the "
+            "command and the library live in the same place. "
+            "Runs work either way: a run that cannot import pyneat goes and "
+            "finds it. This is the tidy version, and it is where to start when "
+            "`sima-vision detect` says pyneat is missing."
+        ),
+    )
+    board.set_defaults()
+
     network.add_argument(
         "--apply", action="store_true",
         help="Actually turn sharing on. Windows only, and needs an "
@@ -610,6 +625,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.command == "fetch":
                 return run_fetch(args.task, args.into)
             if args.command == "setup":
+                if args.topic == "board":
+                    return run_setup_board()
                 return run_setup_network(args.host, args.apply)
             if args.command == "push":
                 return run_push(args.paths, args.host, args.dest)

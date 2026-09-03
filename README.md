@@ -40,6 +40,7 @@ sima-vision detect          # sample clip and model fetched for you, then run
 | [Install](#install) | pip, and what each extra buys you |
 | [Quickstart](#quickstart) | Start to finish, host then DevKit |
 | [Give the DevKit internet](#give-the-devkit-internet) | One command, before anything else works |
+| [If `pyneat` is missing](#if-pyneat-is-missing) | What `setup board` fixes, and when it cannot |
 | [The three tasks](#the-three-tasks) | What each does, and its own flags |
 | [Commands](#commands) | Every subcommand in one table |
 | [Settings](#settings) | Flags, Python keywords, `config.yaml` |
@@ -59,19 +60,20 @@ pip install sima-vision
 
 | Where | Install | Why |
 |:--|:--|:--|
-| **On the DevKit** | `~/pyneat/bin/pip install sima-vision` | Into the venv that has `pyneat`. See below |
+| **On the DevKit** | `pip install sima-vision` then `sima-vision setup board` | The second one puts it where `pyneat` is |
 | **Your laptop** | `pip install sima-vision` | Nothing extra. Off the board it only checks configs and drives the board |
 | **Contributing** | `pip install -e ".[dev]"` | Adds ruff, pytest, numpy and OpenCV, which the tests need |
 
 > [!IMPORTANT]
-> **On the DevKit, install into the `pyneat` venv.** `sima-cli sdk setup` puts `pyneat` in
-> a virtualenv of its own at `~/pyneat`, and `pip` installs into whichever Python you ran
-> `pip` with. Install anywhere else and a run stops at `ModuleNotFoundError: pyneat`.
+> **`pyneat` is not where pip puts things.** `sima-cli sdk setup` gives it a virtualenv of
+> its own, usually `~/pyneat`, and `pip` installs into whichever Python you ran `pip`
+> with. `sima-vision setup board` reconciles the two.
 >
-> If you already installed it elsewhere, it still works: the run looks for that venv and
-> uses it, printing `[pyneat] using pyneat from ~/pyneat` when it does. Set
-> `SIMA_VISION_PYNEAT` if yours is somewhere unusual. `sima-vision doctor` says which of
-> these applies to you.
+> Runs cope on their own regardless: one that cannot import `pyneat` searches the usual
+> places and then one level down from `~`, `/opt`, `/media/nvme` and `/usr/local`, and
+> says `[pyneat] using pyneat from ...` when it finds it. If yours is somewhere stranger,
+> `export SIMA_VISION_PYNEAT=/path/to/the/venv`. `sima-vision doctor` says which case you
+> are in.
 
 > [!CAUTION]
 > **On the board, never let pip pull numpy 2.x.** `pyneat` and every `simaai-*` package
@@ -101,21 +103,30 @@ nothing here touches the network.
 
 ### On the DevKit
 
+Three commands, on the board:
+
 ```bash
-~/pyneat/bin/pip install sima-vision      # the venv that has pyneat
-sima-cli login                            # once, for the model packs
-~/pyneat/bin/sima-vision detect           # that is the whole thing
+pip install sima-vision       # 1. install it
+sima-vision setup board       # 2. put it where pyneat is
+sima-vision detect            # 3. run
 ```
 
-> [!IMPORTANT]
-> **The board needs internet for this**, to fetch the model. It has none of its own: it
-> gets yours, through the cable. If `sima-cli login` hangs or the download fails, that is
-> what is missing. One command sets it up:
-> [Give the DevKit internet](#give-the-devkit-internet).
+Step 2 is there because `pip` installs into whichever Python you ran it with, and on the
+DevKit that is almost never the virtualenv holding `pyneat`. It finds that venv and
+installs into it, and tells you what to do if `pyneat` is not on the board at all.
 
-No arguments. Each task has a default sample clip and model archive, and the first run
-puts both in `./assets/`: the clip comes straight from a public GitHub release, the model
-through `sima-cli`, which holds your login. Every run after that reuses them.
+You can skip step 2 if you like. A run that cannot import `pyneat` goes and finds it,
+printing `[pyneat] using pyneat from ...` when it does. Step 2 just makes the command and
+the library live in the same place.
+
+> [!IMPORTANT]
+> **The board needs your PC's internet for this**, to fetch the model. It has none of its
+> own. If `sima-cli login` hangs or the download fails, that is what is missing:
+> [Give the DevKit internet](#give-the-devkit-internet) is one command.
+
+No arguments to step 3. Each task has a default sample clip and model archive, and the
+first run puts both in `./assets/`: the clip comes straight from a public GitHub release,
+the model through `sima-cli`, which holds your login. Every run after that reuses them.
 
 Out comes `detections.mp4` and a `frames/` directory. Bring them back with
 [`sima-vision pull`](#driving-the-board-from-your-pc).
@@ -282,6 +293,55 @@ usual choice. On macOS it is System Settings, General, Sharing, Internet Sharing
 > If it was set up by hand through the Sharing tab, re-run `--apply` once and it
 > will survive from then on.
 
+
+## If `pyneat` is missing
+
+```
+[ERR] pyneat is missing: no pyneat for python3.11 anywhere under ~, /opt, ...
+```
+
+`pyneat` is the library that talks to the MLA. It is an aarch64 wheel that comes with the
+Palette SDK, not something `pip` can install, and it lives in a virtualenv of its own.
+Nothing else here can run inference without it.
+
+**On the board, try this first:**
+
+```bash
+sima-vision setup board
+```
+
+It searches for that virtualenv and installs `sima-vision` into it. If it finds nothing,
+the message tells you which of the two situations you are in.
+
+**If `pyneat` is on the board but somewhere unusual**, find it and point at it:
+
+```bash
+find / -name 'pyneat*' -maxdepth 6 2>/dev/null | head
+export SIMA_VISION_PYNEAT=/the/venv/it/is/in
+```
+
+The path you want is the virtualenv root, the directory containing `lib/` and `bin/`, not
+the `pyneat` folder itself.
+
+**If `pyneat` is not on the board at all**, pairing never finished. Run this **from your
+PC**, not from the board:
+
+```bash
+sima-cli sdk setup --devkit <devkit-ip>
+```
+
+Then confirm the board half actually landed, which is the part that fails quietly:
+
+```bash
+ssh sima@<devkit-ip> "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat.__version__)'"
+```
+
+> [!NOTE]
+> The version has to match. `pyneat` is compiled for one CPython, so a venv built for 3.10
+> cannot be used from 3.12. When that is the mismatch, the error names the interpreter
+> that *can* use it rather than just saying no.
+
+
 ## The three tasks
 
 | Task | What it does | Model | Output |
@@ -418,6 +478,7 @@ board.
 | `sima-vision init` | no | Write a documented `config.yaml` here |
 | `sima-vision doctor` | no | What is installed, and what it lets you do |
 | `sima-vision fetch` | no | Download the sample clips up front |
+| `sima-vision setup board` | on the board | Install into the virtualenv that has `pyneat` |
 | `sima-vision setup network` | no | Check and set up internet sharing from this PC to the board |
 | `sima-vision watch` | no | Run a task on the DevKit and watch its live video here |
 | `sima-vision push` | no | Copy files to the DevKit |

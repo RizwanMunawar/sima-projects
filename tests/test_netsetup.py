@@ -240,3 +240,54 @@ def test_non_windows_says_so_rather_than_pretending(seen, capsys):
     out = capsys.readouterr().out
     assert "Windows-only for now" in out
     assert "MASQUERADE" in out and "eth0" in out and "wlan0" in out
+
+
+# -- setup board --
+
+
+def test_setup_board_installs_into_the_venv_that_has_pyneat(tmp_path, monkeypatch, capsys):
+    from sima_vision import runtime
+
+    site = tmp_path / "pyneat" / "lib" / "python3.11" / "site-packages"
+    site.mkdir(parents=True)
+    (tmp_path / "pyneat" / "bin").mkdir(parents=True)
+    (tmp_path / "pyneat" / "bin" / "pip").write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        runtime, "find_pyneat_env", lambda: (site, f"using pyneat from {tmp_path / 'pyneat'}")
+    )
+    ran = {}
+
+    class Ok:
+        returncode = 0
+
+    monkeypatch.setattr(netsetup.subprocess, "run",
+                        lambda command, **k: (ran.update(command=command), Ok())[1])
+    assert netsetup.run_setup_board() == 0
+    assert ran["command"][1:] == ["install", "--upgrade", "sima-vision"]
+    assert "bin/sima-vision detect" in capsys.readouterr().out.replace("\\", "/")
+
+
+def test_setup_board_says_what_to_do_when_pyneat_is_nowhere(monkeypatch, capsys):
+    from sima_vision import runtime
+
+    monkeypatch.setattr(runtime, "find_pyneat_env", lambda: (None, "no pyneat for python3.11"))
+    assert netsetup.run_setup_board() == 1
+    out = capsys.readouterr().out
+    assert "find /" in out, "give a command that locates it"
+    assert "SIMA_VISION_PYNEAT" in out
+    assert "sima-cli sdk setup" in out
+
+
+def test_setup_board_is_a_no_op_from_inside_that_venv(tmp_path, monkeypatch, capsys):
+    from sima_vision import runtime
+
+    site = tmp_path / "lib" / "python3.11" / "site-packages"
+    site.mkdir(parents=True)
+    monkeypatch.setattr(runtime, "find_pyneat_env", lambda: (site, "using pyneat from x"))
+    monkeypatch.setattr(netsetup.sys, "prefix", str(tmp_path))
+    monkeypatch.setattr(
+        netsetup.subprocess, "run",
+        lambda *a, **k: pytest.fail("must not reinstall into the venv it is already in"),
+    )
+    assert netsetup.run_setup_board() == 0
+    assert "already running from that venv" in capsys.readouterr().out

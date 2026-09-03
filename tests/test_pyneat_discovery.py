@@ -259,3 +259,64 @@ def test_a_path_already_present_is_not_added_twice(monkeypatch):
         runtime.pyneat = None
 
     assert sys.path == before
+
+
+# -- searching, when it is not where it is supposed to be --
+
+
+def test_a_venv_somewhere_unexpected_is_still_found(tmp_path, monkeypatch):
+    """A fixed list of guesses says "not found" about a venv two dirs away.
+
+    This is what a board set up by hand looks like: pyneat is real, it is just
+    not at ~/pyneat, and the old lookup gave up without looking.
+    """
+    site = make_venv(tmp_path / "some-other-name", THIS)
+    monkeypatch.setattr(runtime, "PYNEAT_HOMES", ("/nowhere",))
+    monkeypatch.setattr(runtime, "PYNEAT_SEARCH_ROOTS", (str(tmp_path),))
+    found, note = runtime.find_pyneat_env()
+    assert found == site
+    assert "some-other-name" in note
+
+
+def test_the_known_places_win_over_the_search(tmp_path, monkeypatch):
+    """One stat beats a directory walk, and the usual place is usually right."""
+    known = make_venv(tmp_path / "known", THIS)
+    make_venv(tmp_path / "searched" / "other", THIS)
+    monkeypatch.setattr(runtime, "PYNEAT_HOMES", (str(tmp_path / "known"),))
+    monkeypatch.setattr(runtime, "PYNEAT_SEARCH_ROOTS", (str(tmp_path / "searched"),))
+    assert runtime.find_pyneat_env()[0] == known
+
+
+def test_the_search_does_not_descend_into_everything(tmp_path, monkeypatch):
+    """One level down only. A deep tree must not turn this into a find(1)."""
+    buried = tmp_path / "a" / "b" / "c" / "deep"
+    make_venv(buried, THIS)
+    monkeypatch.setattr(runtime, "PYNEAT_HOMES", ("/nowhere",))
+    monkeypatch.setattr(runtime, "PYNEAT_SEARCH_ROOTS", (str(tmp_path),))
+    assert runtime.find_pyneat_env()[0] is None
+
+
+def test_a_directory_that_is_not_a_venv_is_skipped_cheaply(tmp_path, monkeypatch):
+    (tmp_path / "just-a-folder").mkdir()
+    (tmp_path / "just-a-folder" / "notes.txt").write_text("hi", encoding="utf-8")
+    site = make_venv(tmp_path / "real", THIS)
+    monkeypatch.setattr(runtime, "PYNEAT_HOMES", ("/nowhere",))
+    monkeypatch.setattr(runtime, "PYNEAT_SEARCH_ROOTS", (str(tmp_path),))
+    assert runtime.find_pyneat_env()[0] == site
+
+
+def test_an_unreadable_root_does_not_stop_the_search(tmp_path, monkeypatch):
+    site = make_venv(tmp_path / "real", THIS)
+    monkeypatch.setattr(runtime, "PYNEAT_HOMES", ("/nowhere",))
+    monkeypatch.setattr(
+        runtime, "PYNEAT_SEARCH_ROOTS", ("/proc/1/root/nope", str(tmp_path))
+    )
+    assert runtime.find_pyneat_env()[0] == site
+
+
+def test_the_not_found_note_says_where_it_looked(tmp_path, monkeypatch):
+    monkeypatch.setattr(runtime, "PYNEAT_HOMES", ("/nowhere",))
+    monkeypatch.setattr(runtime, "PYNEAT_SEARCH_ROOTS", (str(tmp_path),))
+    _, note = runtime.find_pyneat_env()
+    assert str(tmp_path) in note, "an empty 'not found' leaves nothing to act on"
+    assert THIS in note, "and it has to say which Python it wanted"

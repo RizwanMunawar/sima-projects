@@ -31,6 +31,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 
 #: The address Windows ICS always gives the adapter it shares to. It is not
 #: configurable, which is the one convenient thing about it.
@@ -385,4 +386,56 @@ def run_setup_network(host: str | None, apply: bool) -> int:
         return 1
 
     print("\n  Pass --host sima@<devkit-ip> to have the board checked too.")
+    return 0
+
+
+def run_setup_board() -> int:
+    """Put sima-vision where pyneat is, so a plain `pip install` is enough.
+
+    `pip install sima-vision` on the board installs into whichever Python you
+    ran pip with, and that is almost never the virtualenv holding pyneat. A run
+    finds that venv and borrows from it, which works; installing into it is
+    tidier, and it is one command either way.
+    """
+    from .runtime import PYNEAT_ENV, find_pyneat_env
+
+    print("Setting up the board\n")
+
+    site, note = find_pyneat_env()
+    if site is None:
+        print(f"  pyneat: {note}")
+        print()
+        print("  Nothing here can run inference without it. Either it was never")
+        print("  installed, or it is somewhere unusual.")
+        print()
+        print("  Find it:   find / -name 'pyneat*' -maxdepth 6 2>/dev/null | head")
+        print(f"  Point here: export {PYNEAT_ENV}=/the/venv/above")
+        print("  Install it: sima-cli sdk setup --devkit <this board's ip>,")
+        print("              run from your PC, not from here.")
+        return 1
+
+    venv = site.parents[2]
+    print(f"  pyneat: {note}")
+
+    if Path(sys.prefix).resolve() == venv.resolve():
+        print("  You are already running from that venv. Nothing to do.")
+        return 0
+
+    pip = venv / "bin" / "pip"
+    if not pip.exists():
+        print(f"  ...but {pip} is missing, so it cannot be installed into.")
+        print(f"  Runs will borrow from it instead, which works. Or set "
+              f"{PYNEAT_ENV}.")
+        return 0
+
+    print(f"  installing sima-vision into {venv}")
+    result = subprocess.run(  # noqa: S603
+        [str(pip), "install", "--upgrade", "sima-vision"], check=False,
+    )
+    if result.returncode != 0:
+        print("\n  That failed. Runs will still borrow pyneat from that venv,")
+        print("  so this is a tidiness problem rather than a blocker.")
+        return 1
+
+    print(f"\n  Done. Use it from there:\n    {venv}/bin/sima-vision detect")
     return 0

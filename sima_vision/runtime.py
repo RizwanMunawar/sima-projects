@@ -46,14 +46,28 @@ FONT = 0
 #: Points at the pyneat virtualenv when it is somewhere unusual.
 PYNEAT_ENV = "SIMA_VISION_PYNEAT"
 
-#: Where the pyneat venv ends up, in the order worth looking. ``~/pyneat`` is
-#: what ``sima-cli sdk setup`` creates; ``/media/nvme`` is where you are told to
-#: put it by hand, because the board's root filesystem is too small.
+#: Where the pyneat venv ends up, tried first because they cost one stat each.
+#: ``~/pyneat`` is what ``sima-cli sdk setup`` creates; ``/media/nvme`` is where
+#: you are told to put it by hand, because the board's root filesystem is too
+#: small for it.
 PYNEAT_HOMES = (
     "~/pyneat",
     "/media/nvme/neat/pyneat",
     "/media/nvme/pyneat",
     "/opt/pyneat",
+)
+
+#: Searched when none of the above has it. A board that was set up by hand, or
+#: by a different SDK version, puts it somewhere else entirely, and a fixed list
+#: of guesses is exactly the thing that then says "not found" about a venv
+#: sitting two directories away.
+PYNEAT_SEARCH_ROOTS = (
+    "~",
+    "/opt",
+    "/media/nvme",
+    "/media/nvme/neat",
+    "/usr/local",
+    "/srv",
 )
 
 
@@ -72,30 +86,61 @@ def find_pyneat_env() -> tuple[Path | None, str]:
     """
     want = f"python{sys.version_info.major}.{sys.version_info.minor}"
     override = os.environ.get(PYNEAT_ENV, "")
-    homes = [override] if override else list(PYNEAT_HOMES)
 
     wrong_version: list[str] = []
-    for home in homes:
-        root = Path(home).expanduser()
-        if not root.is_dir():
-            continue
+
+    def look_in(root: Path) -> Path | None:
+        """Is there a pyneat for *this* Python under this venv root?"""
         site = root / "lib" / want / "site-packages"
         if list(site.glob("pyneat*")):
-            return site, f"using pyneat from {root}"
-        # The venv is there but built for another Python. Name the interpreter
-        # that can use it rather than leaving them to work it out.
+            return site
+        # There, but built for another CPython. Note the interpreter that can
+        # use it rather than leaving someone to work it out.
         for other in sorted((root / "lib").glob("python*")):
-            if list((other / "site-packages").glob("pyneat*")):
+            if other.name != want and list((other / "site-packages").glob("pyneat*")):
                 wrong_version.append(f"{root}/bin/python3 ({other.name})")
+        return None
+
+    if override:
+        root = Path(override).expanduser()
+        found = look_in(root) if root.is_dir() else None
+        if found:
+            return found, f"using pyneat from {root}"
+        if wrong_version:
+            return None, f"found pyneat, but built for {wrong_version[0]}, not {want}"
+        return None, f"${PYNEAT_ENV} is {override}, which has no pyneat for {want}"
+
+    for home in PYNEAT_HOMES:
+        root = Path(home).expanduser()
+        if root.is_dir():
+            found = look_in(root)
+            if found:
+                return found, f"using pyneat from {root}"
+
+    # Nothing where it is supposed to be, so go and look. One level down from a
+    # handful of roots finds every venv anyone actually makes, and stops well
+    # short of walking the filesystem.
+    for base in PYNEAT_SEARCH_ROOTS:
+        parent = Path(base).expanduser()
+        if not parent.is_dir():
+            continue
+        try:
+            children = sorted(child for child in parent.iterdir() if child.is_dir())
+        except OSError:                       # unreadable, not our problem
+            continue
+        for child in children:
+            if not (child / "lib").is_dir():  # not a venv, skip cheaply
+                continue
+            found = look_in(child)
+            if found:
+                return found, f"using pyneat from {child}"
 
     if wrong_version:
         return None, (
-            f"found pyneat, but built for {', '.join(wrong_version)} and this is "
-            f"{want}"
+            f"found pyneat, but built for {', '.join(sorted(set(wrong_version)))} "
+            f"and this is {want}"
         )
-    if override:
-        return None, f"${PYNEAT_ENV} is {override}, which has no pyneat for {want}"
-    return None, "no pyneat virtualenv found"
+    return None, f"no pyneat for {want} anywhere under {', '.join(PYNEAT_SEARCH_ROOTS)}"
 
 
 def missing_pyneat_message(note: str) -> str:
