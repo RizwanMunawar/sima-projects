@@ -30,7 +30,6 @@ sima-vision detect          # sample clip and model fetched for you, then run
 > starts the task on the DevKit and streams the real annotated video back to your screen.
 > Checking a config needs no hardware at all.
 
-<br>
 
 ## Contents
 
@@ -46,8 +45,6 @@ sima-vision detect          # sample clip and model fetched for you, then run
 | [Set up a new DevKit](#set-up-a-new-devkit) | One time, about two hours |
 | [Troubleshooting](#troubleshooting) | Symptom to fix, in one table |
 | [How it works](#how-it-works) | The pipeline, and why it is shaped that way |
-
-<br>
 
 ## Install
 
@@ -85,8 +82,6 @@ Check what you have:
 ```bash
 sima-vision doctor
 ```
-
-<br>
 
 ## Quickstart
 
@@ -142,8 +137,6 @@ model archive outright.
 > **New board?** Bring-up is a one-time job of about two hours, mostly downloading. That
 > is [Set up a new DevKit](#set-up-a-new-devkit). Nothing above needs it.
 
-<br>
-
 ## The three tasks
 
 | Task | What it does | Model | Output |
@@ -157,8 +150,6 @@ drawing and sinks. A task supplies only what is genuinely its own.
 
 <details>
 <summary><b>detect</b> &nbsp;&middot;&nbsp; boxes, labels and confidence</summary>
-
-<br>
 
 The simplest thing that proves the whole chain works. No task-specific flags: everything
 it understands is in [Settings](#settings).
@@ -178,8 +169,6 @@ sima-vision detect --source rtsp://cam/live --source-type rtsp
 
 <details>
 <summary><b>segment</b> &nbsp;&middot;&nbsp; masks, and a background blur</summary>
-
-<br>
 
 Needs a `-seg` model pack. A plain detect head carries no mask data, and the run says so
 rather than guessing.
@@ -220,8 +209,6 @@ same frame, the cause is the graph.
 
 <details>
 <summary><b>fall</b> &nbsp;&middot;&nbsp; tracking, a fall state machine, SMTP alerts</summary>
-
-<br>
 
 Tracks people across frames and watches three signals from the plain bounding box: the
 box turning wide-and-short, its height collapsing, and how fast its centre is dropping. A
@@ -275,7 +262,6 @@ board.
 
 </details>
 
-<br>
 
 ## Commands
 
@@ -311,8 +297,6 @@ config OK: config.yaml
 ```
 
 `sima-vision <command> --help` lists every flag.
-
-<br>
 
 ## Settings
 
@@ -395,8 +379,6 @@ the input length.
 | `SIMA_VISION_DEVKIT` | The board, as `user@address`, so `push`, `pull` and `remote` stop asking |
 | `FALL_ALERT_SMTP_PASSWORD` | The only place the SMTP password is ever read from |
 
-<br>
-
 ## Python API
 
 ```python
@@ -418,8 +400,6 @@ reachable by its config path:
 ```python
 run("segment", **{"runtime.output_buffers": 2})
 ```
-
-<br>
 
 ## Driving the board from your PC
 
@@ -504,14 +484,10 @@ Three things these get right that a hand-written `scp` usually does not:
 They need an OpenSSH client, which macOS and Linux ship and Windows 10/11 has under
 Settings > Apps > Optional features > OpenSSH Client.
 
-<br>
-
 ## Set up a new DevKit
 
 <details>
 <summary><b>One time, about two hours, mostly downloading. Skip this if your board already runs pyneat.</b></summary>
-
-<br>
 
 Written on Windows with WSL2, which is the path SiMa's own tooling expects. Every warning
 below marks somewhere real time was lost.
@@ -699,14 +675,10 @@ the host key changed, that is expected: `ssh-keygen -R <devkit-ip>`.
 
 </details>
 
-<br>
-
 ## Troubleshooting
 
 <details>
 <summary><b>Symptom to fix, for a running task.</b></summary>
-
-<br>
 
 | Symptom | Fix |
 |:--|:--|
@@ -754,8 +726,6 @@ command.
 
 </details>
 
-<br>
-
 ## How it works
 
 <details>
@@ -802,8 +772,6 @@ only from a run. A `--validate` resolves the same paths and fetches nothing.
 
 </details>
 
-<br>
-
 ## Contributing
 
 ```bash
@@ -820,8 +788,6 @@ rules are plain numpy and OpenCV, so they run anywhere, and the `ssh` and `scp` 
 are tested against a fake subprocess. CI covers Python 3.10 to 3.13 on Linux, macOS and
 Windows, builds the wheel and installs it clean.
 
-<br>
-
 ## License
 
 The models used here for testing are **Ultralytics YOLO26**, under **AGPL-3.0**. All other
@@ -834,12 +800,8 @@ parts of this repository are under **Apache-2.0**. See [LICENSE](LICENSE).
 
 <div align="center">
 
-<br>
-
 Built by **Muhammad Rizwan Munawar**. If this saved you an afternoon, **star the repo**
 and pass it on to someone else bringing up a DevKit.
-
-<br>
 
 <a href="https://github.com/RizwanMunawar"><img src="assets/socials/github.svg" width="50" alt="GitHub"></a>
 &nbsp;&nbsp;
