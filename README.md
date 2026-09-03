@@ -2,7 +2,7 @@
 
 <img src="assets/sima-devkit-docs-logo-home.png" alt="sima-vision: live YOLO computer vision on a SiMa Modalix DevKit 3.0" width="640">
 
-<br>
+
 
 [![SiMa.ai](https://img.shields.io/badge/SiMa.ai-Modalix_DevKit_3.0-E63946)](https://sima.ai)
 [![Palette SDK](https://img.shields.io/badge/Palette_SDK-2.1.2-457B9D)](https://docs.sima.ai)
@@ -17,11 +17,13 @@
 [![Segmentation and blur](https://img.shields.io/badge/Segmentation-blur-FF64DA?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)
 [![Object detection](https://img.shields.io/badge/Object-detection-042AFF?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)
 
-<h3>Live YOLO26 on the MLA of a SiMa.ai Modalix DevKit 3.0.<br>Three apps, one pipeline, one command.</h3>
+<h3>Live YOLO26 on the MLA of a SiMa.ai Modalix DevKit 3.0.Three apps, one pipeline, one command.</h3>
 
 </div>
 
 ```bash
+python3 -m venv dev
+source dev/bin/activate
 pip install sima-vision
 sima-vision detect          # sample clip and model fetched for you, then run
 ```
@@ -144,7 +146,7 @@ model archive outright.
 > **New board?** Bring-up is a one-time job of about two hours, mostly downloading. That
 > is [Set up a new DevKit](#set-up-a-new-devkit). Nothing above needs it.
 
-<br>
+
 
 ## Give the DevKit internet
 
@@ -222,7 +224,6 @@ is wrong:
 <details>
 <summary><b>If it says "no second network found to share with"</b></summary>
 
-<br>
 
 Nothing that looks like a DevKit is plugged in. Every adapter that is up already
 has its own way to the internet, so there is nothing to share *with*.
@@ -239,7 +240,7 @@ cable. The board's link light comes on before anything else does.
 <details>
 <summary><b>Why it says "needs Administrator to read"</b></summary>
 
-<br>
+
 
 Windows will not tell an ordinary program whether Internet Connection Sharing is
 on. Two things look like they answer the question and do not:
@@ -258,7 +259,7 @@ can actually reach settles it either way.
 <details>
 <summary><b>On macOS or Linux</b></summary>
 
-<br>
+
 
 `--apply` is Windows-only for now, but the diagnosis works everywhere and prints
 the commands for your system. On Linux, with `wlan0` as the internet and `eth0`
@@ -876,7 +877,7 @@ command.
 <details>
 <summary><b>The pipeline, and why it is shaped that way.</b></summary>
 
-<br>
+
 
 The pipeline is a Neat `Graph`, not a single `Model.run`, because it has several stages,
 named public endpoints and a branch with a fan-in:
