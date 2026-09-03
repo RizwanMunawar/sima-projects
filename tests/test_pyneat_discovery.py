@@ -305,12 +305,33 @@ def test_a_directory_that_is_not_a_venv_is_skipped_cheaply(tmp_path, monkeypatch
     assert runtime.find_pyneat_env()[0] == site
 
 
-def test_an_unreadable_root_does_not_stop_the_search(tmp_path, monkeypatch):
+@pytest.mark.parametrize("failing", ["is_dir", "iterdir", "glob"])
+def test_an_unreadable_path_does_not_stop_the_search(tmp_path, monkeypatch, failing):
+    """A directory we are not allowed to read must be skipped, not fatal.
+
+    pathlib swallows ENOENT, ENOTDIR, EBADF and ELOOP; EACCES comes straight
+    back out. The board has plenty of root-owned directories under the places
+    this searches, and one of them raising would end a run with a traceback.
+
+    Faked rather than made with real permissions: chmod means nothing on
+    Windows and nothing at all when the tests run as root, so a genuinely
+    unreadable directory is not something every machine can produce.
+    """
     site = make_venv(tmp_path / "real", THIS)
-    monkeypatch.setattr(runtime, "PYNEAT_HOMES", ("/nowhere",))
-    monkeypatch.setattr(
-        runtime, "PYNEAT_SEARCH_ROOTS", ("/proc/1/root/nope", str(tmp_path))
-    )
+    forbidden = tmp_path / "locked"
+    forbidden.mkdir()
+
+    real = getattr(Path, failing)
+
+    def refuse(self, *args, **kwargs):
+        if str(self).startswith(str(forbidden)):
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, failing, refuse)
+    monkeypatch.setattr(runtime, "PYNEAT_HOMES", (str(forbidden),))
+    monkeypatch.setattr(runtime, "PYNEAT_SEARCH_ROOTS", (str(tmp_path),))
+
     assert runtime.find_pyneat_env()[0] == site
 
 

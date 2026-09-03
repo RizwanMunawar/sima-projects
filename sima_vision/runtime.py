@@ -89,21 +89,42 @@ def find_pyneat_env() -> tuple[Path | None, str]:
 
     wrong_version: list[str] = []
 
+    def is_dir(path: Path) -> bool:
+        """`Path.is_dir()` that answers "no" instead of raising.
+
+        pathlib only swallows ENOENT, ENOTDIR, EBADF and ELOOP; EACCES comes
+        straight back out. Since this walks directories nobody promised us
+        access to -- and on the board plenty of them are root's -- one
+        unreadable path would otherwise end a run with a traceback rather than
+        with the search continuing past it.
+        """
+        try:
+            return path.is_dir()
+        except OSError:
+            return False
+
+    def globs(path: Path, pattern: str) -> list[Path]:
+        """`Path.glob()` with the same promise, for the same reason."""
+        try:
+            return sorted(path.glob(pattern))
+        except OSError:
+            return []
+
     def look_in(root: Path) -> Path | None:
         """Is there a pyneat for *this* Python under this venv root?"""
         site = root / "lib" / want / "site-packages"
-        if list(site.glob("pyneat*")):
+        if globs(site, "pyneat*"):
             return site
         # There, but built for another CPython. Note the interpreter that can
         # use it rather than leaving someone to work it out.
-        for other in sorted((root / "lib").glob("python*")):
-            if other.name != want and list((other / "site-packages").glob("pyneat*")):
+        for other in globs(root / "lib", "python*"):
+            if other.name != want and globs(other / "site-packages", "pyneat*"):
                 wrong_version.append(f"{root}/bin/python3 ({other.name})")
         return None
 
     if override:
         root = Path(override).expanduser()
-        found = look_in(root) if root.is_dir() else None
+        found = look_in(root) if is_dir(root) else None
         if found:
             return found, f"using pyneat from {root}"
         if wrong_version:
@@ -112,7 +133,7 @@ def find_pyneat_env() -> tuple[Path | None, str]:
 
     for home in PYNEAT_HOMES:
         root = Path(home).expanduser()
-        if root.is_dir():
+        if is_dir(root):
             found = look_in(root)
             if found:
                 return found, f"using pyneat from {root}"
@@ -122,14 +143,14 @@ def find_pyneat_env() -> tuple[Path | None, str]:
     # short of walking the filesystem.
     for base in PYNEAT_SEARCH_ROOTS:
         parent = Path(base).expanduser()
-        if not parent.is_dir():
+        if not is_dir(parent):
             continue
         try:
-            children = sorted(child for child in parent.iterdir() if child.is_dir())
+            children = sorted(child for child in parent.iterdir() if is_dir(child))
         except OSError:                       # unreadable, not our problem
             continue
         for child in children:
-            if not (child / "lib").is_dir():  # not a venv, skip cheaply
+            if not is_dir(child / "lib"):     # not a venv, skip cheaply
                 continue
             found = look_in(child)
             if found:
