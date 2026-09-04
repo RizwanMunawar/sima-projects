@@ -32,14 +32,17 @@ PLACEHOLDERS = ("<", ">", "...", "$EDITOR", "EMAIL", "PATH", "NAME", "DIR", "|")
 #: still appear somewhere, so a section being rewritten does not leave a stale
 #: exemption behind.
 FOREIGN_FLAGS = {
-    "--install": "wsl --install -d Ubuntu",
-    "--shutdown": "wsl --shutdown",
     "--devkit": "sima-cli sdk setup --devkit",
-    "--now": "systemctl enable --now docker",
+    # Belongs to the made-up plugin in "Adding your own app", which is the
+    # point of that section: a flag this CLI has never heard of, added by
+    # someone else's package.
+    "--line": "the CountTask plugin example",
 }
 
-#: Commands the README has to mention by name.
-COMMANDS = [*TASKS, "preview", "init", "fetch", "doctor", "push", "pull", "remote"]
+#: Commands the README has to mention by name. There is no setup command in this
+#: list because there is no setup command: `init`, `fetch`, `doctor` and `setup`
+#: were all folded into what a run does on its own.
+COMMANDS = [*TASKS, "push", "pull", "watch", "remote"]
 
 
 def command_lines(text: str) -> list[str]:
@@ -134,6 +137,9 @@ def test_the_readme_python_keywords_exist():
         aliases |= set(table)
     # Arguments of the API functions themselves, which are not config settings.
     aliases |= {"out", "size", "config", "use_config_file", "task"}
+    # argparse's own keywords, from the plugin example in "Adding your own app".
+    # That block is defining a setting, not using one.
+    aliases |= {"dest", "metavar", "action", "default", "type", "nargs", "help"}
 
     used = set()
     for body in re.findall(r"```python\n(.*?)```", text, re.S):
@@ -149,13 +155,25 @@ def test_every_task_and_command_is_documented():
 
 
 def test_every_environment_variable_is_documented():
-    """A variable the code reads but the README never names is unfindable."""
-    from sima_vision.assets import ASSETS_ENV
-    from sima_vision.devkit import DEVKIT_ENV
+    """A variable the code reads but the README never names is unfindable.
+
+    Discovered rather than listed here. Naming two of them by hand is how the
+    Environment table came to be missing four of them: nothing broke, the table
+    just quietly stopped being the list it says it is.
+    """
+    from sima_vision import assets, bootstrap, console, devkit
+
+    declared = {
+        value
+        for module in (assets, bootstrap, console, devkit)
+        for name, value in vars(module).items()
+        if name.endswith("_ENV") and isinstance(value, str)
+    }
+    declared.add("FALL_ALERT_SMTP_PASSWORD")
 
     text = README.read_text(encoding="utf-8")
-    for name in (ASSETS_ENV, DEVKIT_ENV, "FALL_ALERT_SMTP_PASSWORD"):
-        assert name in text, f"{name} is not in the README"
+    missing = sorted(name for name in declared if name not in text)
+    assert not missing, f"the README never names: {missing}"
 
 
 def test_internal_links_resolve():

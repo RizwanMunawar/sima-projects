@@ -14,6 +14,7 @@ from ..config import (
     read_config_file,
     validate_base,
 )
+from ..console import console, human_bytes
 from ..media import check_source_file, resolve_source_geometry, source_frame_count
 from ..neat import (
     build_task_graph,
@@ -36,8 +37,8 @@ class Task:
     the writer, the pull loop and the closing report -- is shared.
 
     Attributes:
-        name: Subcommand name, such as ``detect``. Also names the packaged
-            starter config, ``sima_vision/configs/<name>.yaml``.
+        name: Subcommand name, such as ``detect``. Also the key it is
+            registered under, and the key into the asset catalogue.
         help: One-line description for ``sima-vision --help``.
         graph_name: Name of the Neat graph, such as ``yolo_detector``.
         result_label: Public output carrying the model results.
@@ -150,101 +151,119 @@ class Task:
         """The pull-loop implementation for this task."""
         raise NotImplementedError
 
-    def sample_results(self, cfg, pipeline: Pipeline, frame, boxes: list[dict]):
-        """Synthetic results for ``sima-vision preview``.
+    # -- the three build steps --
 
-        Turns plain boxes into whatever this task's ``render`` expects, so a
-        preview exercises the real drawing code rather than a stand-in. Only
-        ever called by :mod:`sima_vision.preview`; no model is involved.
+    def open_source(self, cfg, step) -> tuple[int, int, int]:
+        """Step: prove the source is readable and get its real geometry.
+
+        What is being read is named before it is probed, because probing is
+        where the warnings come from and a warning about a file you have not
+        been told the name of is half a message.
         """
-        return boxes
-
-    def build(self, cfg) -> Pipeline:
-        """The startup sequence. Identical for all three tasks."""
-        step = lambda msg: print(msg, flush=True)  # noqa: E731
-
-        check_source_file(cfg)
+        size = check_source_file(cfg)
+        where = cfg.source_uri or "<default camera>"
+        step.detail(f"{where}  ({cfg.source_type}{f', {human_bytes(size)}' if size else ''})")
         width, height, fps = resolve_source_geometry(cfg)
-        step(f"source: type={cfg.source_type} uri={cfg.source_uri or '<default camera>'} "
-             f"stream={width}x{height}@{fps}")
-        step(describe_preprocess(cfg, width, height))
+        step.note(describe_preprocess(cfg, width, height))
+        step.done(f"{width}x{height} @ {fps} fps")
+        return width, height, fps
 
-        step("loading model (first load unpacks the archive, this can take a minute)...")
+    def load_model(self, cfg, width: int, height: int, step) -> Pipeline:
+        """Step: unpack the archive onto the MLA and build the empty Pipeline."""
+        step.note("the first load unpacks the archive, which can take a minute")
         model = make_model(cfg, width, height)
         labels = load_labels(cfg.labels_path)
-        step(
-            f"model: {cfg.model_path} family={cfg.family} "
-            f"decode_type={FAMILY_DECODE_TOKENS[cfg.family]} labels={len(labels)}"
-        )
-
         # Published before the graph exists so run()'s finally can close a
         # pipeline that failed part-way through building.
         pipeline = self.make_pipeline(cfg, labels)
         self.pipeline = pipeline
         pipeline.model = model
+        step.done(
+            f"{cfg.family} -> {FAMILY_DECODE_TOKENS[cfg.family]}, {len(labels)} classes",
+            timed=True,
+        )
+        return pipeline
+
+    def build_pipeline(self, cfg, pipeline: Pipeline, geometry, step) -> None:
+        """Step: flow control, the Neat graph, Insight and the output sinks."""
+        width, height, fps = geometry
         pipeline.frame_w, pipeline.frame_h, pipeline.fps = width, height, fps
         pipeline.source_frames = source_frame_count(cfg)
         if pipeline.source_frames:
-            step(f"source: {pipeline.source_frames} coded pictures in the clip")
+            step.detail(f"{pipeline.source_frames} coded pictures in the clip")
 
         self.prepare(cfg, pipeline, step)
 
         preset, policy = resolve_flow_control(cfg)
-        step(f"runtime: preset={preset} overflow={policy} queue_depth={cfg.queue_depth} "
-             f"output_buffers={cfg.output_buffers} (2 outputs -> "
-             f"{2 * cfg.output_buffers} decoder buffers in flight)")
+        step.detail(
+            f"flow: preset={preset} overflow={policy} queue_depth={cfg.queue_depth} "
+            f"output_buffers={cfg.output_buffers}"
+        )
         if policy == "block":
-            step(
-                "       block keeps every frame, so the run takes longer than the clip.\n"
-                "       Output length matches the input. This is the right mode for a file."
+            step.note(
+                "block keeps every frame, so the run takes longer than the clip and "
+                "the output length matches the input. That is right for a file."
             )
         elif cfg.source_type == "video":
-            step(
-                "[warn] overflow_policy drops frames, so the recording will be shorter\n"
-                "       than the input and will play fast. Use auto for a file source."
+            console.warn(
+                "overflow_policy drops frames, so the recording will be shorter\n"
+                "than the input and will play fast. Use auto for a file source."
             )
 
-        step("building graph...")
         graph = build_task_graph(
-            cfg, model, width, height, fps,
+            cfg, pipeline.model, width, height, fps,
             self.graph_name, self.result_label, self.output_label,
         )
         if cfg.profile:
-            step(f"Backend:\n{graph.describe_backend()}")
-        # Kept on the pipeline, not just used here: the Run below outlives
-        # this scope and goes on using what the Graph owns. See Pipeline.graph.
+            step.detail(f"backend:\n{graph.describe_backend()}")
+        # Kept on the pipeline, not just used here: the Run below outlives this
+        # scope and goes on using what the Graph owns. See Pipeline.graph.
         pipeline.graph = graph
         pipeline.run = graph.build(make_run_options(cfg))
-        step("graph built")
 
         if cfg.insight_enable:
             start_insight(cfg, pipeline, width, height, fps, step)
         if cfg.save_enable:
-            step(f"save: dir={cfg.save_dir} every={cfg.save_every} overlay={cfg.save_overlay}")
+            step.detail(
+                f"stills: {cfg.save_dir}/ every {cfg.save_every} frames "
+                f"overlay={cfg.save_overlay}"
+            )
         if cfg.video_enable:
             pipeline.writer, pipeline.writer_path = open_video_writer(cfg, width, height, fps)
-            step(
+            step.detail(
                 f"video: {pipeline.writer_path} codec={cfg.video_codec} "
                 f"fps={cfg.video_fps or fps} hud={cfg.video_hud}"
             )
-        step("running. press Ctrl-C to stop.")
+        step.done(f"{self.graph_name} ready", timed=True)
+
+    def build(self, cfg) -> Pipeline:
+        """The startup sequence, as three numbered steps. Shared by every task."""
+        with console.step("source", "probing the stream") as step:
+            geometry = self.open_source(cfg, step)
+        with console.step("model", f"loading {Path(cfg.model_path).name}") as step:
+            pipeline = self.load_model(cfg, geometry[0], geometry[1], step)
+        with console.step("pipeline", "building the Neat graph") as step:
+            self.build_pipeline(cfg, pipeline, geometry, step)
         return pipeline
 
     def run(self, cfg, stopper: Stopper) -> int:
-        """Build and run, closing the pipeline whatever happens.
+        """Fetch what is missing, build, and run, closing the pipeline whatever happens.
 
-        This is the only place that fetches anything. A missing clip or model
-        is downloaded into ``assets/`` here, so ``--validate`` and ``preview``
-        -- which resolve exactly the same paths -- stay offline.
+        This is the only place that fetches anything. A missing clip or model is
+        downloaded into ``assets/`` here, so ``--validate``, which resolves
+        exactly the same paths, stays offline.
 
         The ``finally`` covers a failure part-way through :meth:`build` as well
         as one during the run, which is why :attr:`pipeline` is published early:
         by the time the graph is built the Run holds the MLA, and leaving it
         held makes the *next* launch fail with a busy device.
         """
-        cfg = ensure_assets(cfg, self.name)
+        with console.step("assets", "model archive and video source") as step:
+            cfg = ensure_assets(cfg, self.name, step)
+            step.done("ready")
         try:
             pipeline = self.build(cfg)
+            console.banner("running", "press Ctrl-C to stop")
             return run_pipeline(pipeline, cfg, stopper, self.runtime(cfg, pipeline))
         finally:
             if self.pipeline is not None:

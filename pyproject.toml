@@ -31,33 +31,40 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Image Recognition",
 ]
 
-# pyneat is not here on purpose: it is an aarch64 wheel that ships with the
-# Palette SDK and is not on PyPI, so listing it would make `pip install
-# sima-vision` fail everywhere including the DevKit. Same for OpenCV, which the
-# board provides in /usr/lib/python3*/dist-packages -- installing
-# opencv-python would pull numpy 2.x and break every simaai-* package.
-# `sima-vision <task> --validate` needs neither, which is the point.
+# One dependency, and it is pure Python. That is what lets `pip install
+# sima-vision` be the whole install on a laptop and on the board alike.
+#
+# pyneat is deliberately absent: it is an aarch64 wheel that ships with the
+# Palette SDK and is not on PyPI, so listing it would make the install fail
+# everywhere, the DevKit included. Same for numpy and OpenCV, which the board
+# provides in /usr/lib/python3*/dist-packages -- depending on opencv-python
+# would pull numpy 2.x over the board's copy and break every simaai-* package,
+# so installing this package would break the board. sima_vision/bootstrap.py
+# finds all three at run time instead, and pins numpy below 2 on the one path
+# where it does install anything.
 dependencies = [
     "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
-# Everything `sima-vision preview` and `sima-vision doctor` need to draw on a
-# laptop. Not needed on the DevKit, which provides both system-wide.
-preview = [
-    "numpy>=1.24",
-    "opencv-python>=4.7",
-]
-# Only for a board that is somehow missing them. numpy is capped here because
-# pyneat 0.3.0 requires numpy<2, and installing 2.x breaks every simaai-*
-# package on the DevKit.
+# Not normally needed: a run installs these itself, into whichever virtualenv
+# holds pyneat, and only when the board turns out not to have them. Kept as an
+# extra so the same pinning is available by hand on a board where automatic
+# installs are turned off with SIMA_VISION_AUTO_INSTALL=0. numpy is capped
+# because pyneat 0.3.0 requires numpy<2 and 2.x breaks every simaai-* package.
 board = [
     "numpy>=1.24,<2",
     "opencv-python>=4.7,<5",
 ]
+# One command gets you a working checkout: the test suite exercises the mask
+# decoding, compositing and overlay for real, so it needs numpy and OpenCV
+# even though the package itself does not. Headless, because no test opens
+# a window and the GUI build drags in system libraries CI does not have.
 dev = [
     "pytest>=7.4",
     "ruff>=0.5",
+    "numpy>=1.24",
+    "opencv-python-headless>=4.7",
 ]
 
 [project.urls]
@@ -69,6 +76,13 @@ Issues = "https://github.com/RizwanMunawar/sima-projects/issues"
 # NOT `sima-cli`: that name belongs to SiMa.ai's own CLI, which the setup guide
 # installs to pair the board. Shadowing it would break the DevKit workflow.
 sima-vision = "sima_vision.cli:main"
+
+# Another distribution adds a subcommand by advertising one of these; see
+# sima_vision/tasks/__init__.py. The built-in three are registered in code
+# rather than here, because they cannot be uninstalled separately.
+#
+#   [project.entry-points."sima_vision.tasks"]
+#   count = "my_package.count:CountTask"
 
 [tool.hatch.version]
 path = "sima_vision/__init__.py"

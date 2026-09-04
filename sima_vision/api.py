@@ -4,14 +4,13 @@ Every keyword these accept is derived from the CLI's own flags, so
 ``--blur-strength 81`` and ``blur_strength=81`` cannot drift apart -- there is
 one table and it is built from the parser at import time.
 
-    from sima_vision import run, preview, validate
+    from sima_vision import run, validate
 
-    preview("segment", out="blur.png", blur_strength=81)
     validate("detect", conf=0.5)
     run("detect", source="clip.h264", model="yolo26m-det.tar.gz", conf=0.5)
 
-``preview`` and ``validate`` need no board. ``run`` needs the DevKit, because
-that is where the MLA is.
+``validate`` needs no board and touches no network. ``run`` needs the DevKit,
+because that is where the MLA is.
 """
 
 from __future__ import annotations
@@ -138,8 +137,8 @@ def run(task: str, config: str | Path | None = None, **settings) -> int:
     """Run one task to completion. **Needs the DevKit.**
 
     A clip or model archive that is missing is downloaded into ``assets/``
-    first; see :mod:`sima_vision.assets`. ``validate`` and ``preview`` resolve
-    the same paths and never fetch anything.
+    first; see :mod:`sima_vision.assets`. ``validate`` resolves the same paths
+    and never fetches anything.
 
     Args:
         task: ``detect``, ``segment`` or ``fall``.
@@ -151,60 +150,27 @@ def run(task: str, config: str | Path | None = None, **settings) -> int:
     """
     import os
 
+    from . import __version__
+    from .bootstrap import detect_environment, ensure_runtime
+    from .cli import RUN_STEPS
+    from .console import console
     from .runloop import Stopper
-    from .runtime import load_runtime_dependencies
 
     handle = _task(task)
     cfg = load(task, config, **settings)
-    load_runtime_dependencies()
-    # The same two side effects the command line has, so `run(...)` and
-    # `sima-vision <task>` really are the same run.
+
+    # The same steps, in the same order, as the command line: `run("detect")`
+    # and `sima-vision detect` are one code path with two front doors.
+    console.plan(RUN_STEPS)
+    console.banner(f"sima-vision {__version__}", task)
+    with console.step("environment", "checking this machine") as step:
+        env = detect_environment()
+        step.done(env.summary())
+    ensure_runtime(env)
+
     if cfg.profile:
         os.environ.setdefault("SIMA_GST_ELEMENT_TIMINGS", "1")
         os.environ.setdefault("SIMA_GST_FLOW_DEBUG", "1")
     if cfg.save_enable:
         Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
     return handle.run(cfg, Stopper())
-
-
-def preview(task: str = "detect", config: str | Path | None = None,
-            out: str | Path = "preview.png", source: str | None = None,
-            size: tuple[int, int] = (1280, 720), use_config_file: bool = True,
-            **settings) -> Path:
-    """Draw the overlay a config produces, and write it to a PNG. **No board.**
-
-    Runs no model: the detections are synthetic and exist only to give the
-    drawing code something to draw.
-
-    Args:
-        task: ``detect``, ``segment`` or ``fall``.
-        config: Path to a config file, or None to look for ``./config.yaml``.
-        out: Where to write the PNG.
-        source: An image or video to draw on. None paints a synthetic scene.
-        size: Synthetic scene size, ignored when ``source`` is readable.
-        use_config_file: False ignores any file, like ``--no-config``.
-        **settings: Anything the CLI takes, as a keyword.
-
-    Returns:
-        The path written.
-    """
-    from . import runtime
-    from .cli import load_drawing_dependencies
-    from .scene import build_frame, render
-    from .sinks import load_labels
-
-    load_drawing_dependencies()
-    handle = _task(task)
-    config_path = Path(config) if config else None
-    cfg = handle.load(
-        config_path, settings_to_overrides(handle, settings), use_file=use_config_file
-    )
-
-    frame, subjects, _origin, _ = build_frame(source, size)
-    annotated = render(handle, cfg, frame, subjects, load_labels(cfg.labels_path))
-    out = Path(out)
-    if out.parent != Path("."):
-        out.parent.mkdir(parents=True, exist_ok=True)
-    if not runtime.cv2.imwrite(str(out), annotated):
-        raise RuntimeError(f"could not write {out}")
-    return out

@@ -36,8 +36,6 @@ from .runtime import (
 PACKAGE_ROOT = Path(__file__).resolve().parent
 #: Labels used when nothing else resolves.
 PACKAGED_LABELS = PACKAGE_ROOT / "data" / "coco_labels.txt"
-#: The heavily commented starter configs `sima-vision init` writes out.
-PACKAGED_CONFIGS = PACKAGE_ROOT / "configs"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -849,11 +847,6 @@ def apply_overrides(raw: dict, overrides: dict) -> dict:
 
 #: Config file names looked for when ``--config`` is not given, in order.
 DISCOVERY_NAMES = ("config.yaml", "config.yml")
-
-
-def packaged_config(task: str) -> Path:
-    """The commented starter config for a task, as shipped in the wheel."""
-    return PACKAGED_CONFIGS / f"{task}.yaml"
 
 
 def discover_config(explicit: Path | None) -> Path | None:

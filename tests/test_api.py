@@ -14,20 +14,10 @@ from sima_vision.cli import build_parser
 from sima_vision.tasks import TASKS
 
 
-def test_the_package_exports_the_three_verbs():
-    for name in ("run", "preview", "validate", "load"):
+def test_the_package_exports_its_verbs():
+    for name in ("run", "validate", "load"):
         assert callable(getattr(sima_vision, name))
 
-
-def test_the_preview_function_does_not_hide_the_scene_module():
-    """`from sima_vision import preview` is the function; the module still imports."""
-    from sima_vision.scene import build_scene
-
-    assert callable(sima_vision.preview)
-    assert callable(build_scene)
-
-
-# ── the alias table ──
 
 
 @pytest.mark.parametrize("name", list(TASKS))
@@ -129,23 +119,5 @@ def test_unknown_task():
         sima_vision.validate("nope")
 
 
-@pytest.mark.parametrize("name", list(TASKS))
-def test_preview_writes_a_png(tmp_path, name):
-    out = sima_vision.preview(name, out=tmp_path / "p.png", size=(320, 180))
-    assert out.is_file() and out.stat().st_size > 0
 
 
-def test_preview_settings_reach_the_drawing(tmp_path):
-    """Two different blur settings must not produce the same image."""
-    gaussian = sima_vision.preview(
-        "segment", out=tmp_path / "g.png", size=(320, 180), blur_method="gaussian"
-    ).read_bytes()
-    pixelated = sima_vision.preview(
-        "segment", out=tmp_path / "p.png", size=(320, 180), blur_method="pixelate"
-    ).read_bytes()
-    assert gaussian != pixelated
-
-
-def test_preview_needs_no_model_or_source(tmp_path):
-    """The placeholders are filled in, so this must not raise about model.path."""
-    assert sima_vision.preview("detect", out=tmp_path / "p.png", size=(320, 180)).is_file()

@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import json
 import queue
-import sys
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import runtime
+from .console import console, human_bytes
 from .neat import build_video_graph
 from .runtime import time_ms
 from .samples import FrameStamp
@@ -81,14 +81,13 @@ class Pipeline:
         if self.writer is not None:
             try:
                 self.writer.release()
-                size = Path(self.writer_path).stat().st_size / 1e6
-                print(
+                size = Path(self.writer_path).stat().st_size
+                console.report(
                     f"video: wrote {self.writer_frames} frames to {self.writer_path} "
-                    f"({size:.1f} MB)",
-                    flush=True,
+                    f"({human_bytes(size)})"
                 )
             except Exception as exc:
-                print(f"[warn] closing video writer failed: {exc}", file=sys.stderr)
+                console.warn(f"closing the video writer failed: {exc}")
             self.writer = None
         for handle in (self.video_run, self.run):
             if handle is None:
@@ -96,7 +95,7 @@ class Pipeline:
             try:
                 handle.close()
             except Exception as exc:  # pragma: no cover - teardown must not mask errors
-                print(f"[warn] close failed: {exc}", file=sys.stderr)
+                console.warn(f"close failed: {exc}")
 
 
 def load_labels(path: Path) -> list[str]:
@@ -128,10 +127,9 @@ def open_video_writer(cfg, width: int, height: int, fps: int):
     # essentially everywhere, at the cost of a much larger file.
     writer.release()
     fallback = path.with_suffix(".avi")
-    print(
-        f"[warn] codec {cfg.video_codec!r} unavailable for {path.name}, "
-        f"falling back to MJPG/{fallback.name}",
-        file=sys.stderr,
+    console.warn(
+        f"codec {cfg.video_codec!r} unavailable for {path.name}, "
+        f"falling back to MJPG/{fallback.name}"
     )
     writer = cv2.VideoWriter(
         str(fallback), cv2.VideoWriter_fourcc(*"MJPG"), float(out_fps), (width, height)
@@ -148,7 +146,6 @@ def open_video_writer(cfg, width: int, height: int, fps: int):
 def start_insight(cfg, pipeline: Pipeline, width: int, height: int, fps: int, step) -> None:
     """Bring up the Insight video and metadata senders on ``pipeline``."""
     pyneat = runtime.pyneat
-    step("starting Insight senders...")
     pipeline.video_graph, pipeline.video_run, pipeline.video_port = build_video_graph(
         cfg, width, height, fps
     )
@@ -157,12 +154,12 @@ def start_insight(cfg, pipeline: Pipeline, width: int, height: int, fps: int, st
     metadata_options.channel = cfg.insight_channel
     metadata_options.metadata_port_base = cfg.metadata_port_base
     pipeline.metadata_sender = pyneat.MetadataSender(metadata_options)
-    step(
+    step.detail(
         f"insight: host={cfg.insight_host} video={pipeline.video_port} "
         f"metadata={pipeline.metadata_sender.metadata_port()} "
         f"channel={cfg.insight_channel}"
     )
-    step(f"  view at https://localhost:9900 and select channel {cfg.insight_channel}")
+    step.note(f"view at https://localhost:9900 and select channel {cfg.insight_channel}")
 
 
 def send_metadata(pipeline: Pipeline, stamp: FrameStamp, stream: str, objects: list[dict]) -> None:
@@ -250,7 +247,7 @@ def wants_annotated(cfg, pipeline: Pipeline, need_jpeg: bool) -> bool:
 def save_frame(cfg, index: int, frame) -> None:
     out_path = Path(cfg.save_dir) / f"frame_{index:06d}.{cfg.save_format}"
     if not runtime.cv2.imwrite(str(out_path), frame):
-        print(f"[warn] failed to write {out_path}", file=sys.stderr)
+        console.warn(f"failed to write {out_path}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

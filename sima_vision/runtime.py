@@ -1,41 +1,27 @@
-"""Deferred third-party imports and the config-token to pyneat-enum tables.
+"""Deferred third-party imports, and the config-token to pyneat-enum tables.
 
 ``pyneat`` is an aarch64 wheel that only exists on the DevKit, and ``cv2`` comes
-from the board's system packages rather than pip. Importing either at module
-scope would make ``sima-vision --help`` and ``sima-vision detect --validate``
-fail on a laptop, which is exactly where you want to check a config before
-copying it to the board. So both are loaded by :func:`load_runtime_dependencies`
-at the point of first real use, and the enum tables below are plain strings so
-they can be validated without either.
+from the board's system packages rather than from pip. Importing either at
+module scope would make ``sima-vision --help`` and ``sima-vision detect
+--validate`` fail on a laptop, which is exactly where you want to check a config
+before driving the board with it. So both are left as None here and bound by
+:func:`sima_vision.bootstrap.ensure_runtime` at the point of first real use.
 
-Neither lives where pip would put it, and they do not live in the same place as
-each other:
+This module deliberately imports nothing of its own. It is the bottom of the
+stack: :mod:`sima_vision.bootstrap` finds the modules and writes them here, and
+everything else reads them back through this module (``from . import runtime``
+then ``runtime.cv2``) rather than importing the names directly, because a
+``from .runtime import cv2`` binds None once and for all.
 
-* ``cv2`` is in the board's system packages, ``/usr/lib/python3*/dist-packages``.
-* ``pyneat`` is in a **virtualenv of its own**, which ``sima-cli sdk setup``
-  creates at ``~/pyneat``. Nothing puts it on the default path.
-
-So ``pip install sima-vision`` followed by ``sima-vision detect`` used to fail
-with ``ModuleNotFoundError: pyneat`` whenever the install went anywhere but that
-venv, which is every install that does not know to look for it. The honest fix
-would be to tell everyone to type ``~/pyneat/bin/pip install sima-vision``, and
-that still works and is still the least surprising thing to do. But the plain
-command is what people type, so :func:`find_pyneat_env` goes and finds the venv
-instead, and only after the ordinary import has already failed. A working
-interpreter is never second-guessed.
+The enum tables below are plain strings for the same reason: a config can be
+validated, and a wrong ``family=`` rejected, without pyneat being anywhere near.
 """
 
 from __future__ import annotations
 
-import glob
-import os
-import sys
 import time
-from pathlib import Path
 
-# Populated by load_runtime_dependencies(). Modules read them through this
-# module (``from . import runtime`` then ``runtime.cv2``) rather than importing
-# the names directly, because a `from runtime import cv2` binds None forever.
+#: Bound by :func:`sima_vision.bootstrap.ensure_runtime`.
 cv2 = None
 np = None
 pyneat = None
@@ -43,127 +29,10 @@ pyneat = None
 #: ``cv2.FONT_HERSHEY_SIMPLEX``, filled in once cv2 is available.
 FONT = 0
 
-#: Points at the pyneat virtualenv when it is somewhere unusual.
-PYNEAT_ENV = "SIMA_VISION_PYNEAT"
 
-#: Where the pyneat venv ends up, in the order worth looking. ``~/pyneat`` is
-#: what ``sima-cli sdk setup`` creates; ``/media/nvme`` is where you are told to
-#: put it by hand, because the board's root filesystem is too small.
-PYNEAT_HOMES = (
-    "~/pyneat",
-    "/media/nvme/neat/pyneat",
-    "/media/nvme/pyneat",
-    "/opt/pyneat",
-)
-
-
-def find_pyneat_env() -> tuple[Path | None, str]:
-    """Locate a pyneat virtualenv this interpreter could actually import from.
-
-    Returns:
-        A ``(site_packages, note)`` pair. ``site_packages`` is None when there is
-        nothing usable, and ``note`` always says why in one line, so ``doctor``
-        and the run error can print the same explanation.
-
-    The version check is the point. ``pyneat`` is a compiled extension built for
-    one CPython, so putting a 3.10 venv on a 3.12 path swaps
-    ``ModuleNotFoundError`` for an undefined-symbol crash out of the dynamic
-    linker, which is a far worse thing to hand someone.
-    """
-    want = f"python{sys.version_info.major}.{sys.version_info.minor}"
-    override = os.environ.get(PYNEAT_ENV, "")
-    homes = [override] if override else list(PYNEAT_HOMES)
-
-    wrong_version: list[str] = []
-    for home in homes:
-        root = Path(home).expanduser()
-        if not root.is_dir():
-            continue
-        site = root / "lib" / want / "site-packages"
-        if list(site.glob("pyneat*")):
-            return site, f"using pyneat from {root}"
-        # The venv is there but built for another Python. Name the interpreter
-        # that can use it rather than leaving them to work it out.
-        for other in sorted((root / "lib").glob("python*")):
-            if list((other / "site-packages").glob("pyneat*")):
-                wrong_version.append(f"{root}/bin/python3 ({other.name})")
-
-    if wrong_version:
-        return None, (
-            f"found pyneat, but built for {', '.join(wrong_version)} and this is "
-            f"{want}"
-        )
-    if override:
-        return None, f"${PYNEAT_ENV} is {override}, which has no pyneat for {want}"
-    return None, "no pyneat virtualenv found"
-
-
-def missing_pyneat_message(note: str) -> str:
-    """What to print when pyneat cannot be imported and cannot be found."""
-    on_board = bool(glob.glob("/usr/lib/python3*/dist-packages")) and sys.platform.startswith(
-        "linux"
-    )
-    if not on_board:
-        return (
-            "pyneat is missing, and this does not look like a DevKit.\n"
-            "  It is an aarch64 wheel that ships with the Palette SDK, not "
-            "something pip can\n  install, so inference only runs on the board. "
-            "Everything else works here:\n"
-            "    sima-vision <task> --validate     check a config\n"
-            "    sima-vision preview               see the overlay\n"
-            "    sima-vision remote -- <task>      run it on the board from here"
-        )
-    return (
-        f"pyneat is missing: {note}.\n"
-        "  `sima-cli sdk setup` puts it in a virtualenv of its own, and pip "
-        "installs into\n  whichever Python you ran pip with. Install into that "
-        "venv instead:\n"
-        "    ~/pyneat/bin/pip install sima-vision\n"
-        "    ~/pyneat/bin/sima-vision detect\n"
-        f"  Or point at it: export {PYNEAT_ENV}=/path/to/the/venv\n"
-        "  If pairing never ran, `sima-cli sdk setup --devkit <ip>` from your PC "
-        "installs it."
-    )
-
-
-def load_runtime_dependencies() -> None:
-    """Import cv2, numpy and pyneat, finding the board's copies of each.
-
-    The board ships OpenCV in ``/usr/lib/python3*/dist-packages`` rather than in
-    any venv, so that directory goes on ``sys.path`` before the import. Doing it
-    here rather than in the venv keeps ``opencv-python`` -- which would drag in
-    numpy 2.x and break pyneat -- off the board entirely.
-
-    pyneat is looked for only if importing it the ordinary way fails, so an
-    interpreter that already has it is never interfered with.
-
-    Raises:
-        ImportError: With the interpreter to use, when pyneat cannot be found.
-    """
-    global cv2, np, pyneat, FONT
-    if pyneat is not None:
-        return
-    for path in glob.glob("/usr/lib/python3*/dist-packages"):
-        if path not in sys.path:
-            sys.path.insert(0, path)
-
-    try:
-        import pyneat as pyneat_module
-    except ImportError:
-        site, note = find_pyneat_env()
-        if site is None:
-            raise ImportError(missing_pyneat_message(note)) from None
-        # Ahead of the current environment: this venv also holds the numpy<2
-        # that pyneat was built against, and that is the one it has to get.
-        sys.path.insert(0, str(site))
-        print(f"[pyneat] {note}", flush=True)
-        import pyneat as pyneat_module
-
-    import cv2 as cv2_module
-    import numpy as np_module
-
-    cv2, np, pyneat = cv2_module, np_module, pyneat_module
-    FONT = cv2.FONT_HERSHEY_SIMPLEX
+def ready() -> bool:
+    """Whether the deferred modules have been bound yet."""
+    return pyneat is not None and cv2 is not None and np is not None
 
 
 def time_ms() -> float:

@@ -195,9 +195,13 @@ def test_two_timeouts_in_a_row_end_a_file_run(capsys):
 def test_a_short_run_against_a_known_clip_length_is_called_out(capsys):
     cfg, pipeline = make(frames=4, source_frames=100)
     run_pipeline(pipeline, cfg, Stopper(), CountingRuntime())
+    # Warnings share stdout with the steps, deliberately: a warning about the
+    # recording only makes sense read in place, next to the run it belongs to.
+    # Only errors go to stderr.
     combined = capsys.readouterr()
     assert "stalled" in combined.out
-    assert "incomplete" in combined.err
+    assert "incomplete" in combined.out
+    assert combined.err == ""
 
 
 # ── failures ──
@@ -263,7 +267,7 @@ def test_profiling_prints_a_line(capsys):
         frames=4, **{"runtime.profile": True, "runtime.profile_interval": 2}
     )
     run_pipeline(pipeline, cfg, Stopper(), CountingRuntime())
-    assert "[profile]" in capsys.readouterr().out
+    assert "profile: frames=" in capsys.readouterr().out
 
 
 def test_the_heartbeat_counts_what_the_task_returns(capsys):

@@ -24,20 +24,37 @@ def test_every_task_has_a_subcommand():
         assert args.command == name
 
 
-def test_the_subcommand_name_survives_a_task_flag():
-    """`preview --task` and the init/fetch positional are both called `task`.
-
-    They used to share argparse's dest with the subcommand itself, so which one
-    won came down to parse order.
-    """
+def test_the_setup_commands_are_gone():
+    """init, fetch, doctor and setup: a run does all four of those jobs now."""
     parser = build_parser()
-    assert parser.parse_args(["preview", "--task", "segment"]).command == "preview"
-    assert parser.parse_args(["preview", "--task", "segment"]).task == "segment"
-    assert parser.parse_args(["preview"]).task == "detect"
-    assert parser.parse_args(["init", "fall"]).command == "init"
-    assert parser.parse_args(["init", "fall"]).task == "fall"
-    assert parser.parse_args(["fetch"]).task == "detect"
-    assert parser.parse_args(["doctor"]).command == "doctor"
+    available = {
+        name
+        for action in parser._actions
+        for name in (getattr(action, "choices", None) or ())
+    }
+    for name in ("init", "fetch", "doctor", "setup"):
+        with pytest.raises(SystemExit):
+            parser.parse_args([name])
+        assert name not in available
+
+
+def test_watch_and_remote_keep_everything_after_the_dashes():
+    """The task's own flags must reach the board, not be parsed here."""
+    parser = build_parser()
+    watch = parser.parse_args(["watch", "--", "segment", "--blur-strength", "81"])
+    assert watch.command == "watch"
+    assert watch.argv == ["--", "segment", "--blur-strength", "81"]
+    # --host and --port belong to watch itself and stop at the --.
+    watch = parser.parse_args(["watch", "--port", "9002", "--", "detect"])
+    assert (watch.port, watch.argv) == (9002, ["--", "detect"])
+
+
+def test_preview_is_gone():
+    """It drew synthetic detections. Nothing here invents data any more."""
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["preview"])
+    assert "preview" not in parser.format_help()
 
 
 def test_no_command_prints_help_and_fails():
@@ -153,42 +170,11 @@ def test_no_flags_at_all_still_validates(capsys):
     assert "assets/videos/people-walking-outside-mall.h264" in out
 
 
-# ── init and fetch ──
+# -- what a run needs, and how it says so --
 
 
-@pytest.mark.parametrize("name", list(TASKS))
-def test_init_writes_a_documented_config(tmp_path, monkeypatch, name):
-    monkeypatch.chdir(tmp_path)
-    assert main(["init", name]) == 0
-    written = (tmp_path / "config.yaml").read_text(encoding="utf-8")
-    assert written.count("#") > 50, "the starter config should be commented"
-    # And the command that reads it back must find it with no --config at all.
-    assert main([name, "--validate"]) == 0
-
-
-def test_init_refuses_to_clobber(tmp_path, monkeypatch, capsys):
-    monkeypatch.chdir(tmp_path)
-    assert main(["init", "detect"]) == 0
-    assert main(["init", "detect"]) == 1
-    assert "already exists" in capsys.readouterr().err
-
-
-def test_init_force_overwrites(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "config.yaml").write_text("stale", encoding="utf-8")
-    assert main(["init", "segment", "--force"]) == 0
-    assert "stale" not in (tmp_path / "config.yaml").read_text(encoding="utf-8")
-
-
-def test_init_can_write_elsewhere(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    out = tmp_path / "cfgs" / "fall.yaml"
-    assert main(["init", "fall", "-o", str(out)]) == 0
-    assert out.is_file()
-
-
-def test_fetch_prints_a_runnable_model_command():
-    """The model is behind a login, so the command has to be exact."""
+def test_the_model_command_is_runnable_for_every_task():
+    """A run shells out to this when the pack is missing, so it has to be exact."""
     from sima_vision.assets import CATALOGUE, model_command
 
     for name in TASKS:
@@ -202,39 +188,27 @@ def test_fetch_prints_a_runnable_model_command():
 
 def test_every_command_is_reachable():
     parser = build_parser()
-    for name in [*TASKS, "init", "fetch", "preview", "doctor"]:
+    for name in [*TASKS, "push", "pull", "watch", "remote"]:
         assert name in parser.format_help()
 
 
-def test_fetch_reports_a_download_failure(tmp_path, monkeypatch, capsys):
-    """A half-written file must not be left behind looking like a good one."""
-    import urllib.error
-
-    from sima_vision import assets, setup_commands
-
-    def boom(url, timeout=0):
-        raise urllib.error.URLError("no route to host")
-
-    monkeypatch.setattr(assets.urllib.request, "urlopen", boom)
-    monkeypatch.chdir(tmp_path)
-    assert setup_commands.run_fetch("detect", tmp_path / "assets") == 1
-    assert "FAIL" in capsys.readouterr().err
-    assert not list((tmp_path / "assets").rglob("*.part"))
-    assert not list((tmp_path / "assets").rglob("*.h264"))
+def test_a_task_is_all_you_need_to_type():
+    """No setup subcommand may stand between `pip install` and a run."""
+    parser = build_parser()
+    for name in TASKS:
+        args = parser.parse_args([name])
+        assert args.command == name
+        assert args.validate is False
 
 
-def test_fetch_does_not_redownload(tmp_path, monkeypatch, capsys):
-    from sima_vision import assets, setup_commands
+def test_quiet_is_available_on_every_task():
+    for name in TASKS:
+        assert parse([name, "--quiet"]).quiet is True
 
-    videos = tmp_path / "assets" / "videos"
-    videos.mkdir(parents=True)
-    for name in assets.SAMPLE_VIDEOS:
-        (videos / name).write_bytes(b"already here")
 
-    def boom(url, timeout=0):
-        raise AssertionError("should not have been fetched")
-
-    monkeypatch.setattr(assets.urllib.request, "urlopen", boom)
-    monkeypatch.chdir(tmp_path)
-    assert setup_commands.run_fetch("segment", tmp_path / "assets") == 0
-    assert "have" in capsys.readouterr().out
+def test_validate_prints_through_the_console(capsys):
+    """--validate is the one path with no board, so its output is the whole answer."""
+    assert main(["detect", "--no-config", "--validate"]) == 0
+    out = capsys.readouterr().out
+    assert "config OK" in out
+    assert "nothing was downloaded" in out

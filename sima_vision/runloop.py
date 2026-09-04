@@ -11,8 +11,8 @@ A task plugs into this by implementing :class:`TaskRuntime`.
 from __future__ import annotations
 
 import signal
-import sys
 
+from .console import console
 from .runtime import time_ms
 from .samples import FrameStamp
 from .sinks import Pipeline, SinkJob, SinkWorker
@@ -52,7 +52,7 @@ class Stopper:
 
     def _handle(self, signum, _frame) -> None:
         if not self.stop:
-            print(f"\n[signal {signum}] stopping, closing Run...", flush=True)
+            console.report(f"[signal {signum}] stopping, closing Run...")
         self.stop = True
 
 
@@ -111,14 +111,13 @@ class ProfileWindow:
         stage = (
             f"{self.stage}={self.stage_ms / self.frames:.1f}ms " if self.stage else ""
         )
-        print(
-            f"[profile] frames={self.frames} fps={fps:.1f} "
+        console.write(
+            f"  profile: frames={self.frames} fps={fps:.1f} "
             f"pull={self.pull_ms / self.frames:.1f}ms "
             f"decode={self.decode_ms / self.frames:.1f}ms "
             f"{stage}"
             f"sinks={self.sink_ms / self.frames:.1f}ms "
-            f"{self.unit}={self.objects / self.frames:.1f}",
-            flush=True,
+            f"{self.unit}={self.objects / self.frames:.1f}"
         )
         self.reset()
 
@@ -193,21 +192,19 @@ def pull_frame(pipeline: Pipeline, cfg, sinks: SinkWorker, label: str, processed
     if sample is not None:
         return sample, False, False
 
-    print(
-        f"[warn] timed out waiting for results after {processed} frames; "
-        "flushing the sink queue and retrying once",
-        file=sys.stderr, flush=True,
+    console.warn(
+        f"timed out waiting for results after {processed} frames; "
+        "flushing the sink queue and retrying once"
     )
     sinks.drain()
     sample = pipeline.run.pull(label, cfg.pull_timeout_ms)
     if sample is None:
         return None, True, False
 
-    print(
-        "[warn] the source recovered once the backlog was flushed. That was "
+    console.warn(
+        "the source recovered once the backlog was flushed. That was "
         "back-pressure from this app rather than the end of the clip; lower "
-        "runtime.queue_depth if it keeps happening.",
-        file=sys.stderr, flush=True,
+        "runtime.queue_depth if it keeps happening."
     )
     return sample, True, True
 
@@ -273,7 +270,7 @@ def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
 
         if sample is None:
             if cfg.source_type == "video":
-                print(source_stopped_message(cfg, pipeline, processed), flush=True)
+                console.report(source_stopped_message(cfg, pipeline, processed))
                 break
             continue
 
@@ -301,10 +298,9 @@ def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
             elapsed = time_ms() - heartbeat_start
             rate = HEARTBEAT_EVERY * 1000.0 / elapsed if elapsed > 0 else 0.0
             live_fps = rate or live_fps
-            print(
-                f"[{processed}] {rate:.1f} fps, "
-                f"{heartbeat_count / HEARTBEAT_EVERY:.1f} {task.unit}/frame avg",
-                flush=True,
+            console.write(
+                f"  {processed:>6}  {rate:.1f} fps, "
+                f"{heartbeat_count / HEARTBEAT_EVERY:.1f} {task.unit}/frame avg"
             )
             heartbeat_start = time_ms()
             heartbeat_count = 0
@@ -330,7 +326,7 @@ def report_recording(cfg, pipeline: Pipeline, timeouts: int) -> None:
 
     if not short:
         if total and pipeline.writer_frames >= total:
-            print(f"video: complete, all {total} frames of the clip.", flush=True)
+            console.report(f"video: complete, all {total} frames of the clip.")
         return
 
     causes = []
@@ -358,10 +354,7 @@ def report_recording(cfg, pipeline: Pipeline, timeouts: int) -> None:
         f"{total / out_fps:.1f}s" if total
         else f"only {seconds:.1f}s ({pipeline.writer_frames} frames at {out_fps} fps)"
     )
-    print(
-        f"[warn] the recording is incomplete: {missing}.\n{listed}",
-        file=sys.stderr, flush=True,
-    )
+    console.warn(f"the recording is incomplete: {missing}.\n{listed}")
 
 
 def run_pipeline(pipeline: Pipeline, cfg, stopper: Stopper, task: TaskRuntime) -> int:
@@ -383,12 +376,13 @@ def run_pipeline(pipeline: Pipeline, cfg, stopper: Stopper, task: TaskRuntime) -
     profile.flush()
     total = pipeline.source_frames
     summary = " ".join(task.summarise(pipeline, processed))
-    print(
+    console.write()
+    console.report(
         f"processed={processed}{f' of {total}' if total else ''} timeouts={timeouts} "
         f"recovered={recovered}{f' {summary}' if summary else ''}"
     )
     if sinks.blocked_ms > 1000.0 and processed:
-        print(
+        console.report(
             f"sinks: the pull loop waited {sinks.blocked_ms / 1000.0:.1f}s in total for "
             f"the sink thread ({sinks.blocked_ms / processed:.0f} ms/frame). "
             "Cheaper settings are in the README under \"It runs slower than the detector\"."
@@ -398,12 +392,12 @@ def run_pipeline(pipeline: Pipeline, cfg, stopper: Stopper, task: TaskRuntime) -
 
     if pipeline.metadata_sender is not None:
         stats = pipeline.metadata_sender.stats()
-        print(
+        console.report(
             f"metadata: sent={stats.datagrams_sent} failures={stats.send_failures} "
             f"would_block={stats.would_block}"
         )
     if pipeline.video_dropped:
-        print(
+        console.report(
             f"insight: dropped {pipeline.video_dropped} preview frames because the "
             f"feed was busy. The recording is unaffected."
         )

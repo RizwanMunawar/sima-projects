@@ -10,11 +10,11 @@ timeout. The bytes on disk are authoritative, so this module reads them.
 from __future__ import annotations
 
 import subprocess
-import sys
 from fractions import Fraction
 from pathlib import Path
 
 from . import runtime
+from .console import console
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Probing
@@ -385,24 +385,26 @@ def resolve_source_geometry(cfg) -> tuple[int, int, int]:
         sps_w, sps_h, sps_fps = probe_h264_sps(cfg.source_uri)
         if sps_w > 0 and sps_h > 0:
             if (width > 0 and width != sps_w) or (height > 0 and height != sps_h):
-                print(
-                    f"[warn] config says {width}x{height} but the stream's SPS says "
+                console.warn(
+                    f"config says {width}x{height} but the stream's SPS says "
                     f"{sps_w}x{sps_h}. Using the stream.\n"
-                    f"       Fix source.width and source.height in config.yaml, or set "
+                    f"Fix source.width and source.height in config.yaml, or set "
                     f"them to 0 to always read the stream."
                 )
             width, height = sps_w, sps_h
         if sps_fps > 0:
             if fps > 0 and fps != sps_fps:
-                print(
-                    f"[warn] config says {fps} fps but the stream is {sps_fps} fps. "
+                console.warn(
+                    f"config says {fps} fps but the stream is {sps_fps} fps. "
                     f"Using the stream.\n"
-                    f"       Set source.fps to 0 in config.yaml to always read the stream."
+                    f"Set source.fps to 0 in config.yaml to always read the stream."
                 )
             fps = sps_fps
         if fps <= 0:
             fps = 25
-            print("[warn] stream carries no frame rate, assuming 25. Set source.fps to override.")
+            console.warn(
+                "the stream carries no frame rate, assuming 25. Set source.fps to override."
+            )
         return width, height, fps
 
     if cfg.source_type == "usb":
@@ -438,7 +440,7 @@ def resolve_source_geometry(cfg) -> tuple[int, int, int]:
     return width, height, fps
 
 
-def check_source_file(cfg) -> None:
+def check_source_file(cfg) -> int:
     """Fail fast when a file source is missing, empty or a container.
 
     ``filesrc`` reports a missing file on the GStreamer bus rather than raising,
@@ -448,11 +450,15 @@ def check_source_file(cfg) -> None:
     Args:
         cfg: Application configuration.
 
+    Returns:
+        The file's size in bytes, so the caller can say how big it is without
+        stat-ing it a second time. Zero for a source that is not a file.
+
     Raises:
         RuntimeError: If the file is missing or empty.
     """
     if cfg.source_type != "video":
-        return
+        return 0
 
     path = Path(cfg.source_uri)
     if not path.exists():
@@ -496,7 +502,7 @@ def check_source_file(cfg) -> None:
                 "  ffmpeg -i clip.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 clip.h264"
             )
 
-    print(f"source file: {path} ({size / 1e6:.1f} MB)", flush=True)
+    return size
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -593,17 +599,16 @@ def make_source_graph(cfg, width: int, height: int, fps: int):
     pyneat = runtime.pyneat
     if cfg.source_type == "video":
         if is_elementary_h264(cfg.source_uri):
-            print("source: raw H.264 elementary stream, demuxer bypassed")
+            console.note("raw H.264 elementary stream, demuxer bypassed")
             return make_elementary_h264_source(cfg, width, height, fps)
 
-        print(
-            "[warn] container input uses groups.video_input, which hits a demuxer\n"
-            "       naming bug in Neat 0.3.0. If the pipeline fails to start with\n"
-            "       'No src-element named \"nN_demux\"', convert to a raw stream:\n"
-            f"         ffmpeg -i {cfg.source_uri} -c:v copy -bsf:v h264_mp4toannexb \\\n"
-            f"           -f h264 {Path(cfg.source_uri).with_suffix('.h264')}\n"
-            "       then point source.uri at the .h264 file.",
-            file=sys.stderr,
+        console.warn(
+            "container input uses groups.video_input, which hits a demuxer\n"
+            "naming bug in Neat 0.3.0. If the pipeline fails to start with\n"
+            "'No src-element named \"nN_demux\"', convert to a raw stream:\n"
+            f"  ffmpeg -i {cfg.source_uri} -c:v copy -bsf:v h264_mp4toannexb \\\n"
+            f"    -f h264 {Path(cfg.source_uri).with_suffix('.h264')}\n"
+            "then point source.uri at the .h264 file."
         )
         opt = pyneat.VideoInputGroupOptions()
         opt.path = cfg.source_uri

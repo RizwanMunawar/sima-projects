@@ -27,13 +27,14 @@ from sima_vision.cli import main
 OFFBOARD = [
     ["--help"],
     ["--version"],
-    ["doctor"],
     ["detect", "--no-config", "--validate"],
     ["segment", "--no-config", "--validate"],
     ["fall", "--no-config", "--validate"],
     ["fall", "--no-config", "--alert-to", "ops@example.com", "--test-alert"],
+    ["detect", "--no-config", "--validate", "--quiet"],
     ["push", "--help"],
     ["pull", "--help"],
+    ["watch", "--help"],
     ["remote", "--help"],
 ]
 
@@ -71,14 +72,16 @@ def test_output_survives_ascii(argv, tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-def test_the_starter_configs_are_ascii():
-    """`init` writes these out, and something has to read them back."""
-    for name in ("detect", "segment", "fall"):
-        text = (Path(assets.__file__).parent / "configs" / f"{name}.yaml").read_text(
-            encoding="utf-8"
-        )
-        offenders = sorted({ch for ch in text if ord(ch) > 127})
-        assert not offenders, f"{name}.yaml has non-ASCII: {offenders}"
+def test_no_colour_escapes_reach_a_pipe():
+    """A redirected run is read by people and by grep, and neither wants ANSI.
+
+    The check runs in a child because the decision is made from the stream
+    itself: pytest's captured stdout is not a terminal either, but a real pipe
+    is the case that matters and only a subprocess has one.
+    """
+    result = run_cli(["detect", "--no-config", "--validate"], "utf-8", Path.cwd())
+    assert result.returncode == 0, result.stderr
+    assert chr(27) not in result.stdout, "an escape sequence reached a pipe"
 
 
 def test_a_windows_style_path_is_passed_through_verbatim():
