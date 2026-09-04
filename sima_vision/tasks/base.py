@@ -15,7 +15,12 @@ from ..config import (
     validate_base,
 )
 from ..console import console, human_bytes
-from ..media import check_source_file, resolve_source_geometry, source_frame_count
+from ..media import (
+    check_source_file,
+    check_source_support,
+    resolve_source_geometry,
+    source_frame_count,
+)
 from ..neat import (
     build_task_graph,
     describe_preprocess,
@@ -161,6 +166,7 @@ class Task:
         been told the name of is half a message.
         """
         size = check_source_file(cfg)
+        check_source_support(cfg)
         where = cfg.source_uri or "<default camera>"
         step.detail(f"{where}  ({cfg.source_type}{f', {human_bytes(size)}' if size else ''})")
         width, height, fps = resolve_source_geometry(cfg)

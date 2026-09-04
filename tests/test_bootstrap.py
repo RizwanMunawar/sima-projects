@@ -592,6 +592,31 @@ def test_steps_are_numbered_against_the_plan(capsys):
     assert "[1/3] one" in capsys.readouterr().out
 
 
+def test_a_note_from_inside_a_step_is_indented_under_it(capsys):
+    """Callers deep in the stack have no step to hand; the console knows.
+
+    `raw H.264 elementary stream, demuxer bypassed` is printed four calls below
+    the step that is running, and landed at the left margin in the middle of an
+    indented block.
+    """
+    console = Console()
+    console.plan(1)
+    with console.step("pipeline", "building the Neat graph"):
+        console.note("raw H.264 elementary stream, demuxer bypassed")
+    line = [ln for ln in capsys.readouterr().out.splitlines() if "demuxer" in ln][0]
+    assert line.startswith(" " * 8), repr(line)
+
+
+def test_a_note_outside_a_step_is_not_indented(capsys):
+    console = Console()
+    console.plan(1)
+    with console.step("pipeline", "building"):
+        pass
+    console.note("afterwards")
+    line = [ln for ln in capsys.readouterr().out.splitlines() if "afterwards" in ln][0]
+    assert line.startswith("  ") and not line.startswith("   "), repr(line)
+
+
 def test_everything_the_console_prints_is_ascii(capsys):
     """A board's console encoding is nobody's guess; see test_portability."""
     console = Console()
