@@ -2,8 +2,6 @@
 
 <img src="assets/sima-devkit-docs-logo-home.png" alt="sima-vision: live YOLO computer vision on a SiMa Modalix DevKit 3.0" width="640">
 
-
-
 [![SiMa.ai](https://img.shields.io/badge/SiMa.ai-Modalix_DevKit_3.0-E63946)](https://sima.ai)
 [![Palette SDK](https://img.shields.io/badge/Palette_SDK-2.1.2-457B9D)](https://docs.sima.ai)
 [![Neat](https://img.shields.io/badge/Neat-0.3.0-2A9D8F)](https://docs.sima.ai)
@@ -17,116 +15,83 @@
 [![Segmentation and blur](https://img.shields.io/badge/Segmentation-blur-FF64DA?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)
 [![Object detection](https://img.shields.io/badge/Object-detection-042AFF?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)
 
-<h3>Live YOLO26 on the MLA of a SiMa.ai Modalix DevKit 3.0.Three apps, one pipeline, one command.</h3>
+<h3>Live YOLO26 on the MLA of a SiMa.ai Modalix DevKit 3.0. Three apps, one pipeline, two commands.</h3>
 
 </div>
 
 ```bash
-python3 -m venv dev
-source dev/bin/activate
 pip install sima-vision
-sima-vision detect          # sample clip and model fetched for you, then run
+sima-vision detect
 ```
+
+There is no third command. No setup step, no init, no fetch, no doctor: the run itself
+finds the Neat runtime, puts the board's numpy and OpenCV on the path, downloads the
+model pack and a sample clip, and tells you what it is doing at every step.
 
 > **Inference runs on the board; you drive it from your PC.** `sima-vision watch -- detect`
 > starts the task on the DevKit and streams the real annotated video back to your screen.
-> Checking a config needs no hardware at all.
-
+> Checking settings needs no hardware at all.
 
 ## Contents
 
 | | |
 |:--|:--|
-| [Install](#install) | pip, and what each extra buys you |
+| [Install](#install) | One command, and what the first run does for you |
 | [Quickstart](#quickstart) | Start to finish, host then DevKit |
-| [Give the DevKit internet](#give-the-devkit-internet) | One command, before anything else works |
-| [If `pyneat` is missing](#if-pyneat-is-missing) | What `setup board` fixes, and when it cannot |
+| [What the first run does](#what-the-first-run-does) | The seven steps, and how to read them |
+| [Give the board internet](#the-board-needs-your-pcs-internet) | Sharing your PC's connection over the cable |
 | [The three tasks](#the-three-tasks) | What each does, and its own flags |
 | [Commands](#commands) | Every subcommand in one table |
 | [Settings](#settings) | Flags, Python keywords, `config.yaml` |
 | [Python API](#python-api) | The same three verbs, importable |
 | [Driving the board from your PC](#driving-the-board-from-your-pc) | `watch`, `push`, `pull`, `remote` |
-| [Set up a new DevKit](#set-up-a-new-devkit) | One time, about two hours |
+| [Adding your own app](#adding-your-own-app) | A fourth task, from your own package |
 | [Troubleshooting](#troubleshooting) | Symptom to fix, in one table |
 | [How it works](#how-it-works) | The pipeline, and why it is shaped that way |
 
 ## Install
 
-Python 3.10 or later. No compiler, and the only dependency is PyYAML.
+Python 3.10 or later. The only dependency is PyYAML, on every platform.
 
 ```bash
 pip install sima-vision
 ```
 
-| Where | Install | Why |
-|:--|:--|:--|
-| **On the DevKit** | `pip install sima-vision` then `sima-vision setup board` | The second one puts it where `pyneat` is |
-| **Your laptop** | `pip install sima-vision` | Nothing extra. Off the board it only checks configs and drives the board |
-| **Contributing** | `pip install -e ".[dev]"` | Adds ruff, pytest, numpy and OpenCV, which the tests need |
+That is the whole install, on the board and on your laptop. Nothing else is needed and
+nothing else is asked of you: the pieces that cannot come from PyPI are found, and where
+possible installed, by the first run. See
+[What the first run does](#what-the-first-run-does).
 
-> [!IMPORTANT]
-> **`pyneat` is not where pip puts things.** `sima-cli sdk setup` gives it a virtualenv of
-> its own, usually `~/pyneat`, and `pip` installs into whichever Python you ran `pip`
-> with. `sima-vision setup board` reconciles the two.
->
-> Runs cope on their own regardless: one that cannot import `pyneat` searches the usual
-> places and then one level down from `~`, `/opt`, `/media/nvme` and `/usr/local`, and
-> says `[pyneat] using pyneat from ...` when it finds it. If yours is somewhere stranger,
-> `export SIMA_VISION_PYNEAT=/path/to/the/venv`. `sima-vision doctor` says which case you
-> are in.
+| Where | What you get |
+|:--|:--|
+| **On the DevKit** | Everything. Inference on the MLA, recording, stills, alerts |
+| **Your laptop** | Everything except inference. Check settings, and drive the board |
+| **Contributing** | `pip install -e ".[dev]"` adds ruff, pytest, numpy and OpenCV |
+
+> [!NOTE]
+> **It does not matter which Python you pip-installed into.** On the DevKit, `pyneat`
+> lives in a virtualenv of its own that `sima-cli sdk setup` created, and pip installs
+> into whichever Python you ran pip with. Those are almost never the same place, and
+> reconciling them is the run's job, not yours.
 
 > [!CAUTION]
-> **On the board, never let pip pull numpy 2.x.** `pyneat` and every `simaai-*` package
-> need `numpy<2`. `sima-vision` depends on neither numpy nor OpenCV precisely so that
-> installing it cannot upgrade them, which is also why installing it into the `pyneat`
-> venv is safe. If something already broke it:
-> `~/pyneat/bin/pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"`
-
-Check what you have:
-
-```bash
-sima-vision doctor
-```
+> **`sima-vision` depends on neither numpy nor OpenCV, on purpose.** `pyneat` and every
+> `simaai-*` package need `numpy<2`, so a dependency that could pull numpy 2.x over the
+> board's own copy would break the board by being installed. Anything the run does
+> install for you is pinned below 2 for the same reason.
 
 ## Quickstart
 
-### Without a board
-
-```bash
-sima-vision init segment                          # write a documented config.yaml
-sima-vision segment --validate                    # check it resolves and parses
-sima-vision doctor                                # what is installed, and what it allows
-```
-
-That is all that is honest to do without hardware. Nothing here invents detections, and
-nothing here touches the network.
-
 ### On the DevKit
 
-Three commands, on the board:
-
 ```bash
-pip install sima-vision       # 1. install it
-sima-vision setup board       # 2. put it where pyneat is
-sima-vision detect            # 3. run
+pip install sima-vision
+sima-vision detect
 ```
 
-Step 2 is there because `pip` installs into whichever Python you ran it with, and on the
-DevKit that is almost never the virtualenv holding `pyneat`. It finds that venv and
-installs into it, and tells you what to do if `pyneat` is not on the board at all.
-
-You can skip step 2 if you like. A run that cannot import `pyneat` goes and finds it,
-printing `[pyneat] using pyneat from ...` when it does. Step 2 just makes the command and
-the library live in the same place.
-
-> [!IMPORTANT]
-> **The board needs your PC's internet for this**, to fetch the model. It has none of its
-> own. If `sima-cli login` hangs or the download fails, that is what is missing:
-> [Give the DevKit internet](#give-the-devkit-internet) is one command.
-
-No arguments to step 3. Each task has a default sample clip and model archive, and the
-first run puts both in `./assets/`: the clip comes straight from a public GitHub release,
-the model through `sima-cli`, which holds your login. Every run after that reuses them.
+No arguments. Each task has a default sample clip and model archive, and the first run
+puts both in `./assets/`: the clip comes straight from a public GitHub release, the model
+through `sima-cli`, which holds your login. Every run after that reuses them.
 
 Out comes `detections.mp4` and a `frames/` directory. Bring them back with
 [`sima-vision pull`](#driving-the-board-from-your-pc).
@@ -154,127 +119,133 @@ model archive outright.
 > error. Leave `source.fps`, `source.width` and `source.height` at `0`: the real geometry
 > is read out of the stream's SPS.
 
-> **New board?** Bring-up is a one-time job of about two hours, mostly downloading. That
-> is [Set up a new DevKit](#set-up-a-new-devkit). Nothing above needs it.
+> [!NOTE]
+> **This starts from a board that already runs `pyneat`.** Pairing a new DevKit and
+> installing the Palette SDK onto it is SiMa's own procedure and is documented at
+> [docs.sima.ai](https://docs.sima.ai); it is not repeated here, and nothing on this page
+> replaces it.
 
-
-
-## Give the DevKit internet
-
-The board has no internet of its own. It is plugged straight into your PC, so
-your PC has to pass its connection along. Without it the board cannot download a
-model, and `sima-cli login` will not work.
-
-**One command tells you where you stand:**
+### Without a board
 
 ```bash
-sima-vision setup network
+sima-vision segment --conf 0.5 --validate
 ```
 
-```
-Internet sharing, PC -> DevKit
+`--validate` resolves everything, prints what it came to, and stops. It loads no runtime,
+downloads nothing and touches no network, so it is the honest thing to run on a laptop.
+Everything else off the board is [driving a real one](#driving-the-board-from-your-pc).
 
-  adapters:
-    Ethernet               192.168.137.1    no way out
-    Wi-Fi                  192.168.18.15    the internet
+## What the first run does
 
-  internet comes in on:  Wi-Fi  (192.168.18.15)
-  the DevKit is on:      Ethernet  (192.168.137.1)
-
-  sharing is OFF. The board cannot reach anything through this PC.
-```
-
-It works out which of your network adapters has the internet and which one the
-board is cabled to. It changes nothing unless you ask it to.
-
-**Then turn it on.** This needs Administrator, because it is changing Windows
-networking. Right-click Start, choose **Terminal (Admin)**, and run:
-
-```bash
-sima-vision setup network --apply
-```
-
-Run it without Administrator and it prints the exact command to paste into an
-admin terminal instead, so you are never stuck.
-
-**Then, on the board**, ask for an address:
-
-```bash
-sudo dhclient -v eth0
-```
-
-**Finally, check the whole path end to end.** Give it the board's address and it
-runs the tests on the board itself, which is the only answer that cannot be wrong:
-
-```bash
-sima-vision setup network --host sima@<devkit-ip>
-```
+Seven steps, printed as they happen. The first four get the machine ready; the last
+three start the run. Every one of them says what it is about to do before it does it, so a
+slow step is never a silent one.
 
 ```
-  asking the board itself (sima@192.168.137.50):
-    yes  an address on the shared network
-    yes  a route out
-    yes  the PC answers
-    yes  the internet answers
-    yes  names resolve
+sima-vision 0.1.0  detect
 
-  The board is online. Nothing else to do.
+  [1/7] environment  checking this machine
+        -> Modalix DevKit  aarch64  python 3.11.2
+  [2/7] pyneat       locating the Neat runtime
+        -> 0.3.0  using pyneat from /home/sima/pyneat
+  [3/7] imaging      numpy and OpenCV
+        -> numpy 1.26.4  opencv 4.9.0
+  [4/7] assets       model archive and video source
+        have  assets/videos/people-walking-outside-mall.h264  (13.0 MB)
+        get   https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/...
+        got   assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz  (118.4 MB)
+        -> ready
+  [5/7] source       probing the stream
+        assets/videos/people-walking-outside-mall.h264  (video, 13.0 MB)
+        -> 1920x1080 @ 24 fps
+  [6/7] model        loading yolo26m-det-bf16-mla_tess-b1.tar.gz
+        the first load unpacks the archive, which can take a minute
+        -> yolo26 -> YoloV26, 80 classes (41.2s)
+  [7/7] pipeline     building the Neat graph
+        flow: preset=reliable overflow=block queue_depth=1 output_buffers=1
+        video: detections.mp4 codec=mp4v fps=24 hud=True
+        -> yolo_detector ready (3.1s)
+
+running  press Ctrl-C to stop
 ```
 
-Each line rules out one layer, so the **first** one that says `NO` tells you what
-is wrong:
-
-| First failure | What it means | What to do |
+| Step | What it is for | If it cannot |
 |:--|:--|:--|
-| an address on the shared network | The board never got one from DHCP | On the board: `sudo dhclient -v eth0` |
-| a route out | It has an address but no default route | Turn sharing off and on again with `--apply` |
-| the PC answers | The cable, or the wrong adapter is shared | Check the cable; re-run `--apply` |
-| the internet answers | It reaches your PC but no further, so sharing is not forwarding | Re-run with `--apply` |
-| names resolve | Everything routes; only DNS is missing | On the board, put `nameserver 192.168.137.1` in `/etc/resolv.conf` |
+| environment | Board or not. It decides what every later failure means | Nothing to fail |
+| pyneat | The library that talks to the MLA | It says which of the two cases you are in, below |
+| imaging | numpy and OpenCV, which draw the overlay | Installs them, with numpy pinned below 2 |
+| assets | The model pack and the clip, downloaded once into `./assets` | Says whether to log in, or to send the pack over with `push` |
+| source | Proves the stream is readable and reads its real geometry | Names the file and how to convert it |
+| model | Unpacks the archive onto the MLA. Slow the first time only | Names the archive and the decode head |
+| pipeline | The Neat graph, the recorder, the stills, Insight | Releases the MLA rather than leaving it held |
 
-<details>
-<summary><b>If it says "no second network found to share with"</b></summary>
+`--quiet` drops all of it and keeps warnings, errors and the closing report.
 
+### When step 2 cannot finish
 
-Nothing that looks like a DevKit is plugged in. Every adapter that is up already
-has its own way to the internet, so there is nothing to share *with*.
+`pyneat` is an aarch64 wheel that ships with the Palette SDK. It is not on PyPI, so pip
+cannot fetch it, and this is the one thing a run cannot always fix by itself. It tries, in
+this order:
 
-1. Plug the Ethernet cable from the board into your PC's Ethernet port.
-2. Power the board on and give it a minute.
-3. Run `sima-vision setup network` again.
+1. **Import it.** An interpreter that already has it is never second-guessed.
+2. **Find its virtualenv** at `~/pyneat`, `/media/nvme/neat/pyneat`, `/media/nvme/pyneat`
+   or `/opt/pyneat`, then one level down from `~`, `/opt`, `/media/nvme`,
+   `/media/nvme/neat`, `/usr/local`, `/srv` and `/data`. What it finds goes on `sys.path`
+   ahead of everything, which also picks up the `numpy<2` the extension was compiled
+   against.
+3. **Install the SDK's own wheel**, if `sima-cli sdk setup` left one on the board.
 
-If the port has no lights, try the other end of the cable, then a different
-cable. The board's link light comes on before anything else does.
+Only if all three come up empty does it stop, and it stops by telling you which case
+you are in. **On the board:**
 
-</details>
+```
+  ERROR  pyneat is missing: no pyneat for python3.11 anywhere under ~, /opt, /media/nvme, ...
+         It is installed onto the board from your PC, by the Palette SDK, and there is no
+         copy of it on the board to install from. From the PC that pairs with this board:
+           sima-cli sdk setup --devkit <this board's ip>
+         Then run this command again. If pyneat is installed but somewhere unusual:
+           export SIMA_VISION_PYNEAT=/path/to/the/venv
+```
 
-<details>
-<summary><b>Why it says "needs Administrator to read"</b></summary>
+Pairing is SiMa's procedure and it installs over the network, so it fails quietly when
+there is no route. Confirm the board half actually landed:
 
+```bash
+ssh sima@<devkit-ip> "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat.__version__)'"
+```
 
+The path `SIMA_VISION_PYNEAT` wants is the virtualenv root, the directory holding `lib/`
+and `bin/`, not the `pyneat` folder inside it.
 
-Windows will not tell an ordinary program whether Internet Connection Sharing is
-on. Two things look like they answer the question and do not:
+**On your laptop**, missing `pyneat` is simply what a laptop is. Nothing is wrong, and the
+message says so instead of pretending something can be installed:
 
-* **`Forwarding: Disabled` on the adapters.** ICS does its own NAT and never
-  touches that flag, so it reads Disabled on a setup that works perfectly.
-* **`192.168.137.1` being there.** ICS assigns that address, but leaves it behind
-  when sharing is turned off, so it outlives the thing it seems to prove.
+```
+  ERROR  pyneat is missing, and this is not a DevKit.
+         It is an aarch64 wheel from the Palette SDK, so inference only runs on the board.
+         From here you can still drive one:
+           sima-vision watch -- detect        run it there, live video here
+           sima-vision detect --validate      check a config, no hardware at all
+```
 
-Rather than guess from either, the command says it does not know and asks you to
-re-run in an admin terminal. Or skip it and use `--host`, since what the board
-can actually reach settles it either way.
+> [!NOTE]
+> The version has to match. `pyneat` is compiled for one CPython, so a venv built for 3.10
+> cannot be used from 3.12. When that is the mismatch the error names the interpreter that
+> *can* use it, rather than just saying no.
 
-</details>
+### The board needs your PC's internet
 
-<details>
-<summary><b>On macOS or Linux</b></summary>
+Step 4 downloads the model pack, and the board has no internet of its own: it is cabled
+straight to your PC, so the PC has to pass its connection along. Without that, `sima-cli
+login` hangs and the model download fails.
 
+**On Windows**, that is Internet Connection Sharing. Open Network Connections
+(`ncpa.cpl`), right-click the adapter that *has* the internet, Properties, Sharing, and
+tick **Allow other network users to connect through this computer's Internet
+connection**, choosing the adapter the board is cabled to. Windows gives that adapter
+`192.168.137.1`, which is not configurable.
 
-
-`--apply` is Windows-only for now, but the diagnosis works everywhere and prints
-the commands for your system. On Linux, with `wlan0` as the internet and `eth0`
-going to the board:
+**On Linux**, with `wlan0` as the internet and `eth0` going to the board:
 
 ```bash
 sudo sysctl -w net.ipv4.ip_forward=1
@@ -282,65 +253,38 @@ sudo iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE
 sudo iptables -A FORWARD -i eth0 -o wlan0 -j ACCEPT
 ```
 
-You also need something to hand the board an address; `dnsmasq` on `eth0` is the
-usual choice. On macOS it is System Settings, General, Sharing, Internet Sharing.
+You also need something to hand the board an address; `dnsmasq` on `eth0` is the usual
+choice. On macOS it is System Settings, General, Sharing, Internet Sharing.
 
-</details>
+**Then, on the board**, ask for an address and check the whole path:
+
+```bash
+sudo dhclient -v eth0
+ping -c1 192.168.137.1      # the PC answers
+ping -c1 1.1.1.1            # the internet answers
+ping -c1 docs.sima.ai       # names resolve
+```
+
+The **first** of those three that fails says what is wrong: no answer from the PC is the
+cable or the wrong adapter shared; no answer from the internet is sharing not forwarding;
+no name resolution is DNS alone, fixed by putting `nameserver 192.168.137.1` in
+`/etc/resolv.conf` on the board.
 
 > [!TIP]
-> **It stops working after every reboot?** That is Windows, not you. ICS does not
-> come back on its own unless it is told to persist, which `--apply` sets for you.
-> If it was set up by hand through the Sharing tab, re-run `--apply` once and it
-> will survive from then on.
-
-
-## If `pyneat` is missing
-
-```
-[ERR] pyneat is missing: no pyneat for python3.11 anywhere under ~, /opt, ...
-```
-
-`pyneat` is the library that talks to the MLA. It is an aarch64 wheel that comes with the
-Palette SDK, not something `pip` can install, and it lives in a virtualenv of its own.
-Nothing else here can run inference without it.
-
-**On the board, try this first:**
-
-```bash
-sima-vision setup board
-```
-
-It searches for that virtualenv and installs `sima-vision` into it. If it finds nothing,
-the message tells you which of the two situations you are in.
-
-**If `pyneat` is on the board but somewhere unusual**, find it and point at it:
-
-```bash
-find / -name 'pyneat*' -maxdepth 6 2>/dev/null | head
-export SIMA_VISION_PYNEAT=/the/venv/it/is/in
-```
-
-The path you want is the virtualenv root, the directory containing `lib/` and `bin/`, not
-the `pyneat` folder itself.
-
-**If `pyneat` is not on the board at all**, pairing never finished. Run this **from your
-PC**, not from the board:
-
-```bash
-sima-cli sdk setup --devkit <devkit-ip>
-```
-
-Then confirm the board half actually landed, which is the part that fails quietly:
-
-```bash
-ssh sima@<devkit-ip> "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat.__version__)'"
-```
+> **It stops working after every reboot?** That is Windows, not you: ICS does not come
+> back on its own, and re-ticking the box does not change that. Two settings do. In an
+> Administrator PowerShell, once:
+>
+> ```powershell
+> New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters' `
+>   -Name EnableRebootPersistConnection -Value 1 -PropertyType DWord -Force
+> Set-Service SharedAccess -StartupType Automatic
+> ```
 
 > [!NOTE]
-> The version has to match. `pyneat` is compiled for one CPython, so a venv built for 3.10
-> cannot be used from 3.12. When that is the mismatch, the error names the interpreter
-> that *can* use it rather than just saying no.
-
+> **No internet for the board at all?** Download the pack on your PC and send it over:
+> `sima-vision push yolo26m-det-bf16-mla_tess-b1.tar.gz`, then
+> `sima-vision detect --model yolo26m-det-bf16-mla_tess-b1.tar.gz`.
 
 ## The three tasks
 
@@ -467,7 +411,6 @@ board.
 
 </details>
 
-
 ## Commands
 
 | Command | Board? | What it does |
@@ -475,15 +418,13 @@ board.
 | `sima-vision detect` | **yes** | Run detection on the MLA |
 | `sima-vision segment` | **yes** | Run segmentation, with the optional blur |
 | `sima-vision fall` | **yes** | Run fall detection, with SMTP alerts |
-| `sima-vision init` | no | Write a documented `config.yaml` here |
-| `sima-vision doctor` | no | What is installed, and what it lets you do |
-| `sima-vision fetch` | no | Download the sample clips up front |
-| `sima-vision setup board` | on the board | Install into the virtualenv that has `pyneat` |
-| `sima-vision setup network` | no | Check and set up internet sharing from this PC to the board |
 | `sima-vision watch` | no | Run a task on the DevKit and watch its live video here |
 | `sima-vision push` | no | Copy files to the DevKit |
 | `sima-vision pull` | no | Copy results back |
 | `sima-vision remote` | no | Run a task on the DevKit over SSH |
+
+That is the whole surface. Anything that was once its own setup subcommand now happens
+inside a run; see [What the first run does](#what-the-first-run-does).
 
 Add `--validate` to any task to parse and check a config, print what it resolved to, and
 exit. It loads neither pyneat nor the model, so it runs anywhere:
@@ -493,14 +434,20 @@ sima-vision segment --conf 0.5 --blur-strength 81 --validate
 ```
 
 ```
-config OK: config.yaml
-  model: assets/models/yolo26m-seg-bf16-mla_tess-b1.tar.gz
-  family=yolo26-seg -> BoxDecodeType.YoloV26Seg
-  source: type=video uri=assets/videos/people-walking-outside-mall.h264
-  decode: conf=0.5 iou=0.6 max_det=50
-  segmentation: masks=on source=auto space=auto threshold=0.5
-  blur: background | method=gaussian kernel=81 sigma=auto down=2 feather=9
-  output: video=segmentation.mp4 stills=frames/ every=10
+sima-vision 0.1.0  segment --validate
+
+  ok  config OK: /home/sima/config.yaml
+    model:   assets/models/yolo26m-seg-bf16-mla_tess-b1.tar.gz
+    labels:  /home/sima/pyneat/lib/python3.11/site-packages/sima_vision/data/coco_labels.txt
+    family:  yolo26-seg -> BoxDecodeType.YoloV26Seg
+    source:  type=video uri=assets/videos/people-walking-outside-mall.h264
+    decode:  conf=0.5 iou=0.6 max_det=50
+    preprocess: kind=image enable=on in=NV12 out=AUTO capacity=0x0 | resize=letterbox ...
+    segmentation: masks=on source=auto space=auto threshold=0.5 net=<from the first mask>
+    blur: background | method=gaussian kernel=81 sigma=auto down=2 feather=9 | foreground=every detected class
+    output:  video=segmentation.mp4 stills=frames/ every=10
+
+    nothing was downloaded and no hardware was touched.
 ```
 
 `sima-vision <command> --help` lists every flag.
@@ -514,12 +461,21 @@ built-in defaults   ->   config.yaml   ->   flags / Python keywords
 ```
 
 So **everything is optional**. With no file and no flags you get this task's sample clip
-and model. For a setup you keep:
+and model. For a setup you keep, write a `config.yaml` next to where you run:
 
-```bash
-sima-vision init detect     # a documented config.yaml, right here
-sima-vision detect          # picks up ./config.yaml on its own
+```yaml
+model:
+  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
+  family: yolo26
+source:
+  uri: assets/videos/people-walking-outside-mall.h264
+decode:
+  score_threshold: 0.4
 ```
+
+`sima-vision detect` picks that up on its own, and a flag still beats it. Every key is
+listed in the tables below, and `tests/configs/` in this repo has one fully commented
+file per task if you would rather start from a complete one.
 
 Every setting has a flag and a Python keyword under the same name. Both write the same
 config key, and both go through the same validation.
@@ -582,8 +538,12 @@ the input length.
 | Variable | What it does |
 |:--|:--|
 | `SIMA_VISION_ASSETS` | Where clips and models are downloaded. Default `./assets` |
-| `SIMA_VISION_PYNEAT` | The `pyneat` virtualenv, when it is not at `~/pyneat` |
+| `SIMA_VISION_PYNEAT` | The `pyneat` virtualenv, when the search does not find it |
+| `SIMA_VISION_PYNEAT_INDEX` | A pip index carrying a `pyneat` wheel, if your site publishes one |
+| `SIMA_VISION_AUTO_INSTALL` | `0` to look but never install. The search and the path still happen |
 | `SIMA_VISION_DEVKIT` | The board, as `user@address`, so `push`, `pull` and `remote` stop asking |
+| `SIMA_VISION_QUIET` | Non-empty is `--quiet` for every command |
+| `SIMA_VISION_COLOR` | `0` or `1` to force colour off or on. `NO_COLOR` also works |
 | `FALL_ALERT_SMTP_PASSWORD` | The only place the SMTP password is ever read from |
 
 ## Python API
@@ -610,7 +570,7 @@ run("segment", **{"runtime.output_buffers": 2})
 
 ## Driving the board from your PC
 
-Three wrappers around `ssh` and `scp`, so the awkward parts stop being yours.
+Four wrappers around `ssh` and `scp`, so the awkward parts stop being yours.
 
 ```bash
 sima-vision watch  -- detect                # run it there, live video here
@@ -633,14 +593,17 @@ this machine and starts the run.
 It prints the exact player command and writes the SDP file it needs:
 
 ```
-live video: sima@192.168.137.50 -> 192.168.137.1:9000   (as the board sees us)
-            metadata on 9100, same address
-wrote /home/you/sima-vision.sdp
+sima-vision 0.1.0  watch detect on sima@192.168.137.50
 
-Open this in a second terminal, then come back:
+  live video: sima@192.168.137.50 -> 192.168.137.1:9000   (as the board sees us)
+              metadata on 9100, same address
+  wrote /home/you/sima-vision.sdp
 
-  ffplay -hide_banner -fflags nobuffer -flags low_delay \
-    -protocol_whitelist file,rtp,udp -i "/home/you/sima-vision.sdp"
+  Open this in a second terminal, then come back:
+
+    ffplay -hide_banner -fflags nobuffer -flags low_delay -protocol_whitelist file,rtp,udp -i "/home/you/sima-vision.sdp"
+
+  $ ssh -tt sima@192.168.137.50 sima-vision detect --insight --insight-host 192.168.137.1
 ```
 
 Nothing is decoded by `sima-vision` itself. `ffplay`, GStreamer and VLC already do that
@@ -665,7 +628,7 @@ export SIMA_VISION_DEVKIT=sima@192.168.137.50     # macOS, Linux
 $env:SIMA_VISION_DEVKIT = "sima@192.168.137.50"   # PowerShell
 ```
 
-or pass `--host` to any of the three. Authentication is `ssh`'s own business: an agent, a
+or pass `--host` to any of the four. Authentication is `ssh`'s own business: an agent, a
 key, or it asks you. Nothing here handles or stores a password.
 
 | Command | Notes |
@@ -691,196 +654,51 @@ Three things these get right that a hand-written `scp` usually does not:
 They need an OpenSSH client, which macOS and Linux ship and Windows 10/11 has under
 Settings > Apps > Optional features > OpenSSH Client.
 
-## Set up a new DevKit
+## Adding your own app
 
-<details>
-<summary><b>One time, about two hours, mostly downloading. Skip this if your board already runs pyneat.</b></summary>
+The three built-in tasks are not special. A task is one class saying what to do with a
+frame once the MLA has finished with it; config loading, the automatic setup, asset
+downloads, the Neat graph, the pull loop and every sink are shared and already written.
 
-Written on Windows with WSL2, which is the path SiMa's own tooling expects. Every warning
-below marks somewhere real time was lost.
+Write the class:
 
-```
-   WINDOWS PC          WSL2 / UBUNTU              MODALIX DEVKIT 3.0
-   ----------          -------------              ------------------
-1  cable up      ----------------------------->   DHCP address
-2  wsl --install ---->  Ubuntu ready
-3  .wslconfig    ---->  WSL takes .137.1    --->  reachable both ways
-                  4    sima-cli in a venv
-                  5    docker + nfs
-                  6    sdk setup           --->   pyneat on the board
-```
+```python
+from sima_vision.tasks import Task
+from sima_vision.runloop import TaskRuntime
 
-Step 3 is load-bearing. Step 6 installs onto the board **over the network** and fails
-silently if networking is not fixed first, which is the usual way to lose an afternoon.
+class CountRuntime(TaskRuntime):
+    output_label = "detector_output"
+    stream = "counting"
+    unit = "crossings"
 
-### 1. Cable up
+    def decode(self, pipeline, cfg, sample, index):
+        ...
 
-USB (serial console) plus Ethernet straight to your PC. Open the
-[serial tool](https://docs.sima.ai/_static/tools/serial/index.html) and set the DevKit to
-**DHCP**.
+    def render(self, cfg, pipeline, frame, results, fps):
+        ...
 
-```powershell
-arp -a | Select-String "192.168.137"     # find the board
-ping <devkit-ip>
-```
+class CountTask(Task):
+    name = "count"
+    help = "Count objects crossing a line"
 
-Must reply. Nothing else works until it does. The board's address changes between reboots;
-your PC keeps `192.168.137.1`.
+    def add_arguments(self, parser):
+        parser.add_argument("--line", dest="count.line", metavar="Y")
 
-### 2. WSL2
-
-```powershell
-wsl --install -d Ubuntu      # PowerShell as Administrator
-wsl -l -v                    # want: Ubuntu, Running, 2
+    def runtime(self, cfg, pipeline):
+        return CountRuntime()
 ```
 
-### 3. Mirrored networking
+Advertise it from your own package's `pyproject.toml`:
 
-WSL sits behind NAT by default and **cannot see your DevKit**.
-
-```powershell
-@"
-[wsl2]
-networkingMode=mirrored
-"@ | Set-Content -Path "$env:USERPROFILE\.wslconfig" -Encoding utf8
-
-wsl --shutdown
+```toml
+[project.entry-points."sima_vision.tasks"]
+count = "my_package.count:CountTask"
 ```
 
-Wait ten seconds, open a WSL terminal, then verify **both** of these:
-
-```powershell
-wsl -- hostname -I                  # must list 192.168.137.1
-wsl -- ping -c 2 <devkit-ip>        # must reply
-```
-
-If they fail, check `.wslconfig` was not saved as `.wslconfig.txt`.
-
-### 4. sima-cli
-
-Become root **first**. `sudo su -` is a login shell, so it drops you in `/root`.
-
-```bash
-sudo su -
-apt update && apt install -y git python3-venv python3-pip
-python3 -m venv sima
-source sima/bin/activate
-pip install sima-cli
-sima-cli login                  # needs a community.sima.ai account
-```
-
-### 5. Docker and NFS
-
-The Neat SDK **is** a Docker container. No Docker, no SDK. Install Docker Engine with
-[Docker's own instructions for Ubuntu](https://docs.docker.com/engine/install/ubuntu/),
-which stay current in a way a copy here would not, then add what the SDK needs on top:
-
-```bash
-sudo apt install -y nfs-kernel-server nfs-common
-```
-
-Two things are specific to WSL. Docker needs systemd to survive a restart:
-
-```bash
-grep -q 'systemd=true' /etc/wsl.conf 2>/dev/null || sudo tee -a /etc/wsl.conf <<'EOF'
-
-[boot]
-systemd=true
-EOF
-```
-
-Then `wsl --shutdown` in PowerShell, reopen WSL, and confirm:
-
-```bash
-sudo systemctl enable --now docker
-sudo docker run hello-world      # must print "Hello from Docker!"
-```
-
-### 6. The Neat SDK
-
-```bash
-sudo su -
-source sima/bin/activate
-sima-cli install ghcr:sima-neat/sdk
-sima-cli sdk setup --devkit <devkit-ip>
-```
-
-**Answer every prompt.** The ones that matter:
-
-| Prompt | Answer |
-|:--|:--|
-| `Some system checks failed. Continue?` | `y`. The Firewall row says *Unverified*, not failed |
-| `Install Model Compiler extension?` | `Y`. Adds 9 GB, only needed to compile your own models |
-| `Install VSCode Extensions?` | `y` lowercase. A bare Enter is rejected |
-| `Apply passwordless sudo on DevKit?` | `y`. Required for workspace sync |
-| everything else | `Y` or Enter |
-
-`mount.nfs: Connection timed out` is fine; setup falls back to rsync and carries on.
-
-Then confirm the **board half** actually happened, because that is the part that fails
-quietly:
-
-```bash
-ssh sima@<devkit-ip> "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat.__version__)'"
-```
-
-A version means you are done, and it also tells you where `pyneat` lives: that venv is
-what to install into.
-
-```bash
-ssh sima@<devkit-ip>
-~/pyneat/bin/pip install sima-vision
-~/pyneat/bin/sima-vision doctor      # every row should say yes
-```
-
-`No such file or directory` from the check above means pairing never installed it, almost
-always because networking was not fixed first. Re-run
-`sima-cli sdk setup --devkit <devkit-ip>` from WSL now that it works.
-
-### Five rules that prevent most problems
-
-| # | Rule | Because |
-|:--|:--|:--|
-| 1 | Networking before pairing | Pairing installs over the network. No route means a silent no-op |
-| 2 | Docker before the SDK | The SDK **is** a container |
-| 3 | `cd` after `sudo su -` | `-` is a login shell, so it drops you in `/root` |
-| 4 | Raw `.h264`, never `.mp4` | Containers hit a demuxer bug in Neat 0.3.0 |
-| 5 | Never leave the only copy on the board | A firmware update wipes its home directory |
-
-### Firmware version mismatch
-
-```
-ERROR: DevKit/SDK version mismatch. DevKit 2.0.0, SDK 2.1.2
-```
-
-New boards often ship older firmware. eLxr cannot be updated remotely, so this runs **on
-the board**, which already has internet over your Ethernet cable:
-
-```bash
-ssh sima@<devkit-ip>
-sima-cli login
-sima-cli update            # menu, then "Update all packages to the latest"
-```
-
-Budget 15 to 40 minutes plus a reboot, then re-run `sima-cli sdk setup`. If SSH complains
-the host key changed, that is expected: `ssh-keygen -R <devkit-ip>`.
-
-### Setup errors
-
-| Symptom | Fix |
-|:--|:--|
-| `sima-cli: command not found` | The venv is not active: `sudo su -`, then `source sima/bin/activate` |
-| Venv landed in `/root/sima` | You ran `cd` before `sudo su -` |
-| `externally-managed-environment` | Create the venv first |
-| `Error: No such command 'sdk'` | You ran it on the board. `sdk` is PC-side |
-| WSL cannot ping the DevKit | `.wslconfig` missing, saved as `.txt`, or WSL not restarted |
-| `Cannot connect to the Docker daemon` | `sudo systemctl start docker` |
-| Docker dead after every restart | systemd not enabled in `/etc/wsl.conf` |
-| `ssh: Could not resolve hostname d:` | A Windows path went to `scp`, which read `D:` as a host. Use `sima-vision push` |
-| Copy hangs | The board's IP changed. Find it again with `arp -a` |
-| `DevKit/SDK version mismatch` | Firmware recovery, above |
-
-</details>
+`pip install` it beside `sima-vision` and `sima-vision count` exists, with every shared
+flag, the same seven-step startup and the same `--validate`. Nothing in this repository
+is edited, and a plugin that fails to import is reported and skipped rather than taking
+the whole command down with it.
 
 ## Troubleshooting
 
@@ -889,18 +707,18 @@ the host key changed, that is expected: `ssh-keygen -R <devkit-ip>`.
 
 | Symptom | Fix |
 |:--|:--|
-| `ModuleNotFoundError: pyneat` **on the board** | You installed into a Python that is not the `pyneat` venv. `~/pyneat/bin/pip install sima-vision`, or set `SIMA_VISION_PYNEAT`. `sima-vision doctor` confirms which |
+| `ModuleNotFoundError: pyneat` **on the board** | The search covers the usual places and one level down from `~`, `/opt`, `/media/nvme`, `/media/nvme/neat`, `/usr/local`, `/srv` and `/data`. Somewhere else: `export SIMA_VISION_PYNEAT=/the/venv` |
 | `ModuleNotFoundError: pyneat` **on your PC** | Expected. Inference only happens on the board; use `sima-vision remote -- detect` to drive it from here |
-| `pyneat` missing after pairing | Pairing never installed it, almost always because networking was not fixed first. Re-run `sima-cli sdk setup --devkit <ip>` from WSL |
+| `pyneat` missing after pairing | Pairing installs it over the network, so no route means a silent no-op. Fix the connection, then re-run `sima-cli sdk setup --devkit <ip>` from your PC |
 | `pyneat requires numpy<2` | `~/pyneat/bin/pip install "numpy>=1.24,<2" "opencv-python>=4.7,<5"` |
 | `model archive not found` | `sima-cli login`, then run again. It fetches the pack itself |
 | `sima-cli download did not produce ...` | Not logged in. `sima-cli login`, or pass `--model` with a path or URL |
 | `source file not found` | The error lists what is actually in the folder. Paths are relative to where you launch |
 | `is not a raw H.264 elementary stream` | You renamed an `.mp4` instead of converting it. The error carries the ffmpeg command |
 | `No src-element named "nN_demux"` | The `.mp4` demuxer bug. Convert to `.h264` |
-| Device busy | An orphaned run still holds the MLA: `sima-vision remote -- doctor` first, then `ssh sima@<devkit-ip> pkill -f sima-vision` |
-| Stuck after `loading model` | The first load unpacks the archive. Give it a minute |
-| First run seems to hang before anything prints | That is the 13 MB clip and the model downloading. It only happens once |
+| Device busy | An orphaned run still holds the MLA: `ssh sima@<devkit-ip> pkill -f sima-vision` |
+| Stuck on step 6, `model` | The first load unpacks the archive. Give it a minute. It is timed, so the second run tells you what to expect |
+| First run is slow at step 4, `assets` | That is the 13 MB clip and the 118 MB model pack downloading. It only happens once |
 | `processed=0` and a 20 second timeout | The source caps are not negotiating. Leave `--fps`, `--width` and `--height` at 0 |
 | Output video shorter than the input, plays fast | Frames are being dropped. Set `runtime.overflow_policy: auto` |
 | Recording only a few frames long | Usually `output.insight`. Its encoder shares the codec daemon with the decoder |
@@ -938,8 +756,6 @@ command.
 <details>
 <summary><b>The pipeline, and why it is shaped that way.</b></summary>
 
-
-
 The pipeline is a Neat `Graph`, not a single `Model.run`, because it has several stages,
 named public endpoints and a branch with a fan-in:
 
@@ -964,18 +780,21 @@ packs its masks into the tail of that same buffer.
 
 ```
 sima_vision/
-  cli.py        the command line          api.py      the Python API
-  config.py     loading and validation    runtime.py  finding pyneat and OpenCV
-  assets.py     clips and model archives  devkit.py   push, pull, watch, remote
-  media.py      H.264 and geometry        neat.py     graph assembly
-  samples.py    decoding a sample         masks.py    masks and compositing
-  draw.py       the overlay               sinks.py    video, stills, live feed
-  runloop.py    the pull loop
-  tasks/        detect.py   segment.py   fall.py
+  cli.py        the command line          api.py       the Python API
+  bootstrap.py  the automatic setup       console.py   the steps you read
+  config.py     loading and validation    runtime.py   the deferred imports
+  assets.py     clips and model archives  devkit.py    push, pull, watch, remote
+  media.py      H.264 and geometry        neat.py      graph assembly
+  samples.py    decoding a sample         masks.py     masks and compositing
+  draw.py       the overlay               sinks.py     video, stills, live feed
+  runloop.py    the pull loop             tasks/       one file per app, plus base.py
 ```
 
-`assets.py` and `devkit.py` are the only modules that reach the network, and `assets.py`
-only from a run. A `--validate` resolves the same paths and fetches nothing.
+Three modules reach the network and no others: `assets.py` downloads the clip and the
+model pack, `bootstrap.py` shells out to `pip` on the one path where it installs
+something, and `devkit.py` runs `ssh` and `scp`. The first two are reached only from a
+run. `--validate` resolves the same paths, imports nothing and fetches nothing, which is
+what makes it safe to run anywhere.
 
 </details>
 

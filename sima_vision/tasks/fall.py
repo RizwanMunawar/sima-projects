@@ -20,7 +20,6 @@ from __future__ import annotations
 import os
 import queue
 import smtplib
-import sys
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -39,6 +38,7 @@ from ..config import (
     _str,
     _str_list,
 )
+from ..console import console
 from ..draw import draw_banner, draw_caption, draw_fps, draw_scale
 from ..runloop import TaskRuntime
 from ..runtime import time_ms
@@ -673,7 +673,7 @@ class AlertSender:
                 self.sent += 1
             except Exception as exc:  # pragma: no cover - depends on the network
                 self.failed += 1
-                print(f"[warn] alert send failed: {exc}", file=sys.stderr, flush=True)
+                console.warn(f"alert send failed: {exc}")
 
     def build_message(self, alert: Alert):
         """Compose the email, attaching the snapshot when there is one."""
@@ -711,10 +711,9 @@ class AlertSender:
         """Send one alert synchronously. Raises on any SMTP failure."""
         msg = self.build_message(alert)
         if self.cfg.dry_run:
-            print(
+            console.report(
                 f"[alert:dry-run] would email {len(self.cfg.recipients)} recipient(s): "
-                f"{msg['Subject']}",
-                flush=True,
+                f"{msg['Subject']}"
             )
             return
         password = alert_password(self.cfg)
@@ -826,10 +825,9 @@ class FallPipeline(Pipeline):
         stats = self.alerts
         stats.close()
         if stats.sent or stats.failed or stats.dropped or stats.suppressed:
-            print(
+            console.report(
                 f"alerts: sent={stats.sent} failed={stats.failed} "
-                f"dropped={stats.dropped} suppressed_by_cooldown={stats.suppressed}",
-                flush=True,
+                f"dropped={stats.dropped} suppressed_by_cooldown={stats.suppressed}"
             )
         self.alerts = None
 
@@ -857,7 +855,7 @@ def write_snapshot(cfg: FallAppConfig, track: Track, frame_index: int, frame) ->
     directory.mkdir(parents=True, exist_ok=True)
     out = directory / f"fall_track{track.track_id:03d}_frame{frame_index:06d}.jpg"
     if not runtime.cv2.imwrite(str(out), frame):
-        print(f"[warn] failed to write snapshot {out}", file=sys.stderr)
+        console.warn(f"failed to write snapshot {out}")
         return ""
     return str(out)
 
@@ -917,11 +915,10 @@ class FallRuntime(TaskRuntime):
                 pipeline.labels[class_id]
                 if 0 <= class_id < len(pipeline.labels) else "person"
             )
-            print(
+            console.report(
                 f"[FALL] track #{track.track_id} ({label}) at frame {index} "
                 f"aspect={signals['aspect_value']} descent={signals['descent_value']}px/s"
-                + (f" snapshot={snapshot}" if snapshot else ""),
-                flush=True,
+                + (f" snapshot={snapshot}" if snapshot else "")
             )
             queued = pipeline.alerts.offer(
                 Alert(
@@ -1093,8 +1090,8 @@ class FallTask(Task):
         )
 
     def prepare(self, cfg: FallAppConfig, pipeline: FallPipeline, step) -> None:
-        step(describe_fall(cfg))
-        step(describe_alerts(cfg))
+        step.detail(describe_fall(cfg))
+        step.detail(describe_alerts(cfg))
 
     def early_exit(self, cfg: FallAppConfig, args) -> int | None:
         """``--test-alert``: send one fake alert now and report what happened.
@@ -1106,10 +1103,9 @@ class FallTask(Task):
         if not getattr(args, "test_alert", False):
             return None
         if not cfg.alerts.enable:
-            print(
-                "[ERR] alerts.enable is off, so there is nothing to test.\n"
-                "      Pass --alerts, or --alert-to somebody@example.com.",
-                file=sys.stderr,
+            console.error(
+                "alerts.enable is off, so there is nothing to test.\n"
+                "Pass --alerts, or --alert-to somebody@example.com."
             )
             return 1
         # enable=False keeps AlertSender from starting its worker thread; this
@@ -1121,9 +1117,9 @@ class FallTask(Task):
                      "aspect_value": 1.35, "descent_value": 0.0},
             frame_index=0,
         )
-        print(describe_alerts(cfg))
+        console.info(describe_alerts(cfg))
         sender.send_now(probe)
-        print(
+        console.report(
             "test alert composed (dry_run is on, nothing left the board)."
             if cfg.alerts.dry_run else "test alert sent."
         )

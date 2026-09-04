@@ -175,10 +175,11 @@ jobs:
         working-directory: ${{ runner.temp }}
         run: |
           sima-vision --version | grep -F "${{ needs.version.outputs.version }}"
-          sima-vision doctor
+          sima-vision --help | grep -F "sima-vision detect"
           sima-vision detect --validate
           sima-vision segment --validate
           sima-vision fall --validate
+          sima-vision detect --validate --quiet
           test ! -d assets   # --validate must not have downloaded anything
 
   pypi:

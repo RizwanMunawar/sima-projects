@@ -16,7 +16,7 @@ import sima_vision.runtime as rt
 
 @pytest.fixture(scope="session", autouse=True)
 def bind_cv2_and_numpy():
-    """Do what load_runtime_dependencies() does, minus pyneat."""
+    """Do what bootstrap.ensure_imaging() does, minus pyneat."""
     cv2 = pytest.importorskip("cv2")
     np = pytest.importorskip("numpy")
     rt.cv2 = cv2

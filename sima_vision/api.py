@@ -150,14 +150,24 @@ def run(task: str, config: str | Path | None = None, **settings) -> int:
     """
     import os
 
+    from . import __version__
+    from .bootstrap import detect_environment, ensure_runtime
+    from .cli import RUN_STEPS
+    from .console import console
     from .runloop import Stopper
-    from .runtime import load_runtime_dependencies
 
     handle = _task(task)
     cfg = load(task, config, **settings)
-    load_runtime_dependencies()
-    # The same two side effects the command line has, so `run(...)` and
-    # `sima-vision <task>` really are the same run.
+
+    # The same steps, in the same order, as the command line: `run("detect")`
+    # and `sima-vision detect` are one code path with two front doors.
+    console.plan(RUN_STEPS)
+    console.banner(f"sima-vision {__version__}", task)
+    with console.step("environment", "checking this machine") as step:
+        env = detect_environment()
+        step.done(env.summary())
+    ensure_runtime(env)
+
     if cfg.profile:
         os.environ.setdefault("SIMA_GST_ELEMENT_TIMINGS", "1")
         os.environ.setdefault("SIMA_GST_FLOW_DEBUG", "1")

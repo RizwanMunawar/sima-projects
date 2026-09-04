@@ -17,31 +17,43 @@ from sima_vision.config import (
     apply_overrides,
     discover_config,
     load_base_config,
-    packaged_config,
     validate_base,
 )
 from sima_vision.tasks import TASKS
 
 REPO = Path(__file__).resolve().parents[1]
 
-#: The starter configs shipped inside the wheel, and the task that owns each.
-#: Loading every one of them is the regression guard for the shared-core
-#: refactor, and proves `sima-vision init` cannot hand out a broken file.
-SHIPPED = [(name, packaged_config(name)) for name in TASKS]
+#: One exhaustive config file per task. Nothing ships these -- the package has
+#: no starter configs to copy out any more, because a run needs no config at all
+#: -- but a file that names *every* documented key is the only thing that proves
+#: the loader still understands every documented key. So they live here, and
+#: loading each one is the regression guard for the shared-core refactor.
+FIXTURES = Path(__file__).parent / "configs"
+FULL = [
+    (name, FIXTURES / f"{name}.yaml")
+    for name in TASKS
+    if (FIXTURES / f"{name}.yaml").is_file()
+]
 
 
-@pytest.mark.parametrize("name,path", SHIPPED, ids=[n for n, _ in SHIPPED])
-def test_shipped_config_loads_and_validates(name, path):
-    """Every config.yaml in the repo must load and pass its task's validation."""
-    assert path.is_file(), f"{path} is missing"
+def test_there_is_a_fixture_for_every_built_in_task():
+    """A new task without one would silently skip the parametrised tests below."""
+    from sima_vision.tasks import BUILTIN
+
+    assert {name for name, _ in FULL} == {task.name for task in BUILTIN}
+
+
+@pytest.mark.parametrize("name,path", FULL, ids=[n for n, _ in FULL])
+def test_a_fully_specified_config_loads_and_validates(name, path):
+    """Every key the docs mention must still load and pass its task's validation."""
     cfg = TASKS[name]().load(path, {})
     assert cfg.config_path == path
-    assert cfg.model_path, "model.path should be set by the shipped config"
+    assert cfg.model_path, "model.path should be set by the fixture"
 
 
-@pytest.mark.parametrize("name,path", SHIPPED, ids=[n for n, _ in SHIPPED])
-def test_shipped_config_describes(name, path):
-    """--validate must be able to describe every shipped config."""
+@pytest.mark.parametrize("name,path", FULL, ids=[n for n, _ in FULL])
+def test_a_fully_specified_config_describes(name, path):
+    """--validate must be able to describe every one of them."""
     task = TASKS[name]()
     cfg = task.load(path, {})
     for line in task.describe(cfg):
@@ -100,7 +112,7 @@ def test_apply_overrides_replaces_a_non_mapping():
 
 def test_flags_beat_the_config_file():
     cfg = TASKS["detect"]().load(
-        packaged_config("detect"),
+        FIXTURES / "detect.yaml",
         {"decode.score_threshold": 0.9, "output.save.enable": False},
     )
     assert cfg.score_threshold == 0.9
@@ -137,15 +149,16 @@ def test_explicit_config_must_exist(tmp_path):
         discover_config(tmp_path / "nope.yaml")
 
 
-def test_init_writes_a_config_every_task_can_load(tmp_path, monkeypatch):
-    """`sima-vision init` must never hand out a file that then fails to load."""
-    from sima_vision.setup_commands import run_init
-
+def test_a_config_in_the_working_directory_is_found_by_every_task(tmp_path, monkeypatch):
+    """No task needs a config, but every task must read one that is sitting there."""
     monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text(
+        "model:\n  path: m.tar.gz\nsource:\n  uri: c.h264\n", encoding="utf-8"
+    )
     for name in TASKS:
-        out = tmp_path / f"{name}.yaml"
-        assert run_init(name, out, force=False) == 0
-        assert TASKS[name]().load(out, {}).config_path == out
+        cfg = TASKS[name]().load(None, {})
+        assert cfg.config_path == tmp_path / "config.yaml"
+        assert cfg.model_path == "m.tar.gz"
 
 
 # ── scalar readers ──

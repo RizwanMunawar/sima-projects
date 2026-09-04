@@ -1,31 +1,41 @@
 """The ``sima-vision`` command.
 
-One subcommand per task. Every flag that corresponds to a config key declares
-its dotted path as its argparse ``dest``, so the whole override mechanism is
-this::
+    pip install sima-vision
+    sima-vision detect
+
+That is the whole of it. There is no setup command, no init, no fetch and no
+doctor, because a run does all of it: it finds the Neat runtime, puts the
+board's numpy and OpenCV on the path, downloads the model pack and the sample
+clip, and says what it is doing at each step. See
+:mod:`sima_vision.bootstrap`.
+
+One subcommand per task, and a task is a plugin -- the built-in three are
+registered exactly the way a fourth one from another package would be. See
+:mod:`sima_vision.tasks`.
+
+Every flag that corresponds to a config key declares its dotted path as its
+argparse ``dest``, so the whole override mechanism is this::
 
     parser.add_argument("--source", dest="source.uri")
     ...
     {"source.uri": "clip.h264"}  ->  raw["source"]["uri"] = "clip.h264"
 
 Overrides are written into the parsed YAML *before* the loaders run, so a CLI
-flag goes through exactly the same defaulting and validation a config file
-does, and cannot reach a state a config file could not.
-
-Config is optional, and so are the flags. The dataclass defaults are a
-complete configuration down to a model and a clip -- see
-:mod:`sima_vision.assets` -- so ``sima-vision detect`` runs with no YAML and no
-arguments at all; a file adds to that, and flags win over both.
+flag goes through exactly the same defaulting and validation a config file does,
+and cannot reach a state a config file could not. Config is optional and so are
+the flags: the dataclass defaults are a complete configuration down to a model
+and a clip, which is why ``sima-vision detect`` runs with no arguments at all.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import sys
 from pathlib import Path
 
 from . import __version__
+from .bootstrap import detect_environment, ensure_runtime
+from .console import console
 from .devkit import (
     DEVKIT_ENV,
     VIDEO_PORT,
@@ -35,45 +45,33 @@ from .devkit import (
     run_watch,
 )
 from .neat import describe_preprocess
-from .netsetup import run_setup_board, run_setup_network
 from .runloop import Stopper
-from .runtime import (
-    FAMILY_DECODE_TOKENS,
-    find_pyneat_env,
-    load_runtime_dependencies,
-    missing_pyneat_message,
-)
-from .setup_commands import run_fetch, run_init
+from .runtime import FAMILY_DECODE_TOKENS
 from .tasks import TASKS
+
+#: environment, pyneat, imaging, assets, source, model, pipeline.
+RUN_STEPS = 7
 
 EPILOG = """\
 examples:
-  sima-vision detect                       the sample clip and model, fetched
+  sima-vision detect                       the sample clip and model, fetched for you
   sima-vision detect  --source clip.h264 --model yolo26m-det.tar.gz
   sima-vision detect  --source https://example.com/clip.h264
-  sima-vision segment --source clip.h264 --model yolo26m-seg.tar.gz --blur
-  sima-vision segment --source clip.h264 --anonymise --keep-classes person
+  sima-vision segment --blur --keep-classes person
   sima-vision fall    --source rtsp://cam/live --alert-to ops@example.com
 
 without a board:
-  sima-vision init segment                    write a documented config.yaml
-  sima-vision segment --validate              check it
-  sima-vision doctor                          what is installed, and what it allows
-
-first time, if the board has no internet:
-  sima-vision setup network                   check the sharing from PC to board
-  sima-vision setup network --apply           and set it up (Windows, as admin)
+  sima-vision detect --validate            check the settings, no hardware at all
 
 driving the board from your PC:
-  sima-vision push clip.h264                  copy files over
-  sima-vision watch  -- detect                run it there, live video back here
+  sima-vision push clip.h264               copy files over
+  sima-vision watch  -- detect             run it there, live video back here
   sima-vision remote -- detect --frames 200   run it there, output in the terminal
-  sima-vision pull                            bring the results back
+  sima-vision pull                         bring the results back
 
-config.yaml in the working directory is picked up automatically, and so is
-./assets -- a clip or model that is missing there is downloaded on the first
-run. Running a task needs the DevKit; everything under "without a board" does
-not, and none of it touches the network.
+Everything a run needs is found or downloaded on the way in, once, into
+./assets. A config.yaml in the working directory is picked up automatically if
+there is one, and flags win over it.
 """
 
 
@@ -206,8 +204,12 @@ def add_task_arguments(parser: argparse.ArgumentParser, task) -> None:
     add_config_arguments(parser)
     parser.add_argument(
         "--validate", action="store_true",
-        help="Parse and check the config, print what it resolved to, and exit. "
-             "Needs neither pyneat nor the board, so it works on a laptop.",
+        help="Resolve and check the settings, print what they came to, and exit. "
+             "Needs neither the Neat runtime nor the board, so it works on a laptop.",
+    )
+    parser.add_argument(
+        "--quiet", "-q", action="store_true",
+        help="Only warnings, errors and the closing report. Steps are silent.",
     )
     task.add_arguments(parser.add_argument_group(f"{task.name} options"))
 
@@ -215,13 +217,12 @@ def add_task_arguments(parser: argparse.ArgumentParser, task) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="sima-vision",
-        description="Live YOLO computer vision on a SiMa Modalix DevKit 3.0.",
+        description="Live YOLO computer vision on a SiMa Modalix DevKit 3.0. "
+                    "Install it and run it; there is no setup step.",
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=f"sima-vision {__version__}")
-    # dest="command", not "task": the `init` and `fetch` positionals are
-    # both called task, and would overwrite it.
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     for name, task_cls in TASKS.items():
@@ -236,10 +237,6 @@ def build_parser() -> argparse.ArgumentParser:
         add_task_arguments(sub, task)
         sub.set_defaults(_task=task_cls)
 
-    add_init_parser(subparsers)
-    add_fetch_parser(subparsers)
-    add_doctor_parser(subparsers)
-    add_setup_parser(subparsers)
     add_push_parser(subparsers)
     add_pull_parser(subparsers)
     add_watch_parser(subparsers)
@@ -248,7 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def add_host_argument(parser: argparse.ArgumentParser) -> None:
-    """Which board. The same flag on all three transfer commands."""
+    """Which board. The same flag on all four transfer commands."""
     parser.add_argument(
         "--host", "-H", metavar="USER@ADDR",
         help=f"The DevKit, as ssh takes it. Defaults to ${DEVKIT_ENV} so you "
@@ -279,7 +276,6 @@ def add_push_parser(subparsers) -> None:
     sub.add_argument("--dest", default="~/", metavar="DIR",
                      help="Where to put them on the board. Default ~/.")
     add_host_argument(sub)
-    sub.set_defaults()
 
 
 def add_pull_parser(subparsers) -> None:
@@ -306,59 +302,6 @@ def add_pull_parser(subparsers) -> None:
     sub.add_argument("--into", type=Path, default=Path("."), metavar="DIR",
                      help="Where to put them here. Default the current directory.")
     add_host_argument(sub)
-    sub.set_defaults()
-
-
-def add_setup_parser(subparsers) -> None:
-    """``setup network`` -- share this PC's internet with the board."""
-    sub = subparsers.add_parser(
-        "setup",
-        help="One-time setup steps, starting with the network",
-        description="One-time things you do once per machine.",
-    )
-    inner = sub.add_subparsers(dest="topic", metavar="TOPIC", required=True)
-    network = inner.add_parser(
-        "network",
-        help="Share this PC's internet connection with the DevKit",
-        description=(
-            "The DevKit has no internet of its own: it is cabled to this PC, so "
-            "this PC has to pass its connection along. This works out which of "
-            "your adapters has the internet and which one the board is on, says "
-            "whether sharing is actually set up, and with --apply sets it up.\n\n"
-            "It changes nothing unless you pass --apply."
-        ),
-        epilog=(
-            "examples:\n"
-            "  sima-vision setup network\n"
-            "  sima-vision setup network --apply\n"
-            "  sima-vision setup network --host sima@192.168.137.50\n"
-            "\nWith --host it also runs the checks on the board itself, which is\n"
-            "the only answer that cannot be wrong.\n"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    board = inner.add_parser(
-        "board",
-        help="Install sima-vision where pyneat is, on the DevKit",
-        description=(
-            "`pip install sima-vision` installs into whichever Python you ran "
-            "pip with, and on the board that is almost never the virtualenv "
-            "holding pyneat. This finds that venv and installs into it, so the "
-            "command and the library live in the same place. "
-            "Runs work either way: a run that cannot import pyneat goes and "
-            "finds it. This is the tidy version, and it is where to start when "
-            "`sima-vision detect` says pyneat is missing."
-        ),
-    )
-    board.set_defaults()
-
-    network.add_argument(
-        "--apply", action="store_true",
-        help="Actually turn sharing on. Windows only, and needs an "
-             "Administrator terminal; without one it prints the command to run.",
-    )
-    add_host_argument(network)
-    sub.set_defaults()
 
 
 def add_watch_parser(subparsers) -> None:
@@ -402,7 +345,6 @@ def add_watch_parser(subparsers) -> None:
         help="Where to write the SDP the player needs. Default ./sima-vision.sdp.",
     )
     add_host_argument(sub)
-    sub.set_defaults()
 
 
 def add_remote_parser(subparsers) -> None:
@@ -419,7 +361,7 @@ def add_remote_parser(subparsers) -> None:
             "examples:\n"
             "  sima-vision remote -- detect --frames 200\n"
             "  sima-vision remote -- segment --blur-strength 81\n"
-            "  sima-vision remote -- doctor\n"
+            "  sima-vision remote -- detect --validate\n"
             "\nEverything after -- is passed to sima-vision on the board.\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -427,71 +369,6 @@ def add_remote_parser(subparsers) -> None:
     sub.add_argument("argv", nargs=argparse.REMAINDER, metavar="-- ARGS",
                      help="The command to run there, after a literal --.")
     add_host_argument(sub)
-    sub.set_defaults()
-
-
-def add_init_parser(subparsers) -> None:
-    """``init`` -- write a commented starter config into the working directory."""
-    sub = subparsers.add_parser(
-        "init",
-        help="Write a documented config.yaml you can edit",
-        description=(
-            "Copy this task's starter config into the working directory. It is "
-            "the same file the repo ships, with every setting commented, and it "
-            "comes out of the installed package -- no clone needed."
-        ),
-    )
-    sub.add_argument("task", choices=list(TASKS), help="Which app to configure.")
-    sub.add_argument(
-        "--out", "-o", type=Path, default=Path("config.yaml"), metavar="PATH",
-        help="Where to write it. Default ./config.yaml, which every command finds "
-             "on its own.",
-    )
-    sub.add_argument(
-        "--force", "-f", action="store_true", help="Overwrite an existing file.",
-    )
-    sub.set_defaults()
-
-
-def add_fetch_parser(subparsers) -> None:
-    """``fetch`` -- download the sample clips and print the model command."""
-    sub = subparsers.add_parser(
-        "fetch",
-        help="Download the sample clips, and say how to get the model",
-        description=(
-            "Download the two sample videos into ./assets/videos/. They are on a "
-            "public GitHub release, so they need no login. The model packs do "
-            "need a community.sima.ai login, so that command is printed for you "
-            "to run rather than attempted here. A run fetches both on its own "
-            "when they are missing, so this is only for getting the 13 MB clip "
-            "out of the way first."
-        ),
-    )
-    sub.add_argument(
-        "task", choices=list(TASKS), nargs="?", default="detect",
-        help="Which model to print the download command for. Default detect.",
-    )
-    sub.add_argument(
-        "--into", type=Path, default=Path("assets"), metavar="DIR",
-        help="Where to put them. Default ./assets.",
-    )
-    sub.set_defaults()
-
-
-
-def add_doctor_parser(subparsers) -> None:
-    """``doctor`` -- say what is installed and what each part enables."""
-    sub = subparsers.add_parser(
-        "doctor",
-        help="Check what is installed and what you can do with it",
-        description=(
-            "Report which pieces are present. Nothing here is fatal on its own: "
-            "checking a config needs almost nothing, and running inference "
-            "needs the DevKit."
-        ),
-    )
-    sub.set_defaults()
-
 
 
 def collect_overrides(args: argparse.Namespace) -> dict:
@@ -509,19 +386,18 @@ def collect_overrides(args: argparse.Namespace) -> dict:
 
 def print_validation(task, cfg) -> None:
     """What ``--validate`` prints. Deliberately the same shape for every task."""
-    where = cfg.config_path or "<defaults and flags only>"
-    print(f"config OK: {where}")
-    print(f"  model: {cfg.model_path or '<unset>'}")
-    print(f"  labels: {cfg.labels_path}")
-    print(f"  family={cfg.family} -> BoxDecodeType.{FAMILY_DECODE_TOKENS[cfg.family]}")
-    print(f"  source: type={cfg.source_type} uri={cfg.source_uri or '<default camera>'}")
-    print(
-        f"  decode: conf={cfg.score_threshold} iou={cfg.nms_iou} "
-        f"max_det={cfg.max_detections}"
-    )
-    print(f"  {describe_preprocess(cfg, cfg.source_width, cfg.source_height)}")
-    for line in task.describe(cfg):
-        print(f"  {line}")
+    console.banner(f"sima-vision {__version__}", f"{task.name} --validate")
+    console.success(f"config OK: {cfg.config_path or '<defaults and flags only>'}")
+    lines = [
+        f"model:   {cfg.model_path or '<unset>'}",
+        f"labels:  {cfg.labels_path}",
+        f"family:  {cfg.family} -> BoxDecodeType.{FAMILY_DECODE_TOKENS[cfg.family]}",
+        f"source:  type={cfg.source_type} uri={cfg.source_uri or '<default camera>'}",
+        f"decode:  conf={cfg.score_threshold} iou={cfg.nms_iou} "
+        f"max_det={cfg.max_detections}",
+        describe_preprocess(cfg, cfg.source_width, cfg.source_height),
+        *task.describe(cfg),
+    ]
     outputs = []
     if cfg.video_enable:
         outputs.append(f"video={cfg.video_path}")
@@ -529,83 +405,57 @@ def print_validation(task, cfg) -> None:
         outputs.append(f"stills={cfg.save_dir}/ every={cfg.save_every}")
     if cfg.insight_enable:
         outputs.append(f"insight={cfg.insight_host}:{cfg.video_port_base}")
-    print(f"  output: {' '.join(outputs)}")
+    lines.append(f"output:  {' '.join(outputs) or '<nothing written>'}")
+    for line in lines:
+        console.info(f"  {line}")
+    console.write()
+    console.note("  nothing was downloaded and no hardware was touched.")
 
 
+def run_task(args) -> int:
+    """Resolve the config, set the machine up, and run. The whole of a run."""
+    task = args._task()
+    cfg = task.post_process(
+        task.load(args.config, collect_overrides(args), use_file=not args.no_config),
+        args,
+    )
 
+    if args.validate:
+        print_validation(task, cfg)
+        return 0
 
-def mark_for(ok: bool) -> str:
-    return "yes" if ok else "no "
+    early = task.early_exit(cfg, args)
+    if early is not None:
+        return early
 
+    console.plan(RUN_STEPS)
+    console.banner(f"sima-vision {__version__}", task.name)
+    with console.step("environment", "checking this machine") as step:
+        env = detect_environment()
+        step.done(env.summary())
+    ensure_runtime(env)
 
-def run_doctor() -> int:
-    """Report what is installed, and what each piece unlocks."""
-    import glob
-    import importlib.util
-    import shutil
+    if cfg.profile:
+        os.environ.setdefault("SIMA_GST_ELEMENT_TIMINGS", "1")
+        os.environ.setdefault("SIMA_GST_FLOW_DEBUG", "1")
+    if cfg.save_enable:
+        Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
 
-    print(f"sima-vision {__version__}")
-    print(f"python      {sys.version.split()[0]}  ({sys.executable})\n")
-
-    def probe(module: str):
-        try:
-            found = importlib.util.find_spec(module)
-        except (ImportError, ValueError):
-            return None
-        return found
-
-    rows = [
-        ("yaml", "read config files", "required", "pip install pyyaml"),
-        ("numpy", "draw the overlay on every frame", "a run", "the board provides it"),
-        ("cv2", "draw the overlay on every frame", "a run", "the board provides it"),
-        ("pyneat", "run inference on the MLA", "DevKit", "ships with the Palette SDK"),
-    ]
-    have = {}
-    width = len("board packages")
-    for module, what, needed_for, fix in rows:
-        ok = probe(module) is not None
-        have[module] = ok
-        print(f"  {mark_for(ok)}  {module:<{width}}  {what}")
-        if not ok:
-            print(f"  {'':<5}{'':<{width}}  needed for: {needed_for} -- {fix}")
-
-    # pyneat lives in a venv of its own, so "not importable here" and "not on
-    # this machine" are different answers and the fix differs completely.
-    site, note = find_pyneat_env()
-    reachable = have["pyneat"] or site is not None
-    if not have["pyneat"]:
-        print(f"  {mark_for(reachable)}  {'pyneat venv':<{width}}  {note}")
-        have["pyneat"] = reachable
-
-    dist = glob.glob("/usr/lib/python3*/dist-packages")
-    board = dist[0] if dist else "(not a DevKit, which is fine)"
-    print(f"\n  {mark_for(bool(dist))}  {'board packages':<{width}}  {board}")
-
-    ffprobe = shutil.which("ffprobe")
-    where = ffprobe or "optional; raw .h264 is read directly"
-    print(f"  {mark_for(bool(ffprobe))}  {'ffprobe':<{width}}  {where}")
-
-    drawing = have["numpy"] and have["cv2"]
-    print("\nWhat you can do right now:")
-    for ok, command, what in (
-        (have["yaml"], "sima-vision <task> --validate", "check a config"),
-        (True, "sima-vision watch -- <task>", "run it on the board, watch it here"),
-        (drawing and have["pyneat"], "sima-vision <task>", "run inference on the MLA"),
-    ):
-        print(f"  {mark_for(ok)}  {command:<30}  {what}")
-
-    if not have["pyneat"]:
-        print("\n" + missing_pyneat_message(note))
-    elif site is not None:
-        # site is <root>/lib/pythonX.Y/site-packages, so the venv root is three
-        # up. Two up is <root>/lib, and `<root>/lib/bin/pip` helps nobody.
-        root = site.parents[2]
-        print(
-            f"\npyneat is not in this interpreter, but {root} has it and will be\n"
-            f"used automatically. To skip the search, install into that venv instead:\n"
-            f"  {root}/bin/pip install sima-vision"
-        )
+    task.run(cfg, Stopper())
     return 0
+
+
+def run_devkit_command(args) -> int:
+    """push, pull, watch and remote: the four that talk to a board over ssh."""
+    if args.command == "push":
+        return run_push(args.paths, args.host, args.dest)
+    if args.command == "pull":
+        return run_pull(args.names, args.host, args.into)
+    # argparse.REMAINDER keeps the literal `--`; ssh does not want it.
+    argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
+    if args.command == "watch":
+        return run_watch(argv, args.host, args.to, args.port, args.sdp)
+    return run_remote(argv, args.host)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -616,84 +466,28 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
 
-    if args.command not in TASKS:
-        try:
-            if args.command == "doctor":
-                return run_doctor()
-            if args.command == "init":
-                return run_init(args.task, args.out, args.force)
-            if args.command == "fetch":
-                return run_fetch(args.task, args.into)
-            if args.command == "setup":
-                if args.topic == "board":
-                    return run_setup_board()
-                return run_setup_network(args.host, args.apply)
-            if args.command == "push":
-                return run_push(args.paths, args.host, args.dest)
-            if args.command == "pull":
-                return run_pull(args.names, args.host, args.into)
-            if args.command in ("remote", "watch"):
-                # argparse.REMAINDER keeps the literal `--`; ssh does not want it.
-                argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
-                if args.command == "watch":
-                    return run_watch(argv, args.host, args.to, args.port, args.sdp)
-                return run_remote(argv, args.host)
-        except KeyboardInterrupt:
-            return 130
-        except SystemExit as exc:
-            # These carry a message, not a status: `raise SystemExit("...")` is
-            # how the setup commands refuse. An int code is argparse's, and is
-            # already the answer.
-            if isinstance(exc.code, int):
-                return exc.code
-            print(f"[ERR] {exc}", file=sys.stderr)
-            return 1
-        except Exception as exc:
-            print(f"[ERR] {exc}", file=sys.stderr)
-            return 1
+    console.configure(quiet=getattr(args, "quiet", False))
 
-    task = args._task()
     try:
-        cfg = task.load(
-            args.config, collect_overrides(args), use_file=not args.no_config
-        )
-        cfg = task.post_process(cfg, args)
-
-        if args.validate:
-            print_validation(task, cfg)
-            return 0
-
-        early = task.early_exit(cfg, args)
-        if early is not None:
-            return early
-
-        load_runtime_dependencies()
-        if cfg.profile:
-            os.environ.setdefault("SIMA_GST_ELEMENT_TIMINGS", "1")
-            os.environ.setdefault("SIMA_GST_FLOW_DEBUG", "1")
-        if cfg.save_enable:
-            Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
-
-        task.run(cfg, Stopper())
-        return 0
+        if args.command in TASKS:
+            return run_task(args)
+        return run_devkit_command(args)
     except KeyboardInterrupt:
         return 130
+    except SystemExit as exc:
+        # These carry a message, not a status: `raise SystemExit("...")` is how
+        # devkit.py refuses. An int code is argparse's, and is already the answer.
+        if isinstance(exc.code, int):
+            return exc.code
+        console.error(str(exc))
+        return 1
     except ImportError as exc:
-        # load_runtime_dependencies already worked out which of the two this is
-        # -- wrong machine, or right machine and the wrong interpreter -- and
-        # said so. Anything else that fails to import gets the generic half.
-        message = str(exc)
-        if "pyneat" not in message:
-            message = (
-                f"{exc}\n"
-                "A run needs numpy and OpenCV as well. On the DevKit both come "
-                "from the board's\nsystem packages; anywhere else, use "
-                "`sima-vision <task> --validate` instead."
-            )
-        print(f"[ERR] {message}", file=sys.stderr)
+        # bootstrap has already worked out which case this is -- wrong machine,
+        # or right machine and nothing to install from -- and said so.
+        console.error(str(exc))
         return 1
     except Exception as exc:
-        print(f"[ERR] {exc}", file=sys.stderr)
+        console.error(str(exc))
         return 1
 
 

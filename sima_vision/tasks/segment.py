@@ -722,7 +722,7 @@ class SegmentTask(Task):
         )
 
     def prepare(self, cfg: SegmentAppConfig, pipeline: SegmentPipeline, step) -> None:
-        step(describe_blur(cfg))
+        step.detail(describe_blur(cfg))
 
     def runtime(self, cfg, pipeline) -> TaskRuntime:
         return SegmentRuntime()

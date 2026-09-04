@@ -34,9 +34,11 @@ import shlex
 import shutil
 import socket
 import subprocess
-import sys
 from collections import defaultdict
 from pathlib import Path
+
+from . import __version__
+from .console import console, human_bytes
 
 #: Saves retyping `--host` on every command.
 DEVKIT_ENV = "SIMA_VISION_DEVKIT"
@@ -86,8 +88,11 @@ def require(tool: str) -> str:
 
 
 def report(command: list[str], cwd: Path | None = None) -> None:
+    """Echo the ssh or scp being run. These wrap other programs, and hiding
+    which one would make their failures unattributable."""
     where = f"  (from {cwd})" if cwd is not None else ""
-    print(f"$ {' '.join(command)}{where}", flush=True)
+    style = console.style
+    console.write(f"  {style.paint('$', style.dim)} {' '.join(command)}{where}")
 
 
 def remote_paths(host: str, names) -> list[str]:
@@ -116,6 +121,7 @@ def run_push(paths: list[Path], host: str | None, dest: str) -> int:
     Windows drive letter from being read as a hostname. See the module docstring.
     """
     host = resolve_host(host)
+    console.banner(f"sima-vision {__version__}", f"push -> {host}")
     scp = require("scp")
 
     missing = [p for p in paths if not p.exists()]
@@ -137,7 +143,8 @@ def run_push(paths: list[Path], host: str | None, dest: str) -> int:
         if result.returncode != 0:
             return result.returncode
 
-    print(f"\ncopied {sum(len(n) for n in groups.values())} item(s) to {target}")
+    console.write()
+    console.success(f"copied {sum(len(n) for n in groups.values())} item(s) to {target}")
     return 0
 
 
@@ -148,16 +155,16 @@ def run_pull(names: list[str], host: str | None, into: Path) -> int:
     takes what is there.
     """
     host = resolve_host(host)
+    console.banner(f"sima-vision {__version__}", f"pull <- {host}")
     scp = require("scp")
     wanted = names or list(OUTPUTS)
 
     found = remote_paths(host, wanted)
     if not found:
         listed = ", ".join(wanted[:4]) + ("..." if len(wanted) > 4 else "")
-        print(
+        console.error(
             f"nothing to pull: {host} has none of {listed}\n"
-            "Run a task there first, or name the file you want.",
-            file=sys.stderr,
+            "Run a task there first, or name the file you want."
         )
         return 1
 
@@ -171,11 +178,12 @@ def run_pull(names: list[str], host: str | None, into: Path) -> int:
     if result.returncode != 0:
         return result.returncode
 
-    print(f"\npulled into {into.resolve()}:")
+    console.write()
+    console.success(f"pulled into {into.resolve()}:")
     for name in found:
         local = into / name
-        size = local.stat().st_size / 1e6 if local.is_file() else 0
-        print(f"  {name}" + (f"  ({size:.1f} MB)" if size else ""))
+        size = human_bytes(local.stat().st_size) if local.is_file() else ""
+        console.info(f"  {name}" + (f"  ({size})" if size else ""))
     return 0
 
 
@@ -298,6 +306,7 @@ def run_watch(argv: list[str], host: str | None, to: str | None, port: int,
             "nothing to run. Put the task after --:\n"
             "  sima-vision watch -- detect"
         )
+    console.banner(f"sima-vision {__version__}", f"watch {' '.join(argv)} on {host}")
 
     # Asked, then guessed. The board's own view is right by construction; the
     # routing-table guess is only right while the board is answering ARP, and
@@ -313,27 +322,33 @@ def run_watch(argv: list[str], host: str | None, to: str | None, port: int,
     # necessarily be in this directory.
     sdp = write_sdp(sdp_path or Path("sima-vision.sdp"), port).resolve()
 
-    print(f"live video: {host} -> {target}:{port}   ({how})")
-    print(f"            metadata on {METADATA_PORT}, same address")
-    print(f"wrote {sdp}\n")
+    console.info(f"live video: {host} -> {target}:{port}   ({how})")
+    console.info(f"            metadata on {METADATA_PORT}, same address")
+    console.info(f"wrote {sdp}")
+    console.write()
 
     players = player_commands(port, sdp)
     installed = [(tool, command) for tool, command in players if shutil.which(tool)]
 
-    print("Open this in a second terminal, then come back:")
+    console.info("Open this in a second terminal, then come back:")
     if installed:
         first, *rest = installed
-        print(f"\n  {first[1]}")
+        console.write()
+        console.info(f"  {first[1]}")
         for tool, command in rest:
-            print(f"\n  or with {tool}:\n  {command}")
+            console.write()
+            console.info(f"  or with {tool}:")
+            console.info(f"  {command}")
     else:
-        print(f"\n  {players[0][1]}\n")
-        print(f"  ...once one of these is installed: "
-              f"{', '.join(tool for tool, _ in players)}")
-        print("  Windows: winget install Gyan.FFmpeg")
-        print("  macOS:   brew install ffmpeg")
-        print("  Ubuntu:  sudo apt install ffmpeg")
-    print()
+        console.write()
+        console.info(f"  {players[0][1]}")
+        console.write()
+        console.info(f"  ...once one of these is installed: "
+                     f"{', '.join(tool for tool, _ in players)}")
+        console.info("  Windows: winget install Gyan.FFmpeg")
+        console.info("  macOS:   brew install ffmpeg")
+        console.info("  Ubuntu:  sudo apt install ffmpeg")
+    console.write()
 
     # --insight is off by default because its encoder shares the codec daemon
     # with the decoder and can stall a file run. Watching is the case where you
@@ -357,6 +372,7 @@ def run_remote(argv: list[str], host: str | None) -> int:
             "nothing to run. Put the task after --:\n"
             "  sima-vision remote -- detect --frames 200"
         )
+    console.banner(f"sima-vision {__version__}", f"remote {' '.join(argv)} on {host}")
     inner = " ".join(shlex.quote(token) for token in ["sima-vision", *argv])
     command = [require("ssh"), "-tt", host, inner]
     report(command)

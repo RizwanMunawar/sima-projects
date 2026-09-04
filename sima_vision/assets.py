@@ -30,11 +30,12 @@ import hashlib
 import os
 import shutil
 import subprocess
-import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, replace
 from pathlib import Path
+
+from .console import console, human_bytes
 
 #: Overrides where downloads land. Default ``./assets`` in the working directory.
 ASSETS_ENV = "SIMA_VISION_ASSETS"
@@ -122,20 +123,15 @@ def model_url(task: str) -> str:
     return f"{MODEL_BASE}/{entry.model_dir}/{entry.model_file}"
 
 
-def model_command(task: str, into: Path | None = None) -> str:
+def model_command(task: str) -> str:
     """The one line that downloads the right model pack for a task.
 
     ``sima-cli download`` needs a community.sima.ai login and writes into the
     working directory, which is why this exists as a printable string as well as
     something :func:`ensure_model` runs: getting the directory wrong is the
     single most common way to end up with a pack the config cannot see.
-
-    Args:
-        task: Which pack to name.
-        into: The assets directory to write into, for ``fetch --into``. None
-            uses :func:`assets_root`, which is where a run looks.
     """
-    models = ((into / "models") if into is not None else models_dir()).as_posix()
+    models = models_dir().as_posix()
     # A subshell rather than `cd there && ... && cd back`: the working directory
     # you started in is where the rest of the commands expect to be, and one
     # failed step in the middle of that chain would strand you in assets/models.
@@ -152,16 +148,22 @@ def is_url(value: str) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def download(url: str, out: Path) -> bool:
+def say(step, text: str) -> None:
+    """One line of progress, under the step that asked for it if there is one."""
+    if step is not None:
+        step.detail(text)
+    else:
+        console.info(text)
+
+
+def download(url: str, out: Path, step=None) -> bool:
     """Fetch one file, reporting progress. Returns False on any HTTP failure."""
     if out.exists():
-        print(f"  have  {out}  ({out.stat().st_size / 1e6:.1f} MB)")
+        say(step, f"have  {out}  ({human_bytes(out.stat().st_size)})")
         return True
     out.parent.mkdir(parents=True, exist_ok=True)
     part = out.with_suffix(out.suffix + ".part")
-    # A carriage-return progress line is only readable on a terminal. Piped to a
-    # file or a CI log it just repeats the whole line hundreds of times.
-    live = sys.stdout.isatty()
+    say(step, f"get   {url}")
     try:
         with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310
             total = int(response.headers.get("Content-Length") or 0)
@@ -170,29 +172,25 @@ def download(url: str, out: Path) -> bool:
                 while chunk := response.read(1 << 16):
                     handle.write(chunk)
                     done += len(chunk)
-                    if live and total:
-                        print(
-                            f"\r  ...   {out.name}  {done / 1e6:5.1f} / {total / 1e6:.1f} MB",
-                            end="", flush=True,
-                        )
+                    console.progress(out.name, done, total)
+        console.progress_done()
         # A server that closes early, or a proxy that truncates, ends the read
         # loop exactly like a finished transfer does. Without this the partial
         # file is renamed into place and every later run reuses it, because the
         # first thing this function does is trust a file that already exists.
         if total and done != total:
             part.unlink(missing_ok=True)
-            print(
-                f"\r  FAIL  {out.name}: got {done} of {total} bytes, "
-                f"the transfer was cut short",
-                file=sys.stderr,
+            console.error(
+                f"{out.name}: got {done} of {total} bytes, the transfer was cut short"
             )
             return False
-        print(f"{chr(13) if live else ''}  got   {out}  ({done / 1e6:.1f} MB)          ")
         part.replace(out)
+        say(step, f"got   {out}  ({human_bytes(done)})")
         return True
     except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        console.progress_done()
         part.unlink(missing_ok=True)
-        print(f"\r  FAIL  {out.name}: {exc}", file=sys.stderr)
+        console.error(f"{out.name}: {exc}")
         return False
 
 
@@ -216,9 +214,9 @@ def cache_name(url: str) -> str:
     return f"{head}-{digest}{dot}{tail}"
 
 
-def fetch(url: str, out: Path, what: str) -> Path:
+def fetch(url: str, out: Path, what: str, step=None) -> Path:
     """Download to ``out``, or raise. The insisting version of :func:`download`."""
-    if not download(url, out):
+    if not download(url, out, step):
         raise RuntimeError(
             f"could not download the {what} from {url}\n"
             f"  wanted: {out}\n"
@@ -232,7 +230,7 @@ def fetch(url: str, out: Path, what: str) -> Path:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def ensure_source(uri: str, source_type: str = "video") -> str:
+def ensure_source(uri: str, source_type: str = "video", step=None) -> str:
     """Make ``source.uri`` name a file that exists, downloading if it has to.
 
     Args:
@@ -240,6 +238,7 @@ def ensure_source(uri: str, source_type: str = "video") -> str:
             the sample clip paths the defaults fill in.
         source_type: Only ``video`` reads a file. An RTSP URL or a camera is
             handed back untouched.
+        step: The console step to report under, if there is one.
 
     Returns:
         A local path, or ``uri`` unchanged when there is nothing to fetch. A
@@ -250,18 +249,18 @@ def ensure_source(uri: str, source_type: str = "video") -> str:
     if source_type != "video" or not uri:
         return uri
     if is_url(uri):
-        return str(fetch(uri, videos_dir() / cache_name(uri), "source video"))
+        return str(fetch(uri, videos_dir() / cache_name(uri), "source video", step))
     path = Path(uri)
     if path.exists():
+        say(step, f"have  {uri}  ({human_bytes(path.stat().st_size)})")
         return uri
     # A default, or a path the user wrote that happens to name a sample clip.
     if path.name in SAMPLE_VIDEOS:
-        print(f"source: {uri} is missing, fetching the sample clip", flush=True)
-        fetch(f"{SAMPLE_RELEASE}/{path.name}", path, "sample clip")
+        fetch(f"{SAMPLE_RELEASE}/{path.name}", path, "sample clip", step)
     return uri
 
 
-def ensure_model(path: str, task: str) -> str:
+def ensure_model(path: str, task: str, step=None) -> str:
     """Make ``model.path`` name an archive that exists, downloading if it has to.
 
     A URL is fetched directly. Anything already on disk is used as it stands.
@@ -274,12 +273,15 @@ def ensure_model(path: str, task: str) -> str:
             the command to run by hand.
     """
     if is_url(path):
-        return str(fetch(path, models_dir() / cache_name(path), "model archive"))
-    if not path or Path(path).exists():
+        return str(fetch(path, models_dir() / cache_name(path), "model archive", step))
+    if not path:
+        return path
+    target = Path(path)
+    if target.exists():
+        say(step, f"have  {path}  ({human_bytes(target.stat().st_size)})")
         return path
 
     entry = CATALOGUE.get(task)
-    target = Path(path)
     if entry is None or target.name != entry.model_file:
         # Not something this task knows how to fetch: a name we have no URL for.
         raise RuntimeError(
@@ -300,10 +302,8 @@ def ensure_model(path: str, task: str) -> str:
         )
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    # flush: the child writes straight to the terminal, so an unflushed line
-    # here turns up *after* its output and reads as if it came from sima-cli.
-    print(f"model: {path} is missing, fetching it with sima-cli", flush=True)
-    print(f"  {url}", flush=True)
+    say(step, f"get   {url}")
+    say(step, "      via sima-cli, which holds your community.sima.ai login")
     result = subprocess.run(  # noqa: S603
         ["sima-cli", "download", url],
         cwd=target.parent,
@@ -317,24 +317,26 @@ def ensure_model(path: str, task: str) -> str:
     if result.returncode != 0 or not target.exists():
         raise RuntimeError(
             f"`sima-cli download` did not produce {target}\n"
-            "It needs a community.sima.ai login. Run `sima-cli login` and try "
-            "again, or download\nthe pack by hand and pass --model with its path."
+            "It needs a community.sima.ai login, and the board needs a route to the "
+            "internet\nthrough the PC it is cabled to. Run `sima-cli login` and try "
+            "again, or download\nthe pack on your PC and `sima-vision push` it over."
         )
+    say(step, f"got   {path}  ({human_bytes(target.stat().st_size)})")
     return path
 
 
-def ensure_assets(cfg, task: str):
+def ensure_assets(cfg, task: str, step=None):
     """Resolve ``model.path`` and ``source.uri`` to files that exist.
 
-    Called once, by :meth:`Task.run <sima_vision.tasks.base.Task.run>`, so that
-    everything which does not run inference -- ``--validate`` and the Python
-    ``validate()`` -- stays offline.
+    Called once, from :meth:`Task.run <sima_vision.tasks.base.Task.run>`, so
+    that everything which does not run inference -- ``--validate`` and the
+    Python ``validate()`` -- stays offline.
 
     Returns:
         The config, or a copy of it with the two paths replaced.
     """
-    source = ensure_source(cfg.source_uri, cfg.source_type)
-    model = ensure_model(cfg.model_path, task)
+    source = ensure_source(cfg.source_uri, cfg.source_type, step)
+    model = ensure_model(cfg.model_path, task, step)
     if (source, model) == (cfg.source_uri, cfg.model_path):
         return cfg
     return replace(cfg, source_uri=source, model_path=model)
