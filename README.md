@@ -11,7 +11,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-6C757D)](LICENSE)
 [![YOLO26](https://img.shields.io/badge/Ultralytics-YOLO26-FFB703&labelColor=333)](https://github.com/ultralytics/ultralytics)
 
-[![Fall detection](https://img.shields.io/badge/Fall-detection-111F68?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)
+[![Fall detection](https://img.shields.io/badge/Fall-detection-111F68?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)  
 [![Segmentation and blur](https://img.shields.io/badge/Segmentation-blur-FF64DA?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)
 [![Object detection](https://img.shields.io/badge/Object-detection-042AFF?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)
 
@@ -20,7 +20,13 @@
 </div>
 
 ```bash
+sima-cli login
+sima-cli neat install core@v0.2.2
+source ~/pyneat/bin/activate
 pip install sima-vision
+mkdir -p assets/models
+cd assets/models
+sima-cli download https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz
 sima-vision detect
 ```
 
