@@ -178,6 +178,8 @@ class Step:
         if self._closed:
             return
         self._closed = True
+        if self.console.active_step is self:
+            self.console.active_step = None
         if not summary:
             return
         style = self.console.style
@@ -188,6 +190,8 @@ class Step:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
+        if self.console.active_step is self:
+            self.console.active_step = None
         if exc_type is not None and not self._closed:
             self._closed = True
             style = self.console.style
@@ -206,12 +210,19 @@ class Console:
     functions that all want the same object.
     """
 
+    #: Indent for a line printed from inside a step, matching Step.detail.
+    STEP_BODY = " " * 8
+
     def __init__(self, stream=None, quiet: bool | None = None) -> None:
         self._stream = stream
         self.quiet = bool(os.environ.get(QUIET_ENV)) if quiet is None else quiet
         self._styled = (None, Style(False))
         self._total: int | None = None
         self._index = 0
+        #: The step currently open, so a note from deep in the call stack lands
+        #: under it instead of at the left margin. Set by `step`, cleared when
+        #: that step is closed.
+        self.active_step: Step | None = None
 
     @property
     def stream(self):
@@ -278,15 +289,22 @@ class Console:
 
     def step(self, label: str, detail: str = "") -> Step:
         self._index += 1
-        return Step(self, self._index, self._total, label).begin(detail)
+        self.active_step = Step(self, self._index, self._total, label).begin(detail)
+        return self.active_step
 
     def info(self, text: str) -> None:
         for line in str(text).splitlines() or [""]:
             self.write(f"  {line}")
 
     def note(self, text: str) -> None:
+        """An aside, indented under the open step if there is one.
+
+        Callers four levels down from a step -- building the source graph, say --
+        have no step to hand and should not be given one just to say a sentence.
+        """
+        indent = self.STEP_BODY if self.active_step is not None else "  "
         for line in str(text).splitlines() or [""]:
-            self.write(f"  {self.style.paint(line, self.style.dim)}")
+            self.write(f"{indent}{self.style.paint(line, self.style.dim)}")
 
     def success(self, text: str) -> None:
         self.write(f"  {self.style.paint('ok', self.style.green)}  {text}")

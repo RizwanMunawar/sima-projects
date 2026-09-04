@@ -522,6 +522,66 @@ def set_output_caps(caps, fps: int, width: int, height: int) -> None:
     caps.memory = pyneat.CapsMemory.Any
 
 
+#: pyneat names each source path needs, beyond what every run needs. Checked
+#: while probing the source, which is the last cheap moment before the model
+#: load: an AttributeError from inside graph construction costs the better part
+#: of a minute to learn something knowable at the start.
+SOURCE_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    "h264": ("SimaDecodeOptions", "SimaDecodeType"),
+    "container": ("VideoInputGroupOptions",),
+    "rtsp": ("RtspDecodedInputOptions", "RtspCodec"),
+    "usb": ("CameraInputOptions",),
+}
+
+#: How to name each of those in a sentence.
+SOURCE_NAMES = {
+    "h264": "a raw H.264 file",
+    "container": "a container file",
+    "rtsp": "an RTSP stream",
+    "usb": "a camera",
+}
+
+
+def source_kind(cfg) -> str:
+    """Which entry of :data:`SOURCE_REQUIREMENTS` this config will take."""
+    if cfg.source_type != "video":
+        return cfg.source_type
+    return "h264" if is_elementary_h264(cfg.source_uri) else "container"
+
+
+def check_source_support(cfg) -> None:
+    """Refuse a Neat build that cannot construct this source.
+
+    The Neat Library is a compiled extension whose API moves between SDK
+    releases, and a missing name surfaces as ``AttributeError`` from somewhere
+    deep in graph construction -- true, but it names a symbol rather than the
+    problem. This says which build is installed and what it is missing.
+
+    Raises:
+        RuntimeError: When this pyneat lacks something the source path needs.
+    """
+    pyneat = runtime.pyneat
+    if pyneat is None:                        # --validate never gets this far
+        return
+    kind = source_kind(cfg)
+    missing = [
+        name for name in SOURCE_REQUIREMENTS.get(kind, ()) if not hasattr(pyneat, name)
+    ]
+    if not missing:
+        return
+    version = getattr(pyneat, "__version__", "unknown")
+    raise RuntimeError(
+        f"this Neat Library build cannot read {SOURCE_NAMES.get(kind, kind)}.\n"
+        f"  installed: pyneat {version}\n"
+        f"  missing:   {', '.join('pyneat.' + name for name in missing)}\n"
+        "sima-vision is written against Neat 0.3.0, which is what Palette SDK "
+        "2.1.2 installs.\n"
+        "Update the SDK on your PC and pair the board again:\n"
+        "  sima-cli install ghcr:sima-neat/sdk\n"
+        "  sima-cli sdk setup --devkit <this board's ip>"
+    )
+
+
 def make_elementary_h264_source(cfg, width: int, height: int, fps: int):
     """Build a file source chain without a demuxer.
 
