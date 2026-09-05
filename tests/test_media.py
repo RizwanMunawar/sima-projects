@@ -19,6 +19,7 @@ from sima_vision.media import (
     probe_h264_sps,
     unescape_rbsp,
 )
+from sima_vision.tasks import TASKS
 
 # Real SPS NAL payloads, lifted byte for byte out of the two DevKit sample
 # clips. Both are 1920x1080 High profile with VUI timing, and the 24 fps one
@@ -148,3 +149,74 @@ def test_probe_sps_returns_zeros_without_an_sps(tmp_path):
     path = tmp_path / "clip.h264"
     path.write_bytes(_annexb(_slice_nal(True)))
     assert probe_h264_sps(str(path)) == (0, 0, 0)
+
+
+# -- refusing a Neat build that cannot do the job --
+
+
+def test_an_old_neat_build_is_refused_while_probing(tmp_path, monkeypatch):
+    """A DevKit paired with an older SDK has no `SimaDecodeOptions`.
+
+    It surfaced as `AttributeError: module 'pyneat' has no attribute
+    'SimaDecodeOptions'` from inside graph construction -- after a model load
+    that takes the better part of a minute, and naming a symbol rather than the
+    problem. It has to be caught while probing the source, which is the last
+    cheap moment before that load.
+    """
+    from sima_vision import bootstrap, media, runtime
+
+    clip = tmp_path / "clip.h264"
+    clip.write_bytes(bytes([0, 0, 0, 1, 0x67]))
+    cfg = TASKS["detect"]().load(
+        None, {"source.uri": str(clip), "model.path": "m.tar.gz"}, use_file=False
+    )
+
+    old = type(runtime)("pyneat")
+    old.__version__ = "0.2.2"
+    monkeypatch.setattr(runtime, "pyneat", old)
+
+    with pytest.raises(RuntimeError) as caught:
+        media.check_source_support(cfg)
+    message = str(caught.value)
+    assert "0.2.2" in message, "say which build is installed"
+    assert "pyneat.SimaDecodeOptions" in message, "and exactly what it is missing"
+    # The fix runs on the board. Sending someone to their PC to re-pair, which
+    # is what this said first, is a much longer way round for a core that one
+    # command installs in place.
+    assert bootstrap.NEAT_INSTALL in message, "and the command that fixes it"
+    assert bootstrap.NEAT_VERSION in message, "and which version it wants"
+
+
+def test_a_capable_build_passes(tmp_path, monkeypatch):
+    from sima_vision import media, runtime
+
+    clip = tmp_path / "clip.h264"
+    clip.write_bytes(bytes([0, 0, 0, 1, 0x67]))
+    cfg = TASKS["detect"]().load(
+        None, {"source.uri": str(clip), "model.path": "m.tar.gz"}, use_file=False
+    )
+
+    current = type(runtime)("pyneat")
+    current.SimaDecodeOptions = current.SimaDecodeType = object
+    monkeypatch.setattr(runtime, "pyneat", current)
+    media.check_source_support(cfg)          # must not raise
+
+
+def test_the_check_is_skipped_when_nothing_is_bound(tmp_path, monkeypatch):
+    """--validate never binds pyneat, and must not be made to."""
+    from sima_vision import media, runtime
+
+    clip = tmp_path / "clip.h264"
+    clip.write_bytes(bytes([0, 0, 0, 1, 0x67]))
+    cfg = TASKS["detect"]().load(
+        None, {"source.uri": str(clip), "model.path": "m.tar.gz"}, use_file=False
+    )
+    monkeypatch.setattr(runtime, "pyneat", None)
+    media.check_source_support(cfg)
+
+
+def test_every_source_kind_has_requirements_listed():
+    """A source path with no entry would silently skip the check entirely."""
+    from sima_vision.media import SOURCE_REQUIREMENTS
+
+    assert set(SOURCE_REQUIREMENTS) == {"h264", "container", "rtsp", "usb"}

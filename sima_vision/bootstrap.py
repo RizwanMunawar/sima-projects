@@ -77,6 +77,12 @@ SEARCH_ROOTS = (
 #: Wheel names the Palette SDK leaves behind, in the order they are preferred.
 WHEEL_PATTERNS = ("pyneat-*.whl", "pyneat*.whl")
 
+#: The Neat core version this package is written against, and the one command
+#: that installs it on the board. `sima-cli` holds the community.sima.ai login
+#: that the download needs, which is why this is not something pip can do.
+NEAT_VERSION = "0.3.0"
+NEAT_INSTALL = f"sima-cli neat install core@v{NEAT_VERSION}"
+
 #: numpy 2.x breaks pyneat and every simaai-* package, so the cap is not a
 #: preference. OpenCV is headless because nothing here opens a window and the
 #: GUI build wants X libraries the board does not have.
@@ -352,12 +358,13 @@ def missing_pyneat_message(env: Environment, note: str) -> str:
         )
     return (
         f"pyneat is missing: {note}.\n"
-        "It is installed onto the board from your PC, by the Palette SDK, and there "
-        "is no\ncopy of it on the board to install from. From the PC that pairs with "
-        "this board:\n"
-        "  sima-cli sdk setup --devkit <this board's ip>\n"
+        "It comes with the Neat core, which is not on PyPI. Install it here, on the "
+        "board:\n"
+        f"  sima-cli login\n  {NEAT_INSTALL}\n"
         "Then run this command again. If pyneat is installed but somewhere unusual:\n"
-        f"  export {PYNEAT_ENV}=/path/to/the/venv"
+        f"  export {PYNEAT_ENV}=/path/to/the/venv\n"
+        "If `sima-cli` is not on the board either, pairing never finished: run\n"
+        "`sima-cli sdk setup --devkit <this board's ip>` from the PC that pairs with it."
     )
 
 

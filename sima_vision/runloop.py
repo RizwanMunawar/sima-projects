@@ -209,7 +209,8 @@ def pull_frame(pipeline: Pipeline, cfg, sinks: SinkWorker, label: str, processed
     return sample, True, True
 
 
-def source_stopped_message(cfg, pipeline: Pipeline, processed: int) -> str:
+def source_stopped_message(cfg, pipeline: Pipeline, processed: int,
+                           sink_ms: float = 0.0) -> str:
     """Explain a source that went quiet, ruling out what the frame count rules out.
 
     The clip's length is known before the run starts, so "it just ended" is
@@ -235,18 +236,57 @@ def source_stopped_message(cfg, pipeline: Pipeline, processed: int) -> str:
     else:
         head += ". If that is far short of the clip, the source stalled rather than ended."
 
+    causes = stall_causes(cfg, pipeline, sink_ms)
+    listed = "\n".join(
+        f"  {n}. {cause}" for n, cause in enumerate(causes, 1)
+    )
     return (
-        f"{head}\nIn order of likelihood:\n"
-        "  1. the hardware decoder ran out of buffers. Its pool is small (the boot log\n"
+        f"{head}\nIn order of likelihood:\n{listed}\n"
+        "Run again with --no-save --no-video to tell the graph apart from how much\n"
+        "work this app does per frame: the same stall means the graph, a complete\n"
+        "run means the sinks."
+    )
+
+
+def stall_causes(cfg, pipeline: Pipeline, sink_ms: float) -> list[str]:
+    """Why the source stopped, most likely first.
+
+    Ordered by what this run actually measured rather than by what is usually
+    true. The sink cost is known -- ``SinkWorker`` times every ``submit`` that
+    had to wait -- and when it dwarfs the frame interval it is not a hypothesis,
+    it is the answer, so it goes first and the generic advice goes below it.
+
+    Causes that cannot apply are left out entirely. Telling someone their
+    Insight feed may have wedged the codec daemon when they never turned Insight
+    on is one more thing to rule out by hand.
+    """
+    interval = 1000.0 / (pipeline.fps or 25)
+    causes: list[str] = []
+
+    if sink_ms > interval:
+        causes.append(
+            f"the sinks cannot keep up. They held the pull loop {sink_ms:.0f} ms per\n"
+            f"     frame against a {interval:.0f} ms frame interval, so the loop was not\n"
+            "     asking for frames and decoded ones piled up between the decoder and\n"
+            "     this app. Drawing and encoding 1080p in software on the board's CPU\n"
+            "     is the usual reason. --no-video is the cheapest thing to try; a\n"
+            "     larger --queue-depth buys slack but not throughput."
+        )
+
+    causes.append(
+        "the hardware decoder ran out of buffers. Its pool is small (the boot log\n"
         "     prints BufferNum), and every element between it and the source appsink\n"
         "     can park one. Count the queues in the first pipeline printed above:\n"
         "     their max-buffers plus the appsink's must stay under BufferNum. Then\n"
-        "     lower runtime.output_buffers, which costs two more.\n"
-        "  2. output.insight.enable is on and its encoder wedged the shared codec\n"
-        "     daemon.\n"
-        "Run again with --minimal to tell 1 apart from how much work this app does\n"
-        "per frame: the same stall means the graph, a complete run means the app."
+        "     lower runtime.output_buffers, which costs two more."
     )
+
+    if cfg.insight_enable:
+        causes.append(
+            "output.insight.enable is on and its encoder shares the codec daemon\n"
+            "     with the decoder, so it can wedge it. Try again without --insight."
+        )
+    return causes
 
 
 def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
@@ -270,7 +310,12 @@ def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
 
         if sample is None:
             if cfg.source_type == "video":
-                console.report(source_stopped_message(cfg, pipeline, processed))
+                console.report(
+                    source_stopped_message(
+                        cfg, pipeline, processed,
+                        sinks.blocked_ms / processed if processed else 0.0,
+                    )
+                )
                 break
             continue
 
