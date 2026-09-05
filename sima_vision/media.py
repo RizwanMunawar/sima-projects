@@ -316,7 +316,8 @@ def parse_sps_dpb(rbsp: bytes) -> tuple[int, int]:
     return level_idc, r.ue()
 
 
-def decoder_budget_warning(path: str, width: int, height: int) -> str:
+def decoder_budget_warning(path: str, width: int, height: int,
+                           pool: int = DECODER_POOL) -> str:
     """Warn when the stream needs more of the pool than the pipeline leaves it.
 
     The board's decoder pool is eight frames and it is shared. The stream's DPB
@@ -348,9 +349,9 @@ def decoder_budget_warning(path: str, width: int, height: int) -> str:
         return ""
     needed = refs + 1
     capacity = dpb_frames(level_idc, width, height) + 1
-    spare = DECODER_POOL - SOURCE_APPSINK_BUFFERS
+    spare = pool - SOURCE_APPSINK_BUFFERS
     head = (
-        f"the decoder's pool is {DECODER_POOL} frames and the source appsink "
+        f"the decoder's pool is {pool} frames and the source appsink "
         f"pyneat generates\n  declares max-buffers="
         f"{SOURCE_APPSINK_BUFFERS} of them, leaving {spare} for the decoder itself."
     )

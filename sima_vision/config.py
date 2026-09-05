@@ -508,6 +508,12 @@ class BaseConfig:
 
             This is the floor. For a file source ``sink_queue_mb`` raises it
             towards holding the whole clip; see :func:`sink_depth_for`.
+        decoder_pool: Decoded frames the hardware decoder's pool holds. The
+            boot log prints the real number as ``BufferNum=`` when the decoder
+            finds the stream's resolution, and it is per-resolution, so 8 is
+            what a 1080p run reports rather than a constant. Used only to say
+            whether a stream's own buffering will fit; set it to what your
+            board prints if it differs.
         sink_queue_mb: Host memory the sink backlog may use, for a *file*
             source only. The recording is the slow part -- software-encoding
             1080p costs several times the frame interval on this board -- and
@@ -579,6 +585,7 @@ class BaseConfig:
     queue_depth: int = 1
     sink_queue_depth: int = 12
     sink_queue_mb: int = 1024
+    decoder_pool: int = 8
     output_buffers: int = 1
     run_preset: str = "auto"
     overflow_policy: str = "auto"
@@ -708,6 +715,7 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
         queue_depth=_int(runtime, "queue_depth", 1),
         sink_queue_depth=_int(runtime, "sink_queue_depth", 12),
         sink_queue_mb=_int(runtime, "sink_queue_mb", 1024),
+        decoder_pool=_int(runtime, "decoder_pool", 8),
         output_buffers=_int(runtime, "output_buffers", 1),
         run_preset=_str(runtime, "preset", defaults.run_preset).lower(),
         overflow_policy=_str(runtime, "overflow_policy", defaults.overflow_policy).lower(),
@@ -788,6 +796,8 @@ def validate_base(cfg: BaseConfig) -> None:
         raise ValueError("runtime.sink_queue_depth must be >= 1")
     if cfg.sink_queue_mb < 0:
         raise ValueError("runtime.sink_queue_mb must be >= 0")
+    if cfg.decoder_pool < 1:
+        raise ValueError("runtime.decoder_pool must be >= 1")
     if cfg.pull_timeout_ms <= 0:
         raise ValueError("runtime.pull_timeout_ms must be > 0")
     if cfg.profile_interval <= 0:

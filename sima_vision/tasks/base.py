@@ -178,7 +178,9 @@ class Task:
         # open and the arithmetic is settled before a frame moves, so there is
         # no reason to spend a model load and half a clip finding out.
         if cfg.source_type == "video" and is_elementary_h264(cfg.source_uri):
-            budget = decoder_budget_warning(cfg.source_uri, width, height)
+            budget = decoder_budget_warning(
+                cfg.source_uri, width, height, cfg.decoder_pool
+            )
             if budget:
                 console.warn(budget)
         step.done(f"{width}x{height} @ {fps} fps")
