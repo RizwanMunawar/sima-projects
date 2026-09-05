@@ -36,6 +36,13 @@ SPS_1080P_30 = bytes.fromhex(
 )
 REAL_SPS = [(SPS_1080P_24, 24), (SPS_1080P_30, 30)]
 
+#: The same footage re-encoded with `-refs 1 -bf 0`, which is the advice the
+#: decoder-budget warning gives. Real ffmpeg output, so the pair of streams
+#: differ in exactly the field the warning turns on.
+SPS_1080P_ONE_REF = bytes.fromhex(
+    "4d4028da01e0089f97016a020202800000030080000019078c1950"
+)
+
 
 def test_bitreader_unsigned():
     r = BitReader(b"\xa0")           # 1010 0000
@@ -349,35 +356,42 @@ def annexb(tmp_path, sps: bytes, name="clip.h264"):
     return path
 
 
-def test_a_stream_that_cannot_fit_the_pool_is_named_before_the_run(tmp_path):
+def test_a_stream_whose_own_references_do_not_fit_is_named_before_the_run(tmp_path):
     """This is the stall, stated as arithmetic instead of as a timeout.
 
-    A 1080p level 4.0 stream needs a 4 frame DPB plus the frame being decoded.
-    That is 5 of the board's 8, and the source appsink pyneat generates
-    declares 4 more. Nine into eight does not go, so the decoder starves
-    part-way through and the run reports a pull timeout that reads like a bug
-    in the app or a damaged file. It is neither.
+    The pool is 8 and the appsink pyneat generates declares 4, leaving 4. Both
+    DevKit clips declare max_num_ref_frames=4, so they need 5. Five into four
+    does not go, the decoder starves part-way through, and the run reports a
+    pull timeout that reads like a bug in the app or a damaged file. Neither.
     """
     from sima_vision.media import decoder_budget_warning
 
     warning = decoder_budget_warning(str(annexb(tmp_path, SPS_1080P_24)), 1920, 1080)
 
-    assert "4 frame DPB" in warning
-    assert "5 of 8" in warning
-    assert "appsink alone declares 4" in warning
+    assert "max_num_ref_frames=4, so it needs 5" in warning
+    assert "does not fit" in warning
+    assert "not your\n  file" in warning
     assert "-bf 0 -refs 1" in warning, "the way out has to be in the message"
-    assert "not\n  your file" in warning
 
 
-def test_a_stream_that_fits_is_not_warned_about(tmp_path):
-    """A 2 frame DPB leaves 6, which is more than the appsink asks for."""
-    from sima_vision.media import decoder_budget_warning, dpb_frames
+def test_a_shallow_stream_is_flagged_only_as_decoder_dependent(tmp_path):
+    """The bug this pair exists to prevent.
 
-    assert dpb_frames(31, 1920, 1080) + 1 + 4 <= 8
-    # Level 3.1 in the same SPS, so only the byte under test differs.
-    shallow = bytearray(SPS_1080P_24)
-    shallow[2] = 31
-    assert decoder_budget_warning(str(annexb(tmp_path, bytes(shallow))), 1920, 1080) == ""
+    Sizing from the level alone reported a 4 frame DPB for a stream re-encoded
+    down to a single reference frame, which would have sent someone off to
+    re-encode a file already as shallow as it goes. What a stream needs and
+    what its level permits are different numbers, and only the first is the
+    stream's own doing.
+    """
+    from sima_vision.media import decoder_budget_warning
+
+    warning = decoder_budget_warning(
+        str(annexb(tmp_path, SPS_1080P_ONE_REF)), 1920, 1080
+    )
+
+    assert "needs only 2 (max_num_ref_frames=1), which fits" in warning
+    assert "pool from the level" in warning
+    assert "does not fit" not in warning
 
 
 def test_a_source_with_no_readable_sps_says_nothing(tmp_path):

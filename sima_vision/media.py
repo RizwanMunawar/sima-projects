@@ -326,30 +326,64 @@ def decoder_budget_warning(path: str, width: int, height: int) -> str:
     so the decoder is starved before the app has done anything wrong, and the
     run dies part-way through with the pull timeout that looks like a stall.
 
+    Two numbers, because two kinds of decoder read the same stream
+    differently, and they disagree about exactly the streams worth re-encoding:
+
+    * ``max_num_ref_frames + 1`` is what the stream itself says it needs -- the
+      references it will reach back for, plus the picture being decoded.
+    * The level's DPB is the most a *conforming* decoder may hold at this frame
+      size, and a hardware decoder that sizes its pool from the level alone
+      takes that whether the stream uses it or not.
+
+    Getting this wrong is not academic. Sizing by level alone reported a 4
+    frame DPB for a stream re-encoded down to a single reference frame, which
+    would have sent someone off to re-encode a file that was already as
+    shallow as it goes.
+
     Returns:
-        The warning, or "" when the stream fits.
+        The warning, or "" when the stream fits either way.
     """
     level_idc, refs = probe_h264_dpb(path)
     if not level_idc:
         return ""
-    dpb = dpb_frames(level_idc, width, height)
-    needed = dpb + 1                       # the DPB, plus the frame being decoded
-    spare = DECODER_POOL - needed
-    if spare >= SOURCE_APPSINK_BUFFERS:
-        return ""
-    return (
-        f"this stream needs more of the decoder's pool than the pipeline leaves it.\n"
-        f"  level {level_idc / 10:.1f} at {width}x{height} gives a {dpb} frame DPB, "
-        f"+1 being decoded = {needed} of {DECODER_POOL} (max_num_ref_frames={refs}).\n"
-        f"  That leaves {spare}, and the source appsink alone declares "
-        f"{SOURCE_APPSINK_BUFFERS}.\n"
-        "  Expect the run to stop part-way through with a pull timeout. It is not\n"
-        "  your file: the pool is shared and this stream's own buffering fills it.\n"
-        "  Re-encode with a shallower DPB, on any machine with ffmpeg:\n"
-        "    ffmpeg -i clip.mp4 -c:v libx264 -profile:v main -bf 0 -refs 1 \\\n"
-        "      -c:a copy shallow.mp4\n"
-        "  -bf 0 -refs 1 takes the DPB to 2 frames, which leaves 6 for the pipeline."
+    needed = refs + 1
+    capacity = dpb_frames(level_idc, width, height) + 1
+    spare = DECODER_POOL - SOURCE_APPSINK_BUFFERS
+    head = (
+        f"the decoder's pool is {DECODER_POOL} frames and the source appsink "
+        f"pyneat generates\n  declares max-buffers="
+        f"{SOURCE_APPSINK_BUFFERS} of them, leaving {spare} for the decoder itself."
     )
+    reencode = (
+        "  Re-encoding with fewer references is the one lever on this side:\n"
+        "    ffmpeg -i clip.mp4 -c:v libx264 -profile:v main -bf 0 -refs 1 \\\n"
+        "      -g 50 -keyint_min 50 -sc_threshold 0 -c:a copy shallow.mp4\n"
+        "  -bf 0 also puts the frames in presentation order, which is a separate\n"
+        "  win: the recording is written in arrival order."
+    )
+
+    if needed > spare:
+        return (
+            f"{head}\n"
+            f"  This stream declares max_num_ref_frames={refs}, so it needs "
+            f"{needed}. That does not fit,\n"
+            "  and the run will stop part-way through with a pull timeout. It is "
+            "not your\n  file -- the pool is shared, and this stream's own "
+            "buffering fills it.\n"
+            f"{reencode}"
+        )
+    if capacity > spare:
+        return (
+            f"{head}\n"
+            f"  This stream needs only {needed} (max_num_ref_frames={refs}), which "
+            f"fits. But level\n  {level_idc / 10:.1f} at {width}x{height} permits a "
+            f"DPB of {capacity - 1}, and a decoder that sizes its\n"
+            f"  pool from the level rather than from the stream would take "
+            f"{capacity} and starve.\n"
+            "  If this run stops part-way through with a pull timeout, that is why.\n"
+            f"{reencode}"
+        )
+    return ""
 
 
 def parse_vui_fps(r: BitReader) -> int:
