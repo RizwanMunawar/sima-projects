@@ -20,8 +20,20 @@
 </div>
 
 ```bash
+# Install core
+sima-cli login
+sima-cli neat install core@v0.3.0
+
+# Install sima-vision python package
 pip install sima-vision
+
+# Object detection
 sima-vision detect
+
+# Pull results back to Host device for visualization/display/verification
+# export SIMA_VISION_DEVKIT=sima@192.168.137.50     # macOS, Linux
+# $env:SIMA_VISION_DEVKIT = "sima@192.168.137.50"    # PowerShell
+sima-vision pull
 ```
 
 There is no third command. No setup step, no init, no fetch, no doctor: the run itself
