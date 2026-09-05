@@ -19,6 +19,14 @@ from .sinks import Pipeline, SinkJob, SinkWorker
 
 HEARTBEAT_EVERY = 50
 
+#: How many times a *demonstrably incomplete* clip is fought for before the run
+#: is called off. A stall is the app's own back-pressure -- the pull loop parked
+#: in ``submit`` while the decoder's small pool filled -- and handing the backlog
+#: back is what releases it, so a retry is worth far more than a clean exit. One
+#: retry was not always enough, and giving up left a recording holding a fraction
+#: of a clip whose length the app already knew. See :func:`stall_attempts`.
+STALL_RETRIES = 3
+
 
 class Stopper:
     """Cooperative stop flag driven by SIGINT, SIGTERM and SIGHUP.
@@ -169,44 +177,79 @@ class TaskRuntime:
         return []
 
 
+def stall_attempts(pipeline: Pipeline, processed: int) -> int:
+    """How hard to fight a silent source, given what is known about the clip.
+
+    The clip's length is counted before the run starts, so silence is not
+    always the same question. Three cases, and they want three different
+    answers:
+
+    * **Every frame arrived.** This is the end of the file, not a stall. The
+      old code still drained and waited a full ``pull_timeout_ms`` here, so a
+      perfectly healthy run ended with a scary warning and twenty idle seconds.
+    * **Frames are demonstrably left.** The source did not end, so it stalled,
+      and a stall is nearly always this app's own back-pressure. Retry.
+    * **Length unknown** (a live source, or a container we could not count).
+      One retry, which is what tells a starved pool from a finished clip.
+    """
+    total = pipeline.source_frames
+    if not total:
+        return 1
+    if processed >= total:
+        return 0
+    return STALL_RETRIES
+
+
 def pull_frame(pipeline: Pipeline, cfg, sinks: SinkWorker, label: str, processed: int):
     """Pull one joined sample, flushing our own backlog before giving up.
 
     A starved decoder and a finished clip look identical from here: both are
-    silence. So on the first timeout, hand back everything the app is still
-    holding -- the sink queue is several decoded frames deep -- and ask again. A
-    pool that refills answers straight away; a clip that ended stays quiet.
+    silence. So on a timeout, hand back everything the app is still holding --
+    the sink queue is several decoded frames deep -- and ask again. A pool that
+    refills answers straight away; a clip that ended stays quiet.
+
+    Draining is the whole point of the retry, not politeness. The stall is the
+    pull loop parked in ``submit`` while decoded frames piled up between the
+    decoder and this app; emptying the sink queue is what lets the pool turn
+    over again. How many times that is worth trying is :func:`stall_attempts`.
 
     Args:
         pipeline: Live pipeline.
         cfg: Application configuration, for ``pull_timeout_ms``.
-        sinks: Sink worker to drain before the retry.
+        sinks: Sink worker to drain before each retry.
         label: Public output to pull.
-        processed: Frames processed so far, for the message only.
+        processed: Frames processed so far.
 
     Returns:
         A ``(sample, timed_out, recovered)`` triple. ``sample`` is None only
-        when both attempts came back empty.
+        once every attempt has come back empty.
     """
     sample = pipeline.run.pull(label, cfg.pull_timeout_ms)
     if sample is not None:
         return sample, False, False
 
-    console.warn(
-        f"timed out waiting for results after {processed} frames; "
-        "flushing the sink queue and retrying once"
-    )
-    sinks.drain()
-    sample = pipeline.run.pull(label, cfg.pull_timeout_ms)
-    if sample is None:
-        return None, True, False
+    attempts = stall_attempts(pipeline, processed)
+    if not attempts:
+        # The clip delivered every frame it has. Nothing is wrong, so nothing
+        # is warned about and nothing is waited for.
+        return None, False, False
 
-    console.warn(
-        "the source recovered once the backlog was flushed. That was "
-        "back-pressure from this app rather than the end of the clip; lower "
-        "runtime.sink_queue_depth if it keeps happening."
-    )
-    return sample, True, True
+    for attempt in range(1, attempts + 1):
+        console.warn(
+            f"timed out waiting for results after {processed} frames; flushing "
+            f"the sink queue and retrying ({attempt} of {attempts})"
+        )
+        sinks.drain()
+        sample = pipeline.run.pull(label, cfg.pull_timeout_ms)
+        if sample is not None:
+            console.warn(
+                "the source recovered once the backlog was flushed. That was "
+                "back-pressure from this app rather than the end of the clip; "
+                "raise runtime.sink_queue_depth if it keeps happening, so the "
+                "pull loop keeps draining the decoder instead of parking."
+            )
+            return sample, True, True
+    return None, True, False
 
 
 def source_stopped_message(cfg, pipeline: Pipeline, processed: int,
@@ -218,16 +261,19 @@ def source_stopped_message(cfg, pipeline: Pipeline, processed: int,
     short recording from something to be interpreted into something decided.
     """
     total = pipeline.source_frames
-    head = (
-        f"source produced nothing for {cfg.pull_timeout_ms} ms twice in a row after "
-        f"{processed} frames"
-    )
     if total and processed >= total:
+        # Not a timeout report at all: every frame arrived, so the silence that
+        # brought us here is just the end of the file.
         return (
-            f"{head}, which is the whole clip ({total} frames). Nothing is wrong: "
-            "the run is complete."
+            f"the source ended after {processed} frames, which is the whole clip "
+            f"({total} frames). Nothing is wrong: the run is complete."
         )
 
+    tries = stall_attempts(pipeline, processed) + 1
+    head = (
+        f"source produced nothing for {cfg.pull_timeout_ms} ms "
+        f"{tries} times in a row after {processed} frames"
+    )
     if total:
         head += (
             f", {processed / total:.0%} of the way through a {total} frame clip. "

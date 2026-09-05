@@ -190,12 +190,79 @@ def test_a_single_timeout_is_retried_not_fatal():
     assert processed == 6, "the retry should have recovered the run"
 
 
-def test_two_timeouts_in_a_row_end_a_file_run(capsys):
+def test_a_finished_clip_is_not_retried_or_warned_about(capsys):
+    """A healthy run used to end with a warning and a `pull_timeout_ms` wait.
+
+    Every frame of the clip had arrived, and the loop still drained, waited the
+    full timeout again and printed "timed out waiting for results" before
+    stopping. Twenty idle seconds and a scare, on the successful path.
+    """
     cfg, pipeline = make(frames=3, source_frames=3)
-    processed = run_pipeline(pipeline, cfg, Stopper(), CountingRuntime())
+    task = CountingRuntime()
+    processed = run_pipeline(pipeline, cfg, Stopper(), task)
+
     assert processed == 3
     out = capsys.readouterr().out
-    assert "the whole clip" in out, "a complete run must not read as a stall"
+    assert "the run is complete" in out, "a complete run must not read as a stall"
+    assert "timed out" not in out
+    assert "timeouts=0" in out, "the end of a file is not a timeout"
+    # Four pulls: three frames and the one empty pull that ends the clip. A
+    # fifth would be the retry this test exists to prevent.
+    assert pipeline.run.pulled == 3
+    assert len(pipeline.run.labels) == 4
+
+
+def test_a_clip_with_frames_left_is_fought_for_not_abandoned(capsys):
+    """The bug behind a 28-of-379 frame recording.
+
+    One retry, then the run ended -- on a clip whose length the app had already
+    counted and printed. Draining the sink queue is what releases the stall, so
+    the frames the app knows are still coming are worth more than one attempt.
+    """
+    from sima_vision.runloop import STALL_RETRIES
+
+    cfg, pipeline = make(frames=4, source_frames=100)
+    # Silent for two whole attempts, then the backlog clears and it comes back.
+    pipeline.run.timeouts_at = {4: STALL_RETRIES - 1}
+    pipeline.run.frames = 9
+
+    processed = run_pipeline(pipeline, cfg, Stopper(), CountingRuntime())
+
+    assert processed == 9, "the run gave up on a clip that still had frames"
+    assert pipeline.writer_frames == 9
+    out = capsys.readouterr().out
+    assert "recovered once the backlog was flushed" in out
+
+
+def test_the_recovery_advice_points_the_knob_the_right_way(capsys):
+    """It said *lower* sink_queue_depth, which causes the stall it follows.
+
+    A shallower sink queue means `submit` blocks sooner, and a blocked pull loop
+    is exactly what lets decoded frames pile up against the decoder's pool. The
+    stall advice in `stall_causes` and the `--sink-queue-depth` help both say
+    raise it; this message was the odd one out, and it is the one a stalling run
+    actually prints.
+    """
+    cfg, pipeline = make(frames=2, source_frames=100)
+    pipeline.run.timeouts_at = {1: 1}
+    run_pipeline(pipeline, cfg, Stopper(), CountingRuntime())
+
+    out = capsys.readouterr().out
+    assert "raise runtime.sink_queue_depth" in out
+    assert "lower runtime.sink_queue_depth" not in out
+
+
+def test_how_hard_a_silent_source_is_fought_depends_on_the_clip():
+    """Three different questions wearing the same silence."""
+    from sima_vision.runloop import STALL_RETRIES, stall_attempts
+
+    # Every frame arrived: this is the end of the file, not a stall.
+    assert stall_attempts(stalled_pipeline(total=379), 379) == 0
+    assert stall_attempts(stalled_pipeline(total=379), 400) == 0
+    # Frames demonstrably left: the source stalled, so fight for them.
+    assert stall_attempts(stalled_pipeline(total=379), 28) == STALL_RETRIES
+    # Length unknown: one retry tells a starved pool from a finished clip.
+    assert stall_attempts(stalled_pipeline(total=0), 28) == 1
 
 
 def test_a_short_run_against_a_known_clip_length_is_called_out(capsys):

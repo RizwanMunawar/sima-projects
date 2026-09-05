@@ -143,7 +143,7 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
         "--sink-queue-depth", dest="runtime.sink_queue_depth", type=int, metavar="N",
         help="How many finished frames may wait for the recorder. Costs host "
              "memory only, about 6 MB a slot at 1080p, and lets the pull loop "
-             "keep draining the decoder. Default 4.",
+             "keep draining the decoder. Raise it if a run stalls. Default 12.",
     )
     run.add_argument(
         "--profile", dest="runtime.profile", action="store_const", const=True,

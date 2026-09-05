@@ -501,6 +501,13 @@ class BaseConfig:
             buffer, so depth here is the cheap kind: it lets the pull loop keep
             draining the source instead of blocking on a slow recording. About
             6 MB per slot at 1080p.
+
+            The default is deliberately generous. Every frame the loop spends
+            blocked in ``submit`` is a frame it is not pulling, and that is
+            exactly when decoded frames pile up and exhaust the decoder's pool.
+            Software-encoding 1080p mp4v costs more per frame than the frame
+            interval on this board, so a shallow queue fills within a second
+            of starting and the loop parks. Slack here is what absorbs that.
         output_buffers: Buffers each public output may hold. Every one of them
             is a frame checked out of the hardware decoder's pool, that pool is
             small (the boot log prints ``BufferNum=8``), and there are two
@@ -560,7 +567,7 @@ class BaseConfig:
     frames: int = 0
     pull_timeout_ms: int = 20000
     queue_depth: int = 1
-    sink_queue_depth: int = 4
+    sink_queue_depth: int = 12
     output_buffers: int = 1
     run_preset: str = "auto"
     overflow_policy: str = "auto"
@@ -688,7 +695,7 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
         frames=_int(runtime, "frames", 0),
         pull_timeout_ms=_int(runtime, "pull_timeout_ms", 20000),
         queue_depth=_int(runtime, "queue_depth", 1),
-        sink_queue_depth=_int(runtime, "sink_queue_depth", 4),
+        sink_queue_depth=_int(runtime, "sink_queue_depth", 12),
         output_buffers=_int(runtime, "output_buffers", 1),
         run_preset=_str(runtime, "preset", defaults.run_preset).lower(),
         overflow_policy=_str(runtime, "overflow_policy", defaults.overflow_policy).lower(),
