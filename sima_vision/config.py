@@ -508,6 +508,13 @@ class BaseConfig:
 
             This is the floor. For a file source ``sink_queue_mb`` raises it
             towards holding the whole clip; see :func:`sink_depth_for`.
+        decoder_buffers: Buffers to ask the hardware decoder for, through
+            ``SimaDecodeOptions.num_buffers``. 0 sizes it from the stream: the
+            reference frames its SPS declares, the picture being decoded, what
+            the source appsink parks, and a little slack. A positive number
+            pins it. A negative number leaves pyneat's own -1 in place, which
+            is what the app did before and which lets the daemon pick 8 for
+            1080p regardless of what the stream needs.
         decoder_pool: Decoded frames the hardware decoder's pool holds. The
             boot log prints the real number as ``BufferNum=`` when the decoder
             finds the stream's resolution, and it is per-resolution, so 8 is
@@ -586,6 +593,7 @@ class BaseConfig:
     sink_queue_depth: int = 12
     sink_queue_mb: int = 1024
     decoder_pool: int = 8
+    decoder_buffers: int = 0
     output_buffers: int = 1
     run_preset: str = "auto"
     overflow_policy: str = "auto"
@@ -716,6 +724,7 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
         sink_queue_depth=_int(runtime, "sink_queue_depth", 12),
         sink_queue_mb=_int(runtime, "sink_queue_mb", 1024),
         decoder_pool=_int(runtime, "decoder_pool", 8),
+        decoder_buffers=_int(runtime, "decoder_buffers", 0),
         output_buffers=_int(runtime, "output_buffers", 1),
         run_preset=_str(runtime, "preset", defaults.run_preset).lower(),
         overflow_policy=_str(runtime, "overflow_policy", defaults.overflow_policy).lower(),

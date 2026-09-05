@@ -19,6 +19,7 @@ from ..media import (
     check_source_file,
     check_source_support,
     decoder_budget_warning,
+    decoder_buffers_for,
     ensure_annex_b,
     is_elementary_h264,
     resolve_source_geometry,
@@ -178,9 +179,14 @@ class Task:
         # open and the arithmetic is settled before a frame moves, so there is
         # no reason to spend a model load and half a clip finding out.
         if cfg.source_type == "video" and is_elementary_h264(cfg.source_uri):
-            budget = decoder_budget_warning(
-                cfg.source_uri, width, height, cfg.decoder_pool
-            )
+            # What the decoder is actually asked for, which is what the budget
+            # has to be measured against. Left to itself the daemon picks 8 for
+            # 1080p no matter what the stream keeps, and that is the stall.
+            asked = decoder_buffers_for(cfg, width, height)
+            pool = asked or cfg.decoder_pool
+            if asked:
+                step.detail(f"decoder: asking for {asked} buffers (pyneat picks 8 alone)")
+            budget = decoder_budget_warning(cfg.source_uri, width, height, pool)
             if budget:
                 console.warn(budget)
         step.done(f"{width}x{height} @ {fps} fps")

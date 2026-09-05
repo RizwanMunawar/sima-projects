@@ -316,6 +316,48 @@ def parse_sps_dpb(rbsp: bytes) -> tuple[int, int]:
     return level_idc, r.ue()
 
 
+#: Spare frames left over the strict requirement when sizing the pool. Two,
+#: because the strict sum has no room for a consumer that pauses even briefly,
+#: and buffers are cheap next to a run that stops half way.
+DECODER_SLACK = 2
+
+
+def decoder_buffers_for(cfg, width: int, height: int) -> int:
+    """How many buffers to ask the decoder for, or 0 to leave pyneat alone.
+
+    ``SimaDecodeOptions.num_buffers`` defaults to -1, which lets the daemon
+    pick, and what it picks is 8 for 1080p. The stream does not get a say, and
+    it should: a clip keeping five reference frames needs six of those eight
+    before the source appsink's four are counted, so the pool is oversubscribed
+    from the first frame and the run dies part-way through.
+
+    The SPS says how many reference frames the stream keeps, and it has already
+    been read by the time the graph is built, so the number can simply be
+    asked for.
+
+    Args:
+        cfg: Application configuration, for ``decoder_buffers`` and the source.
+        width: Source frame width.
+        height: Source frame height.
+
+    Returns:
+        A buffer count, or 0 to leave ``num_buffers`` unset.
+    """
+    if cfg.decoder_buffers > 0:
+        return cfg.decoder_buffers
+    if cfg.decoder_buffers < 0:                # explicitly "leave pyneat alone"
+        return 0
+    if not is_elementary_h264(cfg.source_uri):
+        return 0
+    level_idc, refs = probe_h264_dpb(cfg.source_uri)
+    if not level_idc:
+        return 0
+    # What the stream keeps, the picture being decoded, what the appsink parks,
+    # and a little slack. Never below what the daemon would have chosen alone.
+    needed = refs + 1 + SOURCE_APPSINK_BUFFERS + DECODER_SLACK
+    return max(needed, cfg.decoder_pool)
+
+
 def decoder_budget_warning(path: str, width: int, height: int,
                            pool: int = DECODER_POOL) -> str:
     """Warn when the stream needs more of the pool than the pipeline leaves it.
@@ -355,8 +397,12 @@ def decoder_budget_warning(path: str, width: int, height: int,
         f"pyneat generates\n  declares max-buffers="
         f"{SOURCE_APPSINK_BUFFERS} of them, leaving {spare} for the decoder itself."
     )
+    ask = needed + SOURCE_APPSINK_BUFFERS + DECODER_SLACK
     reencode = (
-        "  Re-encoding with fewer references is the one lever on this side:\n"
+        "  Ask the decoder for more, which is what --decoder-buffers does:\n"
+        f"    sima-vision detect --source clip.mp4 --decoder-buffers {ask}\n"
+        "  That is now the default, so this warning means it was turned off.\n"
+        "  Failing that, re-encode with fewer references:\n"
         "    ffmpeg -i clip.mp4 -c:v libx264 -profile:v main -bf 0 -refs 1 \\\n"
         "      -g 50 -keyint_min 50 -sc_threshold 0 -c:a copy shallow.mp4\n"
         "  -bf 0 also puts the frames in presentation order, which is a separate\n"
@@ -838,6 +884,16 @@ def make_elementary_h264_source(cfg, width: int, height: int, fps: int):
     dec.sima_allocator_type = 2
     dec.out_format = pyneat.Format.NV12
     dec.raw_output = False
+    # Left at pyneat's -1, the daemon sizes its own pool and reports it as
+    # BufferNum=8 for 1080p. Eight is not enough for a stream that keeps four
+    # or five reference frames: the DPB takes those plus the picture being
+    # decoded, the source appsink declares four more, and the sum is over
+    # eight before the app has done anything. That is the stall this whole
+    # branch chased, and the pool being askable for is the fix -- see
+    # :func:`decoder_buffers_for`.
+    requested = decoder_buffers_for(cfg, width, height)
+    if requested > 0:
+        dec.num_buffers = requested
     graph.add(pyneat.nodes.sima_decode(dec))
 
     # No CapsRaw node here, deliberately, and this is the difference between a

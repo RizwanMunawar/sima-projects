@@ -151,20 +151,20 @@ visualization:
   hud:
     text_color: [104, 31, 17]
     bg_color: [255, 255, 255]
-    text_scale: 2.4          # 0 = follow text_scale above
-    text_thickness: 6        # 0 = follow text_thickness above
+    text_scale: 2.0          # 0 = follow text_scale above
+    text_thickness: 5        # 0 = follow text_thickness above
 
     # Breathing room inside the badge, between the text and the badge edge.
     # `padding` sets all four sides; padding_x / padding_y override the
     # horizontal and vertical pair independently. 0 on either follows `padding`.
-    padding: 30              # 0 = follow text_padding above
-    padding_x: 30            # left and right gap
-    padding_y: 30            # top and bottom gap
+    padding: 22              # 0 = follow text_padding above
+    padding_x: 34            # left and right gap
+    padding_y: 24            # top and bottom gap
 
     # Gap between the badge and the top-left corner of the frame.
     # 0 on either follows the matching padding.
-    margin_x: 30
-    margin_y: 30
+    margin_x: 28
+    margin_y: 24
 
     fps_decimals: 0          # 0 gives "FPS: 25", 1 gives "FPS: 24.8"
     min_width: 0             # 0 = fit the text

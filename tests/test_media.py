@@ -402,3 +402,69 @@ def test_a_source_with_no_readable_sps_says_nothing(tmp_path):
     path.write_bytes(b"\x00\x00\x00\x01\x41no-sps-here")
     assert decoder_budget_warning(str(path), 1920, 1080) == ""
     assert decoder_budget_warning(str(tmp_path / "missing.h264"), 1920, 1080) == ""
+
+
+# ── asking the decoder for what the stream needs ──
+
+
+def test_the_pool_is_sized_from_the_streams_own_reference_frames(tmp_path):
+    """pyneat leaves num_buffers at -1 and the daemon picks 8 for 1080p.
+
+    Eight is not a property of the stream. A clip keeping four reference
+    frames needs five of those before the source appsink's four are counted,
+    so the pool is oversubscribed from the first frame and the run stops
+    part-way through. The SPS says how many it keeps, and it has been read by
+    the time the graph is built, so the number can simply be asked for.
+    """
+    from sima_vision.media import decoder_buffers_for
+
+    clip = annexb(tmp_path, SPS_1080P_24)                 # max_num_ref_frames=4
+    cfg = detect_cfg(**{"source.uri": str(clip)})
+    # 4 references + 1 decoding + 4 appsink + 2 slack.
+    assert decoder_buffers_for(cfg, 1920, 1080) == 11
+
+
+def test_a_shallow_stream_never_asks_for_less_than_the_daemon_would(tmp_path):
+    """A single reference frame needs 2, but dropping to 2 would be worse."""
+    from sima_vision.media import decoder_buffers_for
+
+    clip = annexb(tmp_path, SPS_1080P_ONE_REF)
+    cfg = detect_cfg(**{"source.uri": str(clip)})
+    assert decoder_buffers_for(cfg, 1920, 1080) == cfg.decoder_pool == 8
+
+
+def test_an_explicit_count_wins_and_a_negative_one_stands_aside(tmp_path):
+    """Negative is the way back to what the app did before, byte for byte."""
+    from sima_vision.media import decoder_buffers_for
+
+    clip = str(annexb(tmp_path, SPS_1080P_24))
+    pinned = detect_cfg(**{"source.uri": clip, "runtime.decoder_buffers": 20})
+    assert decoder_buffers_for(pinned, 1920, 1080) == 20
+
+    off = detect_cfg(**{"source.uri": clip, "runtime.decoder_buffers": -1})
+    assert decoder_buffers_for(off, 1920, 1080) == 0, "0 leaves num_buffers unset"
+
+
+def test_a_source_that_is_not_a_raw_stream_is_left_to_pyneat(tmp_path):
+    """No SPS to read means no better guess than the daemon's own."""
+    from sima_vision.media import decoder_buffers_for
+
+    camera = detect_cfg(**{"source.type": "usb", "source.uri": "/dev/video0"})
+    assert decoder_buffers_for(camera, 1920, 1080) == 0
+
+    unreadable = tmp_path / "empty.h264"
+    unreadable.write_bytes(b"\x00\x00\x00\x01\x41no-sps")
+    cfg = detect_cfg(**{"source.uri": str(unreadable)})
+    assert decoder_buffers_for(cfg, 1920, 1080) == 0
+
+
+def test_the_sized_pool_silences_the_warning_it_was_added_for(tmp_path):
+    """The two halves have to agree, or the run advises against itself."""
+    from sima_vision.media import decoder_budget_warning, decoder_buffers_for
+
+    clip = annexb(tmp_path, SPS_1080P_24)
+    cfg = detect_cfg(**{"source.uri": str(clip)})
+    asked = decoder_buffers_for(cfg, 1920, 1080)
+
+    assert decoder_budget_warning(str(clip), 1920, 1080, cfg.decoder_pool) != ""
+    assert decoder_budget_warning(str(clip), 1920, 1080, asked) == ""

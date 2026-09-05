@@ -147,6 +147,12 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
              "keep draining the decoder. Raise it if a run stalls. Default 12.",
     )
     run.add_argument(
+        "--decoder-buffers", dest="runtime.decoder_buffers", type=int, metavar="N",
+        help="Buffers to ask the hardware decoder for. Default 0, which sizes "
+             "it from the stream's own reference frames -- the fix for a run "
+             "that stops part-way through. Negative leaves pyneat to pick.",
+    )
+    run.add_argument(
         "--sink-queue-mb", dest="runtime.sink_queue_mb", type=int, metavar="MB",
         help="Host memory the sink backlog may use on a file source. The queue "
              "grows towards holding the whole clip so the pull loop never waits "
