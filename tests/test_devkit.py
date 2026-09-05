@@ -1,9 +1,8 @@
-"""push, pull and remote: the ssh and scp wrappers.
+"""push and pull: the scp wrappers.
 
 No network and no ssh binary. What is being tested is the command line each one
 builds and the directory it runs from, because that is where the platform
-differences live: a Windows drive letter looks like a hostname to scp, and ssh
-without a pty swallows Ctrl-C.
+differences live: a Windows drive letter looks like a hostname to scp.
 """
 
 from __future__ import annotations
@@ -203,31 +202,10 @@ def test_a_missing_name_is_not_an_error_from_ls(tmp_path, monkeypatch):
     assert devkit.remote_paths(HOST, ["frames", "falls.mp4"]) == ["frames"]
 
 
-# ── remote ──
-
-
-def test_remote_always_asks_for_a_pty(calls):
-    """Without -tt, Ctrl-C never reaches the task and it keeps the MLA."""
-    assert devkit.run_remote(["detect", "--frames", "200"], HOST) == 0
-    (call,) = calls
-    assert call["command"][:3] == ["/usr/bin/ssh", "-tt", HOST]
-    assert call["command"][3] == "sima-vision detect --frames 200"
-
-
-def test_remote_quotes_what_it_sends(calls):
-    devkit.run_remote(["fall", "--site", "Bay 3"], HOST)
-    assert calls[0]["command"][3] == "sima-vision fall --site 'Bay 3'"
-
-
-def test_remote_with_nothing_to_run_says_so():
-    with pytest.raises(SystemExit, match="nothing to run"):
-        devkit.run_remote([], HOST)
-
-
 # ── through the CLI ──
 
 
-def test_the_cli_reaches_all_three(tmp_path, monkeypatch, calls):
+def test_the_cli_reaches_both(tmp_path, monkeypatch, calls):
     monkeypatch.setenv(devkit.DEVKIT_ENV, HOST)
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config.yaml").write_text("model: {}", encoding="utf-8")
@@ -235,10 +213,7 @@ def test_the_cli_reaches_all_three(tmp_path, monkeypatch, calls):
     assert main(["push", "config.yaml"]) == 0
     calls.listing["out"] = "detections.mp4\n"
     assert main(["pull", "--into", "out"]) == 0
-    assert main(["remote", "--", "doctor"]) == 0
-
-    # The literal `--` argparse.REMAINDER keeps must not reach ssh.
-    assert calls[-1]["command"][3] == "sima-vision doctor"
+    assert (tmp_path / "out").is_dir()
 
 
 def test_the_cli_reports_a_missing_host_without_a_traceback(tmp_path, monkeypatch, capsys):
@@ -253,123 +228,3 @@ def test_subprocess_is_never_run_with_a_shell():
     source = Path(devkit.__file__).read_text(encoding="utf-8")
     assert "shell=True" not in source
     assert subprocess is not None  # the module under test uses the real one
-
-
-# ── watch ──
-
-
-def test_watch_turns_the_feed_on_and_aims_it_here(tmp_path, monkeypatch, calls):
-    """--insight is off by default; watching is the case where you want it."""
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(devkit, "address_the_board_sees", lambda _h: "192.168.137.1")
-
-    assert devkit.run_watch(["detect", "--frames", "200"], HOST, None, 9000, None) == 0
-    (call,) = calls
-    assert call["command"][:3] == ["/usr/bin/ssh", "-tt", HOST]
-    assert call["command"][3] == (
-        "sima-vision detect --frames 200 --insight --insight-host 192.168.137.1"
-    )
-
-
-def test_watch_asks_the_board_rather_than_guessing(tmp_path, monkeypatch, calls):
-    """The routing table lies when the board is not answering ARP."""
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(devkit, "address_the_board_sees", lambda _h: "10.0.0.7")
-    monkeypatch.setattr(
-        devkit, "local_ip_seen_by",
-        lambda _h: pytest.fail("must not guess when the board answered"),
-    )
-    devkit.run_watch(["detect"], HOST, None, 9000, None)
-    assert "--insight-host 10.0.0.7" in calls[0]["command"][3]
-
-
-def test_watch_falls_back_to_the_guess(tmp_path, monkeypatch, calls, capsys):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(devkit, "address_the_board_sees", lambda _h: None)
-    monkeypatch.setattr(devkit, "local_ip_seen_by", lambda _h: "192.168.137.1")
-    devkit.run_watch(["detect"], HOST, None, 9000, None)
-    assert "guessed from the routing table" in capsys.readouterr().out
-
-
-def test_watch_prefers_an_explicit_to(tmp_path, monkeypatch, calls):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        devkit, "address_the_board_sees",
-        lambda _h: pytest.fail("--to must not be second-guessed"),
-    )
-    devkit.run_watch(["detect"], HOST, "10.1.2.3", 9000, None)
-    assert "--insight-host 10.1.2.3" in calls[0]["command"][3]
-
-
-def test_watch_writes_an_sdp_the_player_can_read(tmp_path, monkeypatch, calls):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(devkit, "address_the_board_sees", lambda _h: "192.168.137.1")
-    sdp = tmp_path / "feed.sdp"
-    devkit.run_watch(["detect"], HOST, None, 9002, sdp)
-
-    text = sdp.read_text(encoding="utf-8")
-    # Payload type 96 and the 90 kHz clock are what the board actually sends;
-    # RTP carries no container, so the player has to be told.
-    assert "m=video 9002 RTP/AVP 96" in text
-    assert "a=rtpmap:96 H264/90000" in text
-
-
-def test_watch_names_a_player_that_is_installed(tmp_path, monkeypatch, calls, capsys):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(devkit, "address_the_board_sees", lambda _h: "192.168.137.1")
-    # ssh still has to resolve, or run_watch exits before it prints anything.
-    monkeypatch.setattr(
-        devkit.shutil, "which",
-        lambda name: f"/usr/bin/{name}" if name in ("ffplay", "ssh") else None,
-    )
-    devkit.run_watch(["detect"], HOST, None, 9000, None)
-    out = capsys.readouterr().out
-    assert "ffplay" in out
-    assert "gst-launch" not in out, "only offer players that are actually here"
-    assert "winget install" not in out, "do not explain installing what is installed"
-
-
-def test_watch_says_how_to_get_a_player_when_there_is_none(tmp_path, monkeypatch, capsys):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(devkit, "address_the_board_sees", lambda _h: "192.168.137.1")
-    real = devkit.shutil.which
-    monkeypatch.setattr(devkit.shutil, "which",
-                        lambda name: None if name in ("ffplay", "gst-launch-1.0", "vlc")
-                        else real(name))
-    class Ok:
-        returncode = 0
-
-    monkeypatch.setattr(devkit.subprocess, "run", lambda *a, **k: Ok())
-    devkit.run_watch(["detect"], HOST, None, 9000, None)
-    out = capsys.readouterr().out
-    assert "winget install" in out and "brew install" in out and "apt install" in out
-
-
-def test_watch_with_nothing_to_run_says_so(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    with pytest.raises(SystemExit, match="nothing to run"):
-        devkit.run_watch([], HOST, None, 9000, None)
-
-
-def test_the_board_view_is_parsed_out_of_ssh_connection(monkeypatch):
-    """$SSH_CONNECTION is '<client ip> <client port> <server ip> <server port>'."""
-    class Result:
-        returncode = 0
-        stdout = "192.168.137.1 51234 192.168.137.50 22\n"
-        stderr = ""
-
-    monkeypatch.setattr(devkit.subprocess, "run", lambda *a, **k: Result())
-    assert devkit.address_the_board_sees(HOST) == "192.168.137.1"
-
-
-@pytest.mark.parametrize("stdout", ["", "not-an-address\n", "   \n"])
-def test_a_useless_ssh_answer_is_not_trusted(monkeypatch, stdout):
-    class Result:
-        returncode = 0
-        stderr = ""
-
-        def __init__(self):
-            self.stdout = stdout
-
-    monkeypatch.setattr(devkit.subprocess, "run", lambda *a, **k: Result())
-    assert devkit.address_the_board_sees(HOST) is None

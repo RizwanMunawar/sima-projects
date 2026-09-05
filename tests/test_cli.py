@@ -38,15 +38,19 @@ def test_the_setup_commands_are_gone():
         assert name not in available
 
 
-def test_watch_and_remote_keep_everything_after_the_dashes():
-    """The task's own flags must reach the board, not be parsed here."""
+def test_the_board_commands_are_push_and_pull_only():
+    """`watch` and `remote` ran things on the board over ssh. Both are gone."""
     parser = build_parser()
-    watch = parser.parse_args(["watch", "--", "segment", "--blur-strength", "81"])
-    assert watch.command == "watch"
-    assert watch.argv == ["--", "segment", "--blur-strength", "81"]
-    # --host and --port belong to watch itself and stop at the --.
-    watch = parser.parse_args(["watch", "--port", "9002", "--", "detect"])
-    assert (watch.port, watch.argv) == (9002, ["--", "detect"])
+    available = {
+        name
+        for action in parser._actions
+        for name in (getattr(action, "choices", None) or ())
+    }
+    assert {"push", "pull"} <= available
+    for name in ("watch", "remote"):
+        assert name not in available
+        with pytest.raises(SystemExit):
+            parser.parse_args([name])
 
 
 def test_preview_is_gone():
@@ -188,7 +192,7 @@ def test_the_model_command_is_runnable_for_every_task():
 
 def test_every_command_is_reachable():
     parser = build_parser()
-    for name in [*TASKS, "push", "pull", "watch", "remote"]:
+    for name in [*TASKS, "push", "pull"]:
         assert name in parser.format_help()
 
 

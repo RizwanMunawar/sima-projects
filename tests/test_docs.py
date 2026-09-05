@@ -32,17 +32,12 @@ PLACEHOLDERS = ("<", ">", "...", "$EDITOR", "EMAIL", "PATH", "NAME", "DIR", "|")
 #: still appear somewhere, so a section being rewritten does not leave a stale
 #: exemption behind.
 FOREIGN_FLAGS = {
-    "--devkit": "sima-cli sdk setup --devkit",
-    # Belongs to the made-up plugin in "Adding your own app", which is the
-    # point of that section: a flag this CLI has never heard of, added by
-    # someone else's package.
-    "--line": "the CountTask plugin example",
 }
 
-#: Commands the README has to mention by name. There is no setup command in this
-#: list because there is no setup command: `init`, `fetch`, `doctor` and `setup`
-#: were all folded into what a run does on its own.
-COMMANDS = [*TASKS, "push", "pull", "watch", "remote"]
+#: Commands the README has to mention by name. The list is short because the
+#: command surface is: the three tasks, plus `push` and `pull`. Setup folded
+#: into the run, and `watch` and `remote` were removed with it.
+COMMANDS = [*TASKS, "push", "pull"]
 
 
 def command_lines(text: str) -> list[str]:
@@ -58,8 +53,13 @@ def command_lines(text: str) -> list[str]:
     return found
 
 
+#: The README is deliberately short -- basic usage, not a manual -- so this is
+#: a floor on "it still shows real commands", not a target to grow towards.
+MINIMUM_EXAMPLES = 8
+
+
 def test_the_readme_actually_has_examples():
-    assert len(command_lines(README.read_text(encoding="utf-8"))) > 20
+    assert len(command_lines(README.read_text(encoding="utf-8"))) > MINIMUM_EXAMPLES
 
 
 def test_every_documented_command_parses():
@@ -76,7 +76,7 @@ def test_every_documented_command_parses():
         except SystemExit as exc:          # argparse exits on a bad flag
             raise AssertionError(f"`{line}` is not a valid command") from exc
         checked += 1
-    assert checked > 15, f"only {checked} commands were actually checked"
+    assert checked > MINIMUM_EXAMPLES, f"only {checked} commands were actually checked"
 
 
 def flags_in(text: str) -> set[str]:
