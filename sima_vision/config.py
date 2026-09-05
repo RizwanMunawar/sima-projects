@@ -502,12 +502,18 @@ class BaseConfig:
             draining the source instead of blocking on a slow recording. About
             6 MB per slot at 1080p.
 
-            The default is deliberately generous. Every frame the loop spends
-            blocked in ``submit`` is a frame it is not pulling, and that is
-            exactly when decoded frames pile up and exhaust the decoder's pool.
-            Software-encoding 1080p mp4v costs more per frame than the frame
-            interval on this board, so a shallow queue fills within a second
-            of starting and the loop parks. Slack here is what absorbs that.
+            This is the floor. For a file source ``sink_queue_mb`` raises it
+            towards holding the whole clip; see :func:`sink_depth_for`.
+        sink_queue_mb: Host memory the sink backlog may use, for a *file*
+            source only. The recording is the slow part -- software-encoding
+            1080p costs several times the frame interval on this board -- and
+            the pull loop must not wait for it, because a loop that is not
+            pulling is a decoder that starves and never comes back. So for a
+            clip of known length the queue grows to hold the whole thing: the
+            loop drains the source at full speed in seconds and the sink thread
+            finishes the backlog afterwards, which the run already waits for.
+            Costs about 6 MB a frame at 1080p, capped by the clip's own length.
+            0 disables the growth and leaves ``sink_queue_depth`` alone.
         output_buffers: Buffers each public output may hold. Every one of them
             is a frame checked out of the hardware decoder's pool, that pool is
             small (the boot log prints ``BufferNum=8``), and there are two
@@ -568,6 +574,7 @@ class BaseConfig:
     pull_timeout_ms: int = 20000
     queue_depth: int = 1
     sink_queue_depth: int = 12
+    sink_queue_mb: int = 1024
     output_buffers: int = 1
     run_preset: str = "auto"
     overflow_policy: str = "auto"
@@ -696,6 +703,7 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
         pull_timeout_ms=_int(runtime, "pull_timeout_ms", 20000),
         queue_depth=_int(runtime, "queue_depth", 1),
         sink_queue_depth=_int(runtime, "sink_queue_depth", 12),
+        sink_queue_mb=_int(runtime, "sink_queue_mb", 1024),
         output_buffers=_int(runtime, "output_buffers", 1),
         run_preset=_str(runtime, "preset", defaults.run_preset).lower(),
         overflow_policy=_str(runtime, "overflow_policy", defaults.overflow_policy).lower(),
@@ -774,6 +782,8 @@ def validate_base(cfg: BaseConfig) -> None:
         raise ValueError("runtime.queue_depth must be >= 1")
     if cfg.sink_queue_depth < 1:
         raise ValueError("runtime.sink_queue_depth must be >= 1")
+    if cfg.sink_queue_mb < 0:
+        raise ValueError("runtime.sink_queue_mb must be >= 0")
     if cfg.pull_timeout_ms <= 0:
         raise ValueError("runtime.pull_timeout_ms must be > 0")
     if cfg.profile_interval <= 0:

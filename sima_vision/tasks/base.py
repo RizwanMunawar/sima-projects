@@ -28,7 +28,7 @@ from ..neat import (
     make_run_options,
     resolve_flow_control,
 )
-from ..runloop import Stopper, TaskRuntime, run_pipeline
+from ..runloop import Stopper, TaskRuntime, run_pipeline, sink_depth_for
 from ..runtime import FAMILY_DECODE_TOKENS
 from ..sinks import Pipeline, load_labels, open_video_writer, start_insight
 
@@ -201,9 +201,14 @@ class Task:
         self.prepare(cfg, pipeline, step)
 
         preset, policy = resolve_flow_control(cfg)
+        # The effective depth, not the configured floor. On a file source the
+        # backlog is sized to the clip, and that number is the difference
+        # between a complete recording and a stall, so it belongs on screen.
+        depth = sink_depth_for(cfg, pipeline)
+        held_mb = depth * width * height * 3 / (1 << 20)
         step.detail(
             f"flow: preset={preset} overflow={policy} queue_depth={cfg.queue_depth} "
-            f"output_buffers={cfg.output_buffers} sinks={cfg.sink_queue_depth}"
+            f"output_buffers={cfg.output_buffers} sinks={depth} (up to {held_mb:.0f} MB)"
         )
         if policy == "block":
             step.note(

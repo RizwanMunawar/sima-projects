@@ -146,6 +146,13 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
              "keep draining the decoder. Raise it if a run stalls. Default 12.",
     )
     run.add_argument(
+        "--sink-queue-mb", dest="runtime.sink_queue_mb", type=int, metavar="MB",
+        help="Host memory the sink backlog may use on a file source. The queue "
+             "grows towards holding the whole clip so the pull loop never waits "
+             "for the recorder, which is what starves the decoder. 0 disables "
+             "the growth. Default 1024.",
+    )
+    run.add_argument(
         "--profile", dest="runtime.profile", action="store_const", const=True,
         help="Print per-stage timings every runtime.profile_interval frames.",
     )

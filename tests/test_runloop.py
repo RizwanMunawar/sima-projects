@@ -497,9 +497,68 @@ def test_the_sink_queue_is_the_one_the_worker_gets():
 
 
 def test_the_advice_does_not_point_at_the_knob_that_makes_it_worse():
+    """Two knobs, one letter apart, pulling in opposite directions.
+
+    `--sink-queue-mb` grows a backlog of numpy copies in host memory, which is
+    what stops the pull loop waiting on the recorder. `--queue-depth` deepens
+    the runtime's own queues, every slot of which parks a frame checked out of
+    the decoder's eight-buffer pool, so reaching for it makes the stall worse.
+    """
     causes = stall_causes(stall_config(), stalled_pipeline(), sink_ms=183.0)
-    assert "--sink-queue-depth" in causes[0]
+    assert "--sink-queue-mb" in causes[0]
     assert "Not --queue-depth" in causes[0]
+
+
+def test_a_file_backlog_is_sized_to_the_clip_not_to_a_fixed_depth():
+    """The stall scaled with the queue: depth 4 died at 28, depth 12 at 36.
+
+    The sinks are slower than the source and always will be -- software
+    encoding 1080p costs several times the frame interval -- so a fixed depth
+    only moves the stall, it never removes it. What removes it is never making
+    the pull loop wait, and for a clip of known length that backlog is bounded.
+    """
+    from sima_vision.runloop import sink_depth_for
+
+    cfg = stall_config()
+    pipeline = stalled_pipeline(total=379)
+    pipeline.frame_w, pipeline.frame_h = 1920, 1080
+
+    # 1 GB at ~6 MB a frame, and the clip is shorter than the budget allows.
+    assert sink_depth_for(cfg, pipeline) == (1024 << 20) // (1920 * 1080 * 3)
+
+    # A short clip is capped by its own length, not by the budget.
+    pipeline.source_frames = 40
+    assert sink_depth_for(cfg, pipeline) == 40
+
+    # A live source has no length, so no bound: it keeps the floor.
+    pipeline.source_frames = 0
+    assert sink_depth_for(cfg, pipeline) == cfg.sink_queue_depth
+
+    # And the floor is never lowered by a stingy budget.
+    tiny = stall_config(**{"runtime.sink_queue_mb": 1})
+    pipeline.source_frames = 379
+    assert sink_depth_for(tiny, pipeline) == tiny.sink_queue_depth
+
+
+def test_the_worker_gets_the_grown_depth_not_the_floor():
+    """A regression here is silent: the run works, it just stalls again."""
+    import sima_vision.runloop as loop
+
+    seen = {}
+    real = loop.SinkWorker
+
+    class Spy(real):
+        def __init__(self, cfg, pipeline, depth, *args):
+            seen["depth"] = depth
+            super().__init__(cfg, pipeline, depth, *args)
+
+    cfg, pipeline = make(frames=2, source_frames=300)
+    loop.SinkWorker = Spy
+    try:
+        run_pipeline(pipeline, cfg, Stopper(), CountingRuntime())
+    finally:
+        loop.SinkWorker = real
+    assert seen["depth"] == 300, "the backlog should have been sized to the clip"
 
 
 def test_a_setting_already_at_its_floor_is_not_suggested():

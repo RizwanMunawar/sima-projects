@@ -177,6 +177,37 @@ class TaskRuntime:
         return []
 
 
+def sink_depth_for(cfg, pipeline: Pipeline) -> int:
+    """How many finished frames may pile up waiting for the sinks.
+
+    The sinks do not have to keep up. They only have to stay out of the pull
+    loop's way, and those are very different requirements.
+
+    Software-encoding 1080p costs several times the frame interval on this
+    board -- a measured 117 ms against 42 ms -- so a bounded queue fills and
+    then ``submit`` parks the loop. That pause is the whole problem: a loop
+    that is not pulling lets decoded frames pile up against a pool of eight,
+    the decoder starves, and it does not come back. Runs died after
+    ``24 + sink_queue_depth`` frames, which is how this was traced: a depth of
+    4 stopped at 28 and a depth of 12 stopped at 36, on the same clip.
+
+    A sink job is plain numpy in host memory and holds no decoder buffer, so
+    the fix is to let the backlog grow rather than let the loop wait. For a
+    clip of known length that is bounded work: the loop drains the source in
+    seconds, the sink thread finishes afterwards, and ``run_pipeline`` already
+    joins it before anything reads ``writer_frames``. Memory is the only cost,
+    and ``sink_queue_mb`` is the budget for it.
+
+    A live source has no length, so no bound, and keeps the floor.
+    """
+    depth = cfg.sink_queue_depth
+    frame_bytes = pipeline.frame_w * pipeline.frame_h * 3
+    if not (cfg.sink_queue_mb and pipeline.source_frames and frame_bytes):
+        return depth
+    affordable = (cfg.sink_queue_mb << 20) // frame_bytes
+    return max(depth, min(pipeline.source_frames, affordable))
+
+
 def stall_attempts(pipeline: Pipeline, processed: int) -> int:
     """How hard to fight a silent source, given what is known about the clip.
 
@@ -315,8 +346,10 @@ def stall_causes(cfg, pipeline: Pipeline, sink_ms: float) -> list[str]:
             f"     frame against a {interval:.0f} ms frame interval, so the loop was not\n"
             "     asking for frames and decoded ones piled up between the decoder and\n"
             "     this app. Drawing and encoding 1080p in software on the board's CPU\n"
-            "     is the usual reason. --no-video is the cheapest thing to try, and\n"
-            "     --sink-queue-depth buys the loop room to keep draining the decoder.\n"
+            "     is the usual reason. The sinks need not keep up, they only need to\n"
+            "     stay out of the loop's way, so --sink-queue-mb (host memory\n"
+            "     for the backlog) is the fix that keeps the whole recording,\n"
+            "     and --no-video the one that gives it up.\n"
             "     Not --queue-depth: that one deepens the runtime's own queues, which\n"
             "     parks more decoded frames and makes this worse."
         )
@@ -464,7 +497,8 @@ def run_pipeline(pipeline: Pipeline, cfg, stopper: Stopper, task: TaskRuntime) -
     """Run one task to completion and print the closing report."""
     profile = ProfileWindow(cfg.profile, cfg.profile_interval, task.stage, task.unit)
     sinks = SinkWorker(
-        cfg, pipeline, cfg.sink_queue_depth, task.render, task.stream, task.metadata
+        cfg, pipeline, sink_depth_for(cfg, pipeline), task.render, task.stream,
+        task.metadata,
     )
     try:
         processed, timeouts, recovered = consume_frames(
