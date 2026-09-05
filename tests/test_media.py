@@ -424,13 +424,34 @@ def test_the_pool_is_sized_from_the_streams_own_reference_frames(tmp_path):
     assert decoder_buffers_for(cfg, 1920, 1080) == 11
 
 
-def test_a_shallow_stream_never_asks_for_less_than_the_daemon_would(tmp_path):
-    """A single reference frame needs 2, but dropping to 2 would be worse."""
-    from sima_vision.media import decoder_buffers_for
+def test_the_pool_is_sized_for_the_worse_of_the_two_readings(tmp_path):
+    """Sizing from the stream alone got a re-encoded clip exactly backwards.
+
+    A file re-encoded down to max_num_ref_frames=1 asked for 8 -- the number
+    pyneat would have picked unaided -- while the very same run warned that a
+    decoder sizing its pool from the level would want 5 of those 8 and starve.
+    The run advised against itself.
+
+    Which kind of decoder this is cannot be settled from here, so the larger
+    reading wins. It costs a few megabytes and removes the question.
+    """
+    from sima_vision.media import decoder_buffers_for, dpb_frames
 
     clip = annexb(tmp_path, SPS_1080P_ONE_REF)
     cfg = detect_cfg(**{"source.uri": str(clip)})
-    assert decoder_buffers_for(cfg, 1920, 1080) == cfg.decoder_pool == 8
+
+    assert dpb_frames(40, 1920, 1080) == 4, "the level permits four, the stream keeps one"
+    # 4 permitted + 1 decoding + 4 appsink + 2 slack, not 1 + 1 + 4 + 2.
+    assert decoder_buffers_for(cfg, 1920, 1080) == 11
+
+
+def test_the_sizing_never_drops_below_what_the_daemon_would_pick(tmp_path):
+    """Asking for less than the default would make a working run worse."""
+    from sima_vision.media import decoder_buffers_for
+
+    clip = annexb(tmp_path, SPS_1080P_ONE_REF)
+    cfg = detect_cfg(**{"source.uri": str(clip), "runtime.decoder_pool": 40})
+    assert decoder_buffers_for(cfg, 1920, 1080) == 40
 
 
 def test_an_explicit_count_wins_and_a_negative_one_stands_aside(tmp_path):

@@ -352,9 +352,17 @@ def decoder_buffers_for(cfg, width: int, height: int) -> int:
     level_idc, refs = probe_h264_dpb(cfg.source_uri)
     if not level_idc:
         return 0
-    # What the stream keeps, the picture being decoded, what the appsink parks,
-    # and a little slack. Never below what the daemon would have chosen alone.
-    needed = refs + 1 + SOURCE_APPSINK_BUFFERS + DECODER_SLACK
+    # The worst of the two readings, not the stream's own. A decoder that sizes
+    # its pool from the level takes what the level permits whether the stream
+    # uses it or not, and which kind this one is cannot be settled from here.
+    #
+    # Sizing from the stream alone got this exactly backwards on a re-encoded
+    # clip: max_num_ref_frames=1 asked for 8, the number pyneat would have
+    # picked anyway, while the very same run warned that a level-sized decoder
+    # would want 5 and starve. Asking for the larger number costs a few
+    # megabytes and settles it.
+    held = max(refs, dpb_frames(level_idc, width, height)) + 1
+    needed = held + SOURCE_APPSINK_BUFFERS + DECODER_SLACK
     return max(needed, cfg.decoder_pool)
 
 

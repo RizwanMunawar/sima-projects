@@ -349,11 +349,19 @@ class Console:
             text = f"{bar}  {human_bytes(done)} / {human_bytes(total)}  {name}"
         else:
             text = f"{human_bytes(done)}  {name}"
-        print(f"\r      {text}", end="", file=self.stream, flush=True)
+        line = f"      {text}"
+        # Remembered so the erase covers what was actually drawn. A fixed width
+        # left the tail of a longer line on screen, and the next line printed
+        # over the front of it: `yolo26n-det-bf16-mla_tess-b1.tar.gz  (20.6 MB)`
+        # came out with a stray `1.tar.gzz` hanging off the end.
+        self._drawn = max(getattr(self, "_drawn", 0), len(line))
+        print(f"\r{line}", end="", file=self.stream, flush=True)
 
     def progress_done(self) -> None:
         if not self.quiet and self.style.enabled:
-            print("\r" + " " * 78 + "\r", end="", file=self.stream, flush=True)
+            width = max(getattr(self, "_drawn", 0), 78)
+            print("\r" + " " * width + "\r", end="", file=self.stream, flush=True)
+        self._drawn = 0
 
 
 #: The one console. Commands call :meth:`Console.configure` on it at startup.
