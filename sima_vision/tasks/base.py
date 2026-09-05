@@ -18,7 +18,9 @@ from ..console import console, human_bytes
 from ..media import (
     check_source_file,
     check_source_support,
+    decoder_budget_warning,
     ensure_annex_b,
+    is_elementary_h264,
     resolve_source_geometry,
     source_frame_count,
 )
@@ -172,6 +174,13 @@ class Task:
         step.detail(f"{where}  ({cfg.source_type}{f', {human_bytes(size)}' if size else ''})")
         width, height, fps = resolve_source_geometry(cfg)
         step.note(describe_preprocess(cfg, width, height))
+        # Said here rather than after the stall it predicts. The SPS is already
+        # open and the arithmetic is settled before a frame moves, so there is
+        # no reason to spend a model load and half a clip finding out.
+        if cfg.source_type == "video" and is_elementary_h264(cfg.source_uri):
+            budget = decoder_budget_warning(cfg.source_uri, width, height)
+            if budget:
+                console.warn(budget)
         step.done(f"{width}x{height} @ {fps} fps")
         return width, height, fps
 

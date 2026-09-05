@@ -226,6 +226,132 @@ def parse_sps(rbsp: bytes) -> tuple[int, int, int]:
     return width, height, fps
 
 
+#: Decoded frames the hardware decoder's pool holds, as the boot log reports it
+#: (``BufferNum=8``). Every one is 1920x1080 NV12 on this board.
+DECODER_POOL = 8
+
+#: What the source appsink alone declares in the pipeline pyneat generates:
+#: ``appsink ... max-buffers=4 drop=false``. Not settable from here.
+SOURCE_APPSINK_BUFFERS = 4
+
+#: Table A-1 of the H.264 spec: MaxDpbMbs per level, which is what bounds how
+#: many decoded frames a conforming decoder has to keep.
+MAX_DPB_MBS = {
+    10: 396, 11: 900, 12: 2376, 13: 2376, 20: 2376, 21: 4752, 22: 8100,
+    30: 8100, 31: 18000, 32: 20480, 40: 32768, 41: 32768, 42: 34816,
+    50: 110400, 51: 184320, 52: 184320, 60: 696320, 61: 696320, 62: 696320,
+}
+
+
+def dpb_frames(level_idc: int, width: int, height: int) -> int:
+    """How many frames this stream's decoded picture buffer has to hold.
+
+    Reference frames and frames waiting to be output in presentation order
+    both live in the DPB, so a stream with B-frames keeps several pictures
+    alive at once. Those are frames out of the same small pool the app is
+    trying to pull from, which is what makes the number worth knowing before
+    the run rather than after it stalls.
+    """
+    macroblocks = ((width + 15) // 16) * ((height + 15) // 16)
+    if macroblocks <= 0:
+        return 0
+    return min(MAX_DPB_MBS.get(level_idc, 32768) // macroblocks, 16)
+
+
+def probe_h264_dpb(path: str, scan_bytes: int = 4 << 20) -> tuple[int, int]:
+    """``(level_idc, max_num_ref_frames)`` from the first SPS, or ``(0, 0)``."""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(scan_bytes)
+    except OSError:
+        return 0, 0
+
+    pos = 0
+    while True:
+        idx = head.find(b"\x00\x00\x01", pos)
+        if idx < 0:
+            return 0, 0
+        start = idx + 3
+        if start >= len(head):
+            return 0, 0
+        if head[start] & 0x1F == 7:
+            end = head.find(b"\x00\x00\x01", start)
+            try:
+                return parse_sps_dpb(unescape_rbsp(head[start + 1:end if end > 0 else len(head)]))
+            except (ValueError, IndexError):
+                return 0, 0
+        pos = start
+
+
+def parse_sps_dpb(rbsp: bytes) -> tuple[int, int]:
+    """Read only as far as ``max_num_ref_frames``, which is all this needs."""
+    r = BitReader(rbsp)
+    profile_idc = r.u(8)
+    r.u(8)
+    level_idc = r.u(8)
+    r.ue()
+
+    if profile_idc in HIGH_PROFILES:
+        chroma_format_idc = r.ue()
+        if chroma_format_idc == 3:
+            r.u(1)
+        r.ue()
+        r.ue()
+        r.u(1)
+        if r.u(1):
+            for i in range(8 if chroma_format_idc != 3 else 12):
+                if r.u(1):
+                    skip_scaling_list(r, 16 if i < 6 else 64)
+
+    r.ue()
+    pic_order_cnt_type = r.ue()
+    if pic_order_cnt_type == 0:
+        r.ue()
+    elif pic_order_cnt_type == 1:
+        r.u(1)
+        r.se()
+        r.se()
+        for _ in range(r.ue()):
+            r.se()
+    return level_idc, r.ue()
+
+
+def decoder_budget_warning(path: str, width: int, height: int) -> str:
+    """Warn when the stream needs more of the pool than the pipeline leaves it.
+
+    The board's decoder pool is eight frames and it is shared. The stream's DPB
+    takes its share first -- five frames for High profile 1080p with B-frames,
+    which is what a phone or an editor produces by default -- and the source
+    appsink pyneat generates declares four more. Nine into eight does not go,
+    so the decoder is starved before the app has done anything wrong, and the
+    run dies part-way through with the pull timeout that looks like a stall.
+
+    Returns:
+        The warning, or "" when the stream fits.
+    """
+    level_idc, refs = probe_h264_dpb(path)
+    if not level_idc:
+        return ""
+    dpb = dpb_frames(level_idc, width, height)
+    needed = dpb + 1                       # the DPB, plus the frame being decoded
+    spare = DECODER_POOL - needed
+    if spare >= SOURCE_APPSINK_BUFFERS:
+        return ""
+    return (
+        f"this stream needs more of the decoder's pool than the pipeline leaves it.\n"
+        f"  level {level_idc / 10:.1f} at {width}x{height} gives a {dpb} frame DPB, "
+        f"+1 being decoded = {needed} of {DECODER_POOL} (max_num_ref_frames={refs}).\n"
+        f"  That leaves {spare}, and the source appsink alone declares "
+        f"{SOURCE_APPSINK_BUFFERS}.\n"
+        "  Expect the run to stop part-way through with a pull timeout. It is not\n"
+        "  your file: the pool is shared and this stream's own buffering fills it.\n"
+        "  Re-encode with a shallower DPB, on any machine with ffmpeg:\n"
+        "    ffmpeg -i clip.mp4 -c:v libx264 -profile:v main -bf 0 -refs 1 \\\n"
+        "      -c:a copy shallow.mp4\n"
+        "  -bf 0 -refs 1 takes the DPB to 2 frames, which leaves 6 for the pipeline."
+    )
+
+
 def parse_vui_fps(r: BitReader) -> int:
     """Read timing_info out of a VUI block. Returns 0 when it is absent."""
     if r.u(1):  # aspect_ratio_info_present_flag

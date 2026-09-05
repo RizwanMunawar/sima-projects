@@ -319,3 +319,72 @@ def test_a_camera_is_never_mistaken_for_a_file(tmp_path):
 
     cfg = detect_cfg(**{"source.type": "usb", "source.uri": "/dev/video0"})
     assert ensure_annex_b(cfg) is cfg
+
+
+# ── the decoder's buffer budget, said before the run rather than after ──
+
+
+def test_the_dpb_size_comes_from_the_level_and_the_frame_size():
+    """Table A-1 arithmetic. 1080p at level 4.0 is the case that bites."""
+    from sima_vision.media import dpb_frames
+
+    assert dpb_frames(40, 1920, 1080) == 4       # 32768 / 8160 macroblocks
+    assert dpb_frames(31, 1920, 1080) == 2       # a shallower level fits easily
+    assert dpb_frames(40, 640, 480) == 16        # capped at 16, not unbounded
+    assert dpb_frames(40, 0, 0) == 0             # nothing to divide by
+
+
+def test_the_real_sps_says_four_reference_frames_at_level_four():
+    """Both DevKit clips, and both stalled part-way through a run."""
+    from sima_vision.media import parse_sps_dpb, unescape_rbsp
+
+    for payload, _ in REAL_SPS:
+        level, refs = parse_sps_dpb(unescape_rbsp(payload))
+        assert (level, refs) == (40, 4)
+
+
+def annexb(tmp_path, sps: bytes, name="clip.h264"):
+    path = tmp_path / name
+    path.write_bytes(b"\x00\x00\x00\x01\x67" + sps + b"\x00\x00\x00\x01\x65ab")
+    return path
+
+
+def test_a_stream_that_cannot_fit_the_pool_is_named_before_the_run(tmp_path):
+    """This is the stall, stated as arithmetic instead of as a timeout.
+
+    A 1080p level 4.0 stream needs a 4 frame DPB plus the frame being decoded.
+    That is 5 of the board's 8, and the source appsink pyneat generates
+    declares 4 more. Nine into eight does not go, so the decoder starves
+    part-way through and the run reports a pull timeout that reads like a bug
+    in the app or a damaged file. It is neither.
+    """
+    from sima_vision.media import decoder_budget_warning
+
+    warning = decoder_budget_warning(str(annexb(tmp_path, SPS_1080P_24)), 1920, 1080)
+
+    assert "4 frame DPB" in warning
+    assert "5 of 8" in warning
+    assert "appsink alone declares 4" in warning
+    assert "-bf 0 -refs 1" in warning, "the way out has to be in the message"
+    assert "not\n  your file" in warning
+
+
+def test_a_stream_that_fits_is_not_warned_about(tmp_path):
+    """A 2 frame DPB leaves 6, which is more than the appsink asks for."""
+    from sima_vision.media import decoder_budget_warning, dpb_frames
+
+    assert dpb_frames(31, 1920, 1080) + 1 + 4 <= 8
+    # Level 3.1 in the same SPS, so only the byte under test differs.
+    shallow = bytearray(SPS_1080P_24)
+    shallow[2] = 31
+    assert decoder_budget_warning(str(annexb(tmp_path, bytes(shallow))), 1920, 1080) == ""
+
+
+def test_a_source_with_no_readable_sps_says_nothing(tmp_path):
+    """Silence beats a guess: not every source is a raw stream on disk."""
+    from sima_vision.media import decoder_budget_warning
+
+    path = tmp_path / "empty.h264"
+    path.write_bytes(b"\x00\x00\x00\x01\x41no-sps-here")
+    assert decoder_budget_warning(str(path), 1920, 1080) == ""
+    assert decoder_budget_warning(str(tmp_path / "missing.h264"), 1920, 1080) == ""
