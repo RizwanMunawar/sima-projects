@@ -3,8 +3,8 @@
 <img src="assets/sima-devkit-docs-logo-home.png" alt="sima-vision: live YOLO computer vision on a SiMa Modalix DevKit 3.0" width="640">
 
 [![SiMa.ai](https://img.shields.io/badge/SiMa.ai-Modalix_DevKit_3.0-E63946)](https://sima.ai)
-[![Palette SDK](https://img.shields.io/badge/Palette_SDK-2.1.2-457B9D)](https://docs.sima.ai)
-[![Neat](https://img.shields.io/badge/Neat-0.3.0-2A9D8F)](https://docs.sima.ai)
+[![Palette SDK](https://img.shields.io/badge/Palette_SDK-2.1.2-FF8C00)](https://docs.sima.ai)
+[![Neat](https://img.shields.io/badge/Neat-0.3.0-800080)](https://docs.sima.ai)
 
 [![CI](https://github.com/RizwanMunawar/sima-projects/actions/workflows/ci.yml/badge.svg)](https://github.com/RizwanMunawar/sima-projects/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/badge/pip_install-sima--vision-3775A9&logo=pypi&logoColor=white)](https://pypi.org/project/sima-vision/)
@@ -21,7 +21,7 @@
 **Live YOLO26 on the MLA of a SiMa.ai Modalix DevKit 3.0.** Object detection, instance
 segmentation and fall detection: three apps, one pipeline, no setup step.
 
-Needs a Modalix DevKit 3.0 and Python 3.10 or later. Everything below runs **on the
+Needs a [Modalix DevKit 3.0](https://devkit.sima.ai/products/development-kit-3-0) and Python 3.10 or later. Everything below runs **on the
 board** unless it says otherwise.
 
 ## Quickstart
@@ -77,8 +77,6 @@ Nothing is emailed until you pass `--send`; without it a fall is composed and lo
 you can see what would have gone out.
 
 </details>
-
----
 
 > [!TIP]
 > **That is the whole setup.** No setup command, no config file, nothing to download by

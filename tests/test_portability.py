@@ -34,9 +34,11 @@ OFFBOARD = [
     ["detect", "--no-config", "--validate", "--quiet"],
     ["push", "--help"],
     ["pull", "--help"],
-    ["watch", "--help"],
-    ["remote", "--help"],
 ]
+
+
+#: The checkout, which has to win over anything installed. See `run_cli`.
+REPO = Path(__file__).resolve().parents[1]
 
 
 def run_cli(argv: list[str], encoding: str, cwd: Path) -> subprocess.CompletedProcess:
@@ -44,13 +46,41 @@ def run_cli(argv: list[str], encoding: str, cwd: Path) -> subprocess.CompletedPr
 
     A child, not `main()`, because the failure being guarded against is in the
     encoder attached to a real pipe. pytest's captured stdout does not have one.
+
+    PYTHONPATH is the checkout, and that is not decoration. The child runs from
+    tmp_path, so without it `python -m sima_vision.cli` imports whatever copy of
+    the package happens to be installed -- which on a developer's machine is
+    usually an older one. These tests passed locally against a build that still
+    had `watch` for exactly that reason, and only CI, where the install is
+    `pip install -e .`, noticed.
     """
-    env = {**os.environ, "PYTHONIOENCODING": encoding}
+    env = {
+        **os.environ,
+        "PYTHONIOENCODING": encoding,
+        "PYTHONPATH": str(REPO) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+    }
     return subprocess.run(
         [sys.executable, "-m", "sima_vision.cli", *argv],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         env=env, cwd=cwd, check=False, timeout=120,
     )
+
+
+def test_the_child_runs_this_checkout_and_not_an_installed_copy(tmp_path):
+    """Otherwise these tests grade the wrong package.
+
+    The child runs from tmp_path, so import resolution falls to whatever is on
+    sys.path -- and a developer with `pip install sima-vision` in site-packages
+    gets that copy, silently, for every case below.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", "import sima_vision, sys; sys.stdout.write(sima_vision.__file__)"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env={**os.environ, "PYTHONPATH": str(REPO) + os.pathsep + os.environ.get("PYTHONPATH", "")},
+        cwd=tmp_path, check=False, timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    assert Path(result.stdout).resolve().is_relative_to(REPO), result.stdout
 
 
 @pytest.mark.parametrize("argv", OFFBOARD, ids=lambda a: " ".join(a))
