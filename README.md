@@ -12,9 +12,9 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-6C757D)](LICENSE)
 [![YOLO26](https://img.shields.io/badge/Ultralytics-YOLO26-FFB703&labelColor=333)](https://github.com/ultralytics/ultralytics)
 
-[![Fall detection](https://img.shields.io/badge/Fall-detection-111F68?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)
-[![Segmentation and blur](https://img.shields.io/badge/Segmentation-blur-FF64DA?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)
-[![Object detection](https://img.shields.io/badge/Object-detection-042AFF?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)
+[![Fall detection](https://img.shields.io/badge/Fall-detection-111F68)](https://github.com/ultralytics/ultralytics)
+[![Segmentation and blur](https://img.shields.io/badge/Segmentation-blur-FF64DA)](https://github.com/ultralytics/ultralytics)
+[![Object detection](https://img.shields.io/badge/Object-detection-042AFF)](https://github.com/ultralytics/ultralytics)
 
 </div>
 
@@ -49,30 +49,8 @@ clip into `./assets` on its first run, then runs. Every run after that reuses th
 sima-vision detect
 ```
 
-```
-sima-vision 1.1.0  detect
-
-  [1/7] environment  checking this machine
-        -> Modalix DevKit  aarch64  python 3.11.2
-  [2/7] pyneat       locating the Neat runtime
-        -> 0.3.0  already importable
-  [3/7] imaging      numpy and OpenCV
-        -> numpy 1.24.2  opencv 4.6.0
-  [4/7] assets       model archive and video source
-        got   assets/videos/people-walking-outside-mall.h264  (13.3 MB)
-        got   assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz  (66.4 MB)
-        -> ready
-  [5/7] source       probing the stream
-        -> 1920x1080 @ 24 fps
-  [6/7] model        loading yolo26m-det-bf16-mla_tess-b1.tar.gz
-        -> yolo26 -> YoloV26, 80 classes (45.4s)
-  [7/7] pipeline     building the Neat graph
-        -> yolo_detector ready (525ms)
-
-running  press Ctrl-C to stop
-```
-
-#### Instance segmentation with optional blur
+<details>
+<summary><b>Instance segmentation</b> &nbsp;&middot;&nbsp; per-pixel masks, with an optional blur</summary>
 
 ```bash
 sima-vision segment
@@ -80,11 +58,20 @@ sima-vision segment --blur
 sima-vision segment --blur --keep-classes person
 ```
 
-#### Fall detection with SMTP alerts
+</details>
+
+<details>
+<summary><b>Fall detection</b> &nbsp;&middot;&nbsp; tracks people, with optional email alerts</summary>
+
 ```bash
 sima-vision fall
 sima-vision fall --alert-to ops@example.com
 ```
+
+Nothing is emailed until you pass `--send`; without it a fall is composed and logged so
+you can see what would have gone out.
+
+</details>
 
 A run finds the Neat runtime, puts the board's numpy and OpenCV on the path, downloads
 whatever is missing, and says what it is doing at every stage. There is no setup command
@@ -93,7 +80,11 @@ and no config to write.
 Output lands beside the run, on the board. Bring it back to your PC:
 
 ```bash
-export SIMA_VISION_DEVKIT=sima@<devkit-ip>    # PowerShell: $env:SIMA_VISION_DEVKIT="..."
+# Linux, macOS
+# export SIMA_VISION_DEVKIT=sima@<devkit-ip> 
+
+# Windows Powershell
+# $env:SIMA_VISION_DEVKIT="sima@<devkit-ip>"
 sima-vision pull
 ```
 

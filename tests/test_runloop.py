@@ -350,6 +350,25 @@ def test_sinks_that_keep_up_are_not_blamed():
     assert "decoder ran out of buffers" in causes[0]
 
 
+def test_a_setting_already_at_its_floor_is_not_suggested():
+    """`output_buffers` bottoms out at 1, which is also the default.
+
+    The advice read "lower runtime.output_buffers" on a config nobody had
+    touched, which is telling someone to turn down a dial already at zero.
+    """
+    at_floor = stall_causes(stall_config(), stalled_pipeline(), sink_ms=0.0)
+    decoder = next(c for c in at_floor if "decoder ran out" in c)
+    assert "already 1" in decoder
+    assert "Then lower" not in decoder
+
+    raised = stall_causes(
+        stall_config(**{"runtime.output_buffers": 4}), stalled_pipeline(), sink_ms=0.0
+    )
+    decoder = next(c for c in raised if "decoder ran out" in c)
+    assert "currently 4" in decoder
+    assert "already 1" not in decoder
+
+
 def test_insight_is_only_blamed_when_it_is_on():
     """It was listed unconditionally, so every user had one more thing to rule out."""
     off = stall_causes(stall_config(), stalled_pipeline(), sink_ms=0.0)

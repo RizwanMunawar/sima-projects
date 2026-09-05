@@ -273,12 +273,22 @@ def stall_causes(cfg, pipeline: Pipeline, sink_ms: float) -> list[str]:
             "     larger --queue-depth buys slack but not throughput."
         )
 
+    # Only worth suggesting when there is somewhere to lower it to. The floor is
+    # 1 and so is the default, so on a config nobody has touched this used to
+    # read as "turn down the thing that is already all the way down".
+    room = (
+        f"     Then lower runtime.output_buffers, currently {cfg.output_buffers}, "
+        f"which costs\n     two buffers for every one you take off it."
+        if cfg.output_buffers > 1
+        else "     runtime.output_buffers is already 1, its minimum, so the slack has\n"
+             "     to come from somewhere else."
+    )
     causes.append(
         "the hardware decoder ran out of buffers. Its pool is small (the boot log\n"
         "     prints BufferNum), and every element between it and the source appsink\n"
         "     can park one. Count the queues in the first pipeline printed above:\n"
-        "     their max-buffers plus the appsink's must stay under BufferNum. Then\n"
-        "     lower runtime.output_buffers, which costs two more."
+        "     their max-buffers plus the appsink's must stay under BufferNum.\n"
+        f"{room}"
     )
 
     if cfg.insight_enable:
