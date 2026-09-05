@@ -167,18 +167,20 @@ def test_a_missing_model_is_fetched_with_sima_cli(here, monkeypatch):
     class Result:
         returncode = 0
 
-    def fake_run(command, cwd=None, check=False, env=None):
+    def fake_run(command, check=False, env=None):
         seen["command"] = command
-        seen["cwd"] = Path(cwd)
         seen["env"] = env
-        (Path(cwd) / Path(command[-1]).name).write_bytes(b"tar")
+        # -o names the destination, so the fake writes exactly where the real
+        # sima-cli would rather than wherever the process happens to be.
+        Path(command[-1]).write_bytes(b"tar")
         return Result()
 
     monkeypatch.setattr(assets.subprocess, "run", fake_run)
     path = assets.default_model_path("segment")
     assert assets.ensure_model(path, "segment") == path
-    assert seen["command"] == ["sima-cli", "download", assets.model_url("segment")]
-    assert seen["cwd"] == Path("assets/models")
+    assert seen["command"] == [
+        "sima-cli", "download", assets.model_url("segment"), "-o", str(Path(path)),
+    ]
     assert Path(path).is_file()
     # Without this sima-cli opens with "update now? [Y/n]" and waits for an
     # answer nobody is there to give, then aborts the download with it.
@@ -230,8 +232,8 @@ def test_ensure_assets_fills_in_both_defaults(here, offline, monkeypatch):
     monkeypatch.setattr(
         assets.subprocess,
         "run",
-        lambda command, cwd=None, check=False, env=None: (
-            (Path(cwd) / Path(command[-1]).name).write_bytes(b"tar"), Result()
+        lambda command, check=False, env=None: (
+            Path(command[-1]).write_bytes(b"tar"), Result()
         )[1],
     )
 

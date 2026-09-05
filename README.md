@@ -18,72 +18,109 @@
 
 </div>
 
-## Usage
+## 3 steps workflow on Devkit
+
+### Install the SiMa.ai Neat Core 0.3.0
 
 ```bash
-# 1. Install the SiMa.ai Neat Core
 sima-cli login
 sima-cli neat install core@v0.3.0
+```
 
-# 2. Install the sima-vision Python package
+### Install the sima-vision Python package
+
+```bash
 pip install sima-vision
+```
 
-# 3. Download the YOLO26 detection model
-mkdir -p assets/models
-sima-cli download \
-  https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz \
-  -o assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
+### Run the inference on DevKit
 
-# 4. Run YOLO26 object detection on the DevKit
+**Nothing to download first.** Each app fetches its own pretrained YOLO26 pack and a demo
+clip into `./assets` on its first run, then runs. Every run after that reuses them.
+
+| App | Fetched for you | Writes |
+|:--|:--|:--|
+| `detect` | `yolo26m-det-bf16-mla_tess-b1.tar.gz` (66 MB) + a 1080p demo clip (13 MB) | `detections.mp4`, `frames/` |
+| `segment` | `yolo26m-seg-bf16-mla_tess-b1.tar.gz` + the same clip | `segmentation.mp4`, `frames/` |
+| `fall` | the detection pack again + a shorter clip (1.2 MB) | `falls.mp4`, `frames/`, `alerts/` |
+
+#### Object detection
+```bash
 sima-vision detect
 ```
 
-Steps 1 to 3 are one-time. After them the run is the only command: `sima-vision detect`
-finds the Neat runtime itself, puts the board's numpy and OpenCV on the path, fetches a
-sample clip if you have not given it one, and prints what it is doing at every stage.
+```
+sima-vision 1.1.0  detect
 
-It writes `detections.mp4` and a `frames/` directory beside itself, on the board.
+  [1/7] environment  checking this machine
+        -> Modalix DevKit  aarch64  python 3.11.2
+  [2/7] pyneat       locating the Neat runtime
+        -> 0.3.0  already importable
+  [3/7] imaging      numpy and OpenCV
+        -> numpy 1.24.2  opencv 4.6.0
+  [4/7] assets       model archive and video source
+        got   assets/videos/people-walking-outside-mall.h264  (13.3 MB)
+        got   assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz  (66.4 MB)
+        -> ready
+  [5/7] source       probing the stream
+        -> 1920x1080 @ 24 fps
+  [6/7] model        loading yolo26m-det-bf16-mla_tess-b1.tar.gz
+        -> yolo26 -> YoloV26, 80 classes (45.4s)
+  [7/7] pipeline     building the Neat graph
+        -> yolo_detector ready (525ms)
 
-## Additional commands
+running  press Ctrl-C to stop
+```
 
-The other two apps. They run exactly like `detect` and share its clip and settings:
+#### Instance segmentation with optional blur
 
 ```bash
-# Instance segmentation, with an optional background blur
 sima-vision segment
+sima-vision segment --blur
 sima-vision segment --blur --keep-classes person
+```
 
-# Fall detection, with SMTP alerts. Nothing is emailed until you pass --send
+#### Fall detection with SMTP alerts
+```bash
 sima-vision fall
 sima-vision fall --alert-to ops@example.com
 ```
 
-Your own footage or your own model, as a path or an `https` URL. Video must be raw H.264,
-never `.mp4`: the board decodes H.264 in hardware, and a container hits a demuxer bug in
-Neat 0.3.0. Convert once, losslessly, with `ffmpeg -i clip.mp4 -c:v copy -bsf:v
-h264_mp4toannexb -f h264 clip.h264`.
+A run finds the Neat runtime, puts the board's numpy and OpenCV on the path, downloads
+whatever is missing, and says what it is doing at every stage. There is no setup command
+and no config to write.
+
+Output lands beside the run, on the board. Bring it back to your PC:
 
 ```bash
-sima-vision detect --source my-clip.h264 --model my-model.tar.gz
-sima-vision detect --source https://example.com/my-clip.h264
+export SIMA_VISION_DEVKIT=sima@<devkit-ip>    # PowerShell: $env:SIMA_VISION_DEVKIT="..."
+sima-vision pull
 ```
 
-Moving files between your PC and the board. Set `SIMA_VISION_DEVKIT` first and neither
-needs `--host`:
+### Moving files between Host PC and Devkit
+
+Set `SIMA_VISION_DEVKIT` as above and neither needs `--host`.
 
 ```bash
 sima-vision push my-clip.h264      # host -> DevKit
 sima-vision pull                   # DevKit -> host, whatever the run left
-sima-vision pull --into results/
+sima-vision pull --into results/   # DevKit -> host, pull in specific directory
 ```
 
-On a laptop, with no board and no network:
+### Your own footage
+
+A path or an `https` URL. It must be raw H.264, never `.mp4`: the board decodes H.264 in
+hardware, and a container hits a demuxer bug in Neat 0.3.0. Convert once, losslessly:
 
 ```bash
-sima-vision detect --validate      # resolve and check the settings, then stop
+ffmpeg -i clip.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 clip.h264
+sima-vision push clip.h264
+sima-vision detect --source clip.h264
 ```
 
-The flags worth knowing. `sima-vision <command> --help` lists the rest:
+### Flags worth knowing
+
+`sima-vision <command> --help` lists the rest:
 
 | Flag | What it does |
 |:--|:--|
@@ -92,6 +129,8 @@ The flags worth knowing. `sima-vision <command> --help` lists the rest:
 | `--no-video` / `--no-save` | Skip the recording or the stills. Together they are the cheapest possible run, which is how you tell a slow app apart from a stalled graph |
 | `--quiet` | Warnings, errors and the closing report only |
 | `--profile` | Per-stage timings, when a run is slower than it should be |
+| `--model my.tar.gz` | Your own compiled pack instead of the fetched one |
+| `--validate` | Resolve and check the settings, then stop. Needs no board |
 
 Settings can also come from a `config.yaml` in the working directory, which is picked up
 on its own. Flags win over it, and it wins over the built-in defaults.
