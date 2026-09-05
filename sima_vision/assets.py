@@ -41,14 +41,58 @@ from .console import console, human_bytes
 #: Overrides where downloads land. Default ``./assets`` in the working directory.
 ASSETS_ENV = "SIMA_VISION_ASSETS"
 
-#: Sample clips, already raw H.264 so they skip the Neat 0.3.0 demuxer bug.
-SAMPLE_RELEASE = "https://github.com/RizwanMunawar/sima-projects/releases/download/0.0.1"
+#: Clips and model packs alike, on one public GitHub release. Anything here is
+#: a plain GET: no login, no `sima-cli`, and the same code path for both kinds.
+SAMPLE_RELEASE = "https://github.com/RizwanMunawar/sima-vision/releases/download/0.0.1"
+
 SAMPLE_VIDEOS = {
     "people-walking-outside-mall.h264": "1920x1080 @ 24 fps, 13 MB. The usual default",
     "people-walking-inside-mall.h264": "1920x1080 @ 30 fps, 1.2 MB. Quicker smoke test",
 }
 
-#: Where the SDK publishes compiled model packs.
+#: Model packs on that same release, by size. Nano is the default: 20 MB
+#: downloads and starts far quicker than anything else here, which is what a
+#: first run wants. Pass ``--model yolo26s-det-bf16-mla_tess-b1.tar.gz`` for
+#: the small pack and it is fetched from here by name.
+#:
+#: The detection packs carry a ``-b1`` batch suffix and the segmentation packs
+#: do not. That asymmetry is in the published filenames, not a mistake here.
+RELEASE_MODELS = {
+    "yolo26n-det-bf16-mla_tess-b1.tar.gz": "nano detection, 20 MB",
+    "yolo26n-seg-bf16-mla_tess.tar.gz": "nano segmentation, 23 MB",
+    "yolo26s-det-bf16-mla_tess-b1.tar.gz": "small detection, 35 MB",
+    "yolo26s-seg-bf16-mla_tess.tar.gz": "small segmentation, 39 MB",
+}
+
+#: SHA-256 of every release asset, straight from the GitHub API.
+#:
+#: Worth having because the alternative is silent. A truncated or swapped
+#: download is a file of plausible size that fails much later and somewhere
+#: else -- a clip that decodes half way, a model pack that unpacks to
+#: nonsense -- and a whole afternoon went into suspecting exactly that of a
+#: file which turned out to be fine. Checking here answers it in a second.
+RELEASE_SHA256 = {
+    "people-walking-in-street.mp4":
+        "f13617463afd41307e684d16d9c679b23dca13566decaf3d3ffcce5173ebf3ce",
+    "people-walking-inside-mall.h264":
+        "b65591bb027f7ca184feab29a8a4fc3c6620d632a549793604cdd7b414993b9b",
+    "people-walking-outside-mall.h264":
+        "72da5de46024028766b9f6df30de09560593f14ec3f4f9703394a28fda8d0140",
+    "people-walking-small.mp4":
+        "c217cb8a661fb735fcdef336019d2335576bff4ecaed8e89bbcc07eb9846cd00",
+    "yolo26n-det-bf16-mla_tess-b1.tar.gz":
+        "7c67ecbd823e128edb0fdc1d1bca47abea4d91c9843ff5c93101361081095bea",
+    "yolo26n-seg-bf16-mla_tess.tar.gz":
+        "b32ab8ee2c217f88165a2e17c2b8f6124a4a60776a2d5d9b5bd50ed6bbdf4e6a",
+    "yolo26s-det-bf16-mla_tess-b1.tar.gz":
+        "7bb911cbf356c352df4ecef8600b32e8f77baf945eb7788e6fc585665790bb17",
+    "yolo26s-seg-bf16-mla_tess.tar.gz":
+        "4aaa6068b1dd12d4774a8af917c169dcf2488a3214c84716d7956b85bd1c6cfc",
+}
+
+#: Where the SDK publishes packs that are not on the release. Reaching one of
+#: these needs a community.sima.ai login, which is what ``sima-cli`` holds and
+#: why that path still exists -- it is the fallback now, not the default.
 MODEL_BASE = "https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix"
 
 
@@ -68,20 +112,24 @@ class TaskAssets:
 
 
 #: Task name -> its default model and clip. ``detect`` and ``fall`` share a head.
+#:
+#: All three defaults are packs on the GitHub release, so a first run needs no
+#: login and no ``sima-cli``. Each task fetches only its own: ``detect`` and
+#: ``fall`` share the detection pack, ``segment`` pulls the segmentation one.
 CATALOGUE: dict[str, TaskAssets] = {
     "detect": TaskAssets(
         "yolo26-detection",
-        "yolo26m-det-bf16-mla_tess-b1.tar.gz",
+        "yolo26n-det-bf16-mla_tess-b1.tar.gz",
         "people-walking-outside-mall.h264",
     ),
     "segment": TaskAssets(
         "yolo26-segmentation",
-        "yolo26m-seg-bf16-mla_tess-b1.tar.gz",
+        "yolo26n-seg-bf16-mla_tess.tar.gz",
         "people-walking-outside-mall.h264",
     ),
     "fall": TaskAssets(
         "yolo26-detection",
-        "yolo26m-det-bf16-mla_tess-b1.tar.gz",
+        "yolo26n-det-bf16-mla_tess-b1.tar.gz",
         "people-walking-inside-mall.h264",
     ),
 }
@@ -119,8 +167,20 @@ def default_source_uri(task: str) -> str:
     return (videos_dir() / CATALOGUE[task].clip).as_posix()
 
 
+def release_url(name: str) -> str:
+    """Where one published clip or model pack lives."""
+    return f"{SAMPLE_RELEASE}/{name}"
+
+
+def on_release(name: str) -> bool:
+    """Whether this archive can be fetched without a login."""
+    return name in RELEASE_MODELS
+
+
 def model_url(task: str) -> str:
     entry = CATALOGUE[task]
+    if on_release(entry.model_file):
+        return release_url(entry.model_file)
     return f"{MODEL_BASE}/{entry.model_dir}/{entry.model_file}"
 
 
@@ -186,6 +246,16 @@ def download(url: str, out: Path, step=None) -> bool:
                 f"{out.name}: got {done} of {total} bytes, the transfer was cut short"
             )
             return False
+        wanted = RELEASE_SHA256.get(Path(url.split("?")[0]).name)
+        if wanted and not verify_sha256(part, wanted):
+            part.unlink(missing_ok=True)
+            console.error(
+                f"{out.name}: downloaded, but its contents are not what they "
+                "should be.\n  The file is discarded rather than used. Try again; "
+                "if it keeps happening,\n  something between here and GitHub is "
+                "rewriting the download."
+            )
+            return False
         part.replace(out)
         say(step, f"got   {out}  ({human_bytes(done)})")
         return True
@@ -194,6 +264,19 @@ def download(url: str, out: Path, step=None) -> bool:
         part.unlink(missing_ok=True)
         console.error(f"{out.name}: {exc}")
         return False
+
+
+def verify_sha256(path: Path, wanted: str) -> bool:
+    """Whether the file hashes to ``wanted``. Read in blocks, not all at once.
+
+    A model pack is tens of megabytes and this runs on a board where a careless
+    allocation has already cost a run, so it is streamed.
+    """
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest() == wanted
 
 
 def cache_name(url: str) -> str:
@@ -230,6 +313,34 @@ def fetch(url: str, out: Path, what: str, step=None) -> Path:
 # ─────────────────────────────────────────────────────────────────────────────
 # Resolution
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def custom_model_help(task: str) -> str:
+    """How to run something other than the packs published here.
+
+    Printed where a missing archive is discovered rather than buried in the
+    README, because that is the moment somebody needs it.
+    """
+    published = "\n".join(
+        f"    {name:<38} {what}" for name, what in RELEASE_MODELS.items()
+    )
+    return (
+        "Published packs, fetched by name with no login:\n"
+        f"{published}\n"
+        f"    sima-vision {task} --model yolo26s-det-bf16-mla_tess-b1.tar.gz\n"
+        "\n"
+        "Your own model, in three steps:\n"
+        "  1. Compile it for Modalix with the SiMa SDK. The result is a\n"
+        "     .tar.gz pack holding an .elf and its preprocess contract.\n"
+        "  2. Get it onto the board:  sima-vision push my-model.tar.gz\n"
+        "  3. Run it:                 sima-vision "
+        f"{task} --model my-model.tar.gz\n"
+        "\n"
+        "  A pack from a URL works too and is cached under assets/models:\n"
+        f"    sima-vision {task} --model https://example.com/my-model.tar.gz\n"
+        "  If its head is not yolo26, say so with --family, or the box decoder\n"
+        "  reads the output tensor the wrong way and every detection is noise."
+    )
 
 
 def ensure_source(uri: str, source_type: str = "video", step=None) -> str:
@@ -283,14 +394,22 @@ def ensure_model(path: str, task: str, step=None) -> str:
         say(step, f"have  {path}  ({human_bytes(target.stat().st_size)})")
         return path
 
+    # A published pack, whether it is this task's default or one named by hand.
+    # These are on the same release as the clips, so they are a plain GET and
+    # need no login at all. Naming one by its bare filename lands it in
+    # assets/models rather than wherever the shell happened to be, which is what
+    # makes `--model yolo26s-det-bf16-mla_tess-b1.tar.gz` do the obvious thing.
+    if on_release(target.name):
+        out = target if target.parent != Path() else models_dir() / target.name
+        return str(fetch(release_url(target.name), out, "model pack", step))
+
     entry = CATALOGUE.get(task)
     if entry is None or target.name != entry.model_file:
         # Not something this task knows how to fetch: a name we have no URL for.
         raise RuntimeError(
             f"model archive not found: {path}\n"
             f"  launched from: {Path.cwd()}\n"
-            "Pass --model with a path or an https URL, or leave it off to use "
-            f"the default for {task}."
+            f"{custom_model_help(task)}"
         )
 
     url = model_url(task)

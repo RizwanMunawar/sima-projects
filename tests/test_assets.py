@@ -50,6 +50,9 @@ def offline(monkeypatch):
         return Response()
 
     monkeypatch.setattr(assets.urllib.request, "urlopen", urlopen)
+    # Four bytes cannot hash to a published digest, and these tests are about
+    # the decision rather than the transfer. Verification has its own tests.
+    monkeypatch.setattr(assets, "RELEASE_SHA256", {})
     return asked
 
 
@@ -73,7 +76,10 @@ def test_every_task_has_a_model_and_a_clip():
         entry = assets.CATALOGUE[name]
         assert entry.clip in assets.SAMPLE_VIDEOS
         assert entry.model_file.endswith(".tar.gz")
-        assert assets.model_url(name).startswith(assets.MODEL_BASE)
+        # Every default is on the public release, so a first run needs no
+        # login. That is the whole point of the defaults being these packs.
+        assert assets.on_release(entry.model_file), entry.model_file
+        assert assets.model_url(name) == assets.release_url(entry.model_file)
 
 
 def test_only_http_urls_count_as_downloadable():
@@ -151,17 +157,54 @@ def test_an_existing_model_is_used_as_it_stands(here, monkeypatch):
     assert assets.ensure_model("det.tar.gz", "detect") == "det.tar.gz"
 
 
-def test_a_missing_model_without_sima_cli_prints_the_command(here, monkeypatch):
+def test_a_published_pack_needs_no_login_at_all(here, offline, monkeypatch):
+    """The change this release move is for.
+
+    Every default pack used to go through `sima-cli`, which needs a
+    community.sima.ai login, so a first run stopped dead without one. They are
+    on the same public release as the clips now, so they are a plain GET.
+    """
+    monkeypatch.setattr(assets.shutil, "which", lambda _name: None)   # no sima-cli
+    monkeypatch.setattr(
+        assets.subprocess, "run",
+        lambda *a, **k: pytest.fail("a published pack must not shell out"),
+    )
+    path = assets.ensure_model(assets.default_model_path("detect"), "detect")
+
+    assert Path(path).is_file()
+    assert offline == [assets.release_url(assets.CATALOGUE["detect"].model_file)]
+
+
+def test_a_pack_named_by_hand_is_fetched_into_the_assets_directory(here, offline):
+    """`--model yolo26s-det-...tar.gz` should not need a URL or a path."""
+    path = assets.ensure_model("yolo26s-det-bf16-mla_tess-b1.tar.gz", "detect")
+
+    assert Path(path).parent == Path("assets/models"), "not the working directory"
+    assert Path(path).is_file()
+    assert offline == [assets.release_url("yolo26s-det-bf16-mla_tess-b1.tar.gz")]
+
+
+def test_an_unpublished_pack_still_goes_through_sima_cli(here, monkeypatch):
+    """The m packs are not on the release, so that path has to stay."""
     monkeypatch.setattr(assets.shutil, "which", lambda _name: None)
+    monkeypatch.setitem(
+        assets.CATALOGUE, "detect",
+        assets.TaskAssets("yolo26-detection", "yolo26m-det-bf16-mla_tess-b1.tar.gz", CLIP),
+    )
     with pytest.raises(RuntimeError) as caught:
         assets.ensure_model(assets.default_model_path("detect"), "detect")
     message = str(caught.value)
     assert "sima-cli login" in message
-    assert assets.model_url("detect") in message
+    assert assets.MODEL_BASE in message
 
 
 def test_a_missing_model_is_fetched_with_sima_cli(here, monkeypatch):
     monkeypatch.setattr(assets.shutil, "which", lambda _name: "/usr/bin/sima-cli")
+    monkeypatch.setitem(
+        assets.CATALOGUE, "segment",
+        assets.TaskAssets("yolo26-segmentation", "yolo26m-seg-bf16-mla_tess-b1.tar.gz",
+                          CLIP),
+    )
     seen = {}
 
     class Result:
@@ -190,6 +233,11 @@ def test_a_missing_model_is_fetched_with_sima_cli(here, monkeypatch):
 
 def test_sima_cli_failing_is_reported(here, monkeypatch):
     monkeypatch.setattr(assets.shutil, "which", lambda _name: "/usr/bin/sima-cli")
+    monkeypatch.setitem(
+        assets.CATALOGUE, "fall",
+        assets.TaskAssets("yolo26-detection", "yolo26m-det-bf16-mla_tess-b1.tar.gz",
+                          CLIP),
+    )
 
     class Result:
         returncode = 1
@@ -224,24 +272,105 @@ def test_ensure_assets_leaves_a_resolved_config_alone(here, offline):
 
 
 def test_ensure_assets_fills_in_both_defaults(here, offline, monkeypatch):
-    monkeypatch.setattr(assets.shutil, "which", lambda _name: "/usr/bin/sima-cli")
-
-    class Result:
-        returncode = 0
-
-    monkeypatch.setattr(
-        assets.subprocess,
-        "run",
-        lambda command, check=False, env=None: (
-            Path(command[-1]).write_bytes(b"tar"), Result()
-        )[1],
-    )
+    monkeypatch.setattr(assets.shutil, "which", lambda _name: None)
 
     cfg = TASKS["detect"]().load(None, {}, use_file=False)
     resolved = assets.ensure_assets(cfg, "detect")
     assert Path(resolved.source_uri).is_file()
     assert Path(resolved.model_path).is_file()
-    assert offline == [f"{assets.SAMPLE_RELEASE}/{CLIP}"]
+    # Clip and pack, both from the release, both without sima-cli on PATH.
+    assert offline == [
+        f"{assets.SAMPLE_RELEASE}/{CLIP}",
+        assets.release_url(assets.CATALOGUE["detect"].model_file),
+    ]
+
+
+def test_a_task_fetches_its_own_pack_and_no_others(here, offline, monkeypatch):
+    """One pack per run, not the whole published set.
+
+    detect and fall share the detection pack, segment pulls the segmentation
+    one, and nothing pulls all four: a first run should start, not download a
+    catalogue.
+    """
+    monkeypatch.setattr(assets.shutil, "which", lambda _name: None)
+
+    cfg = TASKS["segment"]().load(None, {}, use_file=False)
+    assets.ensure_assets(cfg, "segment")
+
+    packs = [url for url in offline if url.endswith(".tar.gz")]
+    assert packs == [assets.release_url("yolo26n-seg-bf16-mla_tess.tar.gz")]
+
+
+# -- what is downloaded has to be what was published --
+
+
+def test_a_download_that_is_not_what_was_published_is_discarded(here, monkeypatch):
+    """A truncated or rewritten file used to be kept and reused forever.
+
+    `download` only ever hashed the URL, to name the cache entry. So a bad
+    transfer of the right length landed in assets/ and every later run trusted
+    it, because the first thing that function does is believe a file that is
+    already there. It fails much later and somewhere else -- a clip that
+    decodes half way, a pack that unpacks to nonsense -- and an afternoon went
+    into suspecting exactly that of a file which turned out to be fine.
+    """
+    class Response:
+        headers = {"Content-Length": "4"}
+
+        def __init__(self):
+            self.left = [b"junk"]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, _size):
+            return self.left.pop() if self.left else b""
+
+    monkeypatch.setattr(assets.urllib.request, "urlopen", lambda url, timeout=0: Response())
+    with pytest.raises(RuntimeError, match="could not download"):
+        assets.ensure_source(f"assets/videos/{CLIP}")
+
+    assert not Path(f"assets/videos/{CLIP}").exists(), "a bad file must not be kept"
+    assert not list(Path("assets").rglob("*.part"))
+
+
+def test_content_that_matches_its_digest_is_kept(here, monkeypatch):
+    """The other half: verification must not reject a good download."""
+    import hashlib
+
+    body = b"the real thing"
+    digest = hashlib.sha256(body).hexdigest()
+    monkeypatch.setitem(assets.RELEASE_SHA256, CLIP, digest)
+
+    class Response:
+        headers = {"Content-Length": str(len(body))}
+
+        def __init__(self):
+            self.left = [body]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, _size):
+            return self.left.pop() if self.left else b""
+
+    monkeypatch.setattr(assets.urllib.request, "urlopen", lambda url, timeout=0: Response())
+    assets.ensure_source(f"assets/videos/{CLIP}")
+    assert Path(f"assets/videos/{CLIP}").read_bytes() == body
+
+
+def test_every_published_asset_has_a_digest():
+    """A pack added to the catalogue without one is silently unverified."""
+    for name in assets.RELEASE_MODELS:
+        assert name in assets.RELEASE_SHA256, name
+    for name in assets.SAMPLE_VIDEOS:
+        assert name in assets.RELEASE_SHA256, name
 
 
 # -- the cache must not confuse two URLs, or accept half a file --

@@ -46,9 +46,13 @@ clip into `./assets` on its first run, then runs. Every run after that reuses th
 
 | App | Fetched for you | Writes |
 |:--|:--|:--|
-| `detect` | `yolo26m-det-bf16-mla_tess-b1.tar.gz` (66 MB) + a 1080p demo clip (13 MB) | `detections.mp4`, `frames/` |
-| `segment` | `yolo26m-seg-bf16-mla_tess-b1.tar.gz` + the same clip | `segmentation.mp4`, `frames/` |
+| `detect` | `yolo26n-det-bf16-mla_tess-b1.tar.gz` (20 MB) + a 1080p demo clip (13 MB) | `detections.mp4`, `frames/` |
+| `segment` | `yolo26n-seg-bf16-mla_tess.tar.gz` (23 MB) + the same clip | `segmentation.mp4`, `frames/` |
 | `fall` | the detection pack again + a shorter clip (1.2 MB) | `falls.mp4`, `frames/`, `alerts/` |
+
+Packs and clips come from one public GitHub release, so no login is involved and
+`sima-cli` is not needed to get them. Each download is checked against its published
+SHA-256 and discarded if it does not match. Each app fetches only what it needs.
 
 ```bash
 sima-vision detect
@@ -101,15 +105,69 @@ sima-vision pull --into results/   # ...into a directory of your choosing
 sima-vision push my-clip.h264      # host -> DevKit
 ```
 
-## Use your own footage
-A path or an `https` URL. It must be raw H.264, never `.mp4`: the board decodes H.264 in
-hardware, and a container hits a demuxer bug in Neat 0.3.0. Convert once, losslessly:
+## Use a different model
+
+Two published sizes, fetched by name. Nano is the default; small is more accurate:
+
+| Pack | Size | For |
+|:--|:--|:--|
+| `yolo26n-det-bf16-mla_tess-b1.tar.gz` | 20 MB | `detect`, `fall` &mdash; the default |
+| `yolo26n-seg-bf16-mla_tess.tar.gz` | 23 MB | `segment` &mdash; the default |
+| `yolo26s-det-bf16-mla_tess-b1.tar.gz` | 35 MB | `detect`, `fall` |
+| `yolo26s-seg-bf16-mla_tess.tar.gz` | 39 MB | `segment` |
 
 ```bash
-ffmpeg -i clip.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 clip.h264
-sima-vision push clip.h264
-sima-vision detect --source clip.h264
+sima-vision detect --model yolo26s-det-bf16-mla_tess-b1.tar.gz
 ```
+
+No path and no URL: a published name is downloaded into `assets/models` and reused.
+
+### Your own model
+
+Train a YOLO26 detector, then, **on your PC** (not the DevKit):
+
+```bash
+sima-vision compile best.pt
+```
+
+That exports the raw-head ONNX the board's box decoder reads &mdash; six tensors,
+`bbox_0..2` and `class_logit_0..2`, not ultralytics' assembled `[1, 84, 8400]` &mdash; and
+copies the compile recipe out of a published pack beside it. Needs `pip install
+ultralytics`.
+
+The second half, ONNX to `.tar.gz`, is the SiMa Model SDK: bfloat16 quantization, MLA
+tessellation and the ELF. That lives in the Palette container on x86, so `compile` hands
+you the ONNX, the recipe and the two commands rather than failing at the last step. Then:
+
+```bash
+sima-vision push my-model.tar.gz
+sima-vision detect --model my-model.tar.gz
+```
+
+A URL works too, and is cached under `assets/models`:
+
+```bash
+sima-vision detect --model https://example.com/my-model.tar.gz
+```
+
+If the head is not YOLO26, say so with `--family`. Get that wrong and the box decoder
+reads the output tensor the wrong way, so every detection is noise rather than an error.
+
+## Use your own footage
+A path or an `https` URL. Raw H.264 and `.mp4` both work:
+
+```bash
+sima-vision push my-clip.mp4
+sima-vision detect --source my-clip.mp4
+```
+
+The board decodes H.264 in hardware, and a container hits a demuxer bug in Neat 0.3.0, so
+an `.mp4` is reframed into a raw stream on the first run and the result cached beside it.
+That is a remux, not a re-encode: every coded bit survives, and a 13 MB clip takes about a
+second. No `ffmpeg` needed, which matters because the DevKit has none.
+
+H.264 video only, in either case. A fragmented `.mp4`, or one holding something other than
+H.264, is refused by name rather than failing halfway through a run.
 
 ## Flags worth knowing
 
