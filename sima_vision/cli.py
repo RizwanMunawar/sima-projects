@@ -34,12 +34,22 @@ from __future__ import annotations
 
 import argparse
 import os
+import tarfile
 from pathlib import Path
 
 from . import __version__
+from .assets import models_dir
 from .bootstrap import detect_environment, ensure_runtime
-from .console import console
+from .console import console, human_bytes
 from .devkit import DEVKIT_ENV, run_pull, run_push
+from .export import (
+    DEFAULT_IMGSZ,
+    DEFAULT_OPSET,
+    compile_recipe,
+    export_onnx,
+    model_sdk_present,
+    next_steps,
+)
 from .neat import describe_preprocess
 from .runloop import Stopper
 from .runtime import FAMILY_DECODE_TOKENS
@@ -267,6 +277,7 @@ def build_parser() -> argparse.ArgumentParser:
         add_task_arguments(sub, task)
         sub.set_defaults(_task=task_cls)
 
+    add_compile_parser(subparsers)
     add_push_parser(subparsers)
     add_pull_parser(subparsers)
     return parser
@@ -278,6 +289,43 @@ def add_host_argument(parser: argparse.ArgumentParser) -> None:
         "--host", "-H", metavar="USER@ADDR",
         help=f"The DevKit, as ssh takes it. Defaults to ${DEVKIT_ENV} so you "
              f"only say it once.",
+    )
+
+
+def add_compile_parser(subparsers) -> None:
+    """``compile`` -- a trained .pt towards a pack the board can run."""
+    parser = subparsers.add_parser(
+        "compile",
+        help="Turn a trained YOLO26 .pt into a DevKit model pack",
+        description=(
+            "Export a trained YOLO26 .pt to the raw-head ONNX the board's box "
+            "decoder reads, then compile it with the SiMa Model SDK if this "
+            "machine has one. Run it on your PC: exporting needs torch, and "
+            "compiling needs the Palette container."
+        ),
+        epilog=(
+            "examples:\n"
+            "  sima-vision compile best.pt\n"
+            "  sima-vision compile best.pt --imgsz 512 --out build/\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("weights", help="Trained YOLO26 detection .pt.")
+    parser.add_argument(
+        "--out", metavar="DIR", default="build",
+        help="Where the ONNX and the recipe are written. Default build/.",
+    )
+    parser.add_argument(
+        "--imgsz", type=int, default=DEFAULT_IMGSZ, metavar="N",
+        help=f"Square input side. Default {DEFAULT_IMGSZ}, which is what the "
+             "published packs use.",
+    )
+    parser.add_argument(
+        "--opset", type=int, default=DEFAULT_OPSET, metavar="N",
+        help=f"ONNX opset. Default {DEFAULT_OPSET}.",
+    )
+    parser.add_argument(
+        "--quiet", action="store_true", help="Warnings and errors only.",
     )
 
 
@@ -343,6 +391,62 @@ def collect_overrides(args: argparse.Namespace) -> dict:
         for key, value in vars(args).items()
         if "." in key and value is not None
     }
+
+
+def run_compile(args) -> int:
+    """``compile`` -- export, then compile if the Model SDK is here."""
+    console.banner(f"sima-vision {__version__}", "compile")
+    console.plan(2)
+    weights = Path(args.weights)
+    if not weights.is_file():
+        raise SystemExit(f"no such file: {weights}")
+
+    out_dir = Path(args.out)
+    onnx_path = out_dir / f"{weights.stem}-raw.onnx"
+    with console.step("export", f"{weights.name} -> raw-head ONNX") as step:
+        step.note(
+            "the board decodes boxes itself, so the head's six raw tensors are exported\n"
+            "rather than ultralytics' assembled [1, 84, 8400] output"
+        )
+        shapes = export_onnx(weights, onnx_path, args.imgsz, args.opset)
+        for name, shape in shapes.items():
+            step.detail(f"{name:<16} {tuple(shape)}")
+        step.done(f"{onnx_path} ({human_bytes(onnx_path.stat().st_size)})")
+
+    with console.step("compile", "ONNX -> DevKit pack") as step:
+        recipe_path = write_recipe(out_dir, step)
+        if not model_sdk_present():
+            console.warn(next_steps(onnx_path, recipe_path))
+            step.done("ONNX ready, compile it in Palette")
+            return 0
+        step.done("the Model SDK is here; run the recipe above on the ONNX")
+    return 0
+
+
+def write_recipe(out_dir: Path, step) -> Path | None:
+    """Copy a published pack's own compile script next to the ONNX.
+
+    Taken from a pack rather than written here, because the settings that
+    matter -- bfloat16, MSE calibration, the MLA tessellation layouts -- are
+    the ones SiMa actually shipped, and a paraphrase of them would drift.
+    """
+    packs = sorted(models_dir().glob("*.tar.gz"))
+    if not packs:
+        step.note(
+            "no model pack here to copy a recipe from. Any real run fetches one,\n"
+            "and the recipe comes inside it."
+        )
+        return None
+    try:
+        script = compile_recipe(packs[0])
+    except (RuntimeError, OSError, tarfile.TarError) as exc:
+        step.note(f"could not read a recipe from {packs[0].name}: {exc}")
+        return None
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "compile_modelsdk.py"
+    path.write_text(script, encoding="utf-8")
+    step.detail(f"recipe from {packs[0].name} -> {path}")
+    return path
 
 
 def print_validation(task, cfg) -> None:
@@ -426,6 +530,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command in TASKS:
             return run_task(args)
+        if args.command == "compile":
+            return run_compile(args)
         return run_devkit_command(args)
     except KeyboardInterrupt:
         return 130

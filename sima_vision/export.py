@@ -1,0 +1,256 @@
+"""Turning a trained YOLO26 ``.pt`` into something the DevKit can run.
+
+Two stages, and only the first can happen on an ordinary machine.
+
+**Export.** Ultralytics' own ONNX export ends in the decode: one
+``[1, 84, 8400]`` tensor with the boxes already assembled. The board does that
+part itself, in ``neatobjectdecode``, and it expects the six raw head tensors
+instead -- ``Configured for subtensors: 6`` in a run's log is this. So the
+export here stops at the head and emits what the head produces:
+
+===============  ==================  =========================
+output           shape at 640x640    from
+===============  ==================  =========================
+``bbox_0``       ``[1, 4, 80, 80]``  ``Detect.cv2[0]``
+``bbox_1``       ``[1, 4, 40, 40]``  ``Detect.cv2[1]``
+``bbox_2``       ``[1, 4, 20, 20]``  ``Detect.cv2[2]``
+``class_logit_0``  ``[1, 80, 80, 80]``  ``Detect.cv3[0]``
+``class_logit_1``  ``[1, 80, 40, 40]``  ``Detect.cv3[1]``
+``class_logit_2``  ``[1, 80, 20, 20]``  ``Detect.cv3[2]``
+===============  ==================  =========================
+
+Those names and that order are not invented here. They are read out of a
+working pack's own ``*_mpk.json``, where the final PassThrough carries exactly
+``bbox_0..2`` then ``class_logit_0..2``. Four box channels rather than 64 is
+YOLO26 having ``reg_max = 1``: no DFL to unpack.
+
+**Compile.** ONNX to ``.tar.gz`` is the SiMa Model SDK's job -- quantization to
+bfloat16, MLA tessellation, and the ELF. That is the ``afe`` package inside the
+Palette container, on x86, and it is not on the DevKit and not on most laptops.
+Every published pack ships the exact script that built it, as
+``archived_compile_script.*.py``, so :func:`compile_recipe` hands that same
+recipe back rather than paraphrasing it.
+"""
+
+from __future__ import annotations
+
+import tarfile
+from pathlib import Path
+
+#: Output names the board's box decoder expects, in the order a working pack's
+#: PassThrough lists them: every box tensor, then every class tensor.
+BBOX_OUTPUTS = ("bbox_0", "bbox_1", "bbox_2")
+CLASS_OUTPUTS = ("class_logit_0", "class_logit_1", "class_logit_2")
+RAW_OUTPUTS = (*BBOX_OUTPUTS, *CLASS_OUTPUTS)
+
+#: The input the preprocess contract feeds: one RGB image, letterboxed square.
+INPUT_NAME = "images"
+DEFAULT_IMGSZ = 640
+
+#: ONNX opset. 17 is what the SDK's importer is happiest with, and it is late
+#: enough for everything a YOLO26 graph uses.
+DEFAULT_OPSET = 17
+
+#: Name of the compile script inside a published pack.
+RECIPE_PREFIX = "archived_compile_script."
+
+
+class RawHead:
+    """Wraps a DetectionModel so its head returns the six raw tensors.
+
+    ``Detect.forward`` concatenates each level's box and class branches and
+    then decodes them. Both have to go: the concatenation because the board
+    wants the branches apart, and the decode because the board does it.
+    Replacing the method on the instance is enough -- ``DetectionModel``
+    reaches the head through the module list, so the rest of the network is
+    untouched and no weights move.
+    """
+
+    def __init__(self, net) -> None:
+        self.net = net
+        self.head = net.model[-1]
+
+    def outputs(self, feats: list) -> list:
+        """The six tensors, boxes first, in the order the pack expects."""
+        head = self.head
+        boxes = [head.cv2[i](feats[i]) for i in range(head.nl)]
+        classes = [head.cv3[i](feats[i]) for i in range(head.nl)]
+        return [*boxes, *classes]
+
+    def __enter__(self):
+        self.original = self.head.forward
+        self.head.forward = self.outputs
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        self.head.forward = self.original
+        return False
+
+
+def check_head(net) -> tuple[int, int]:
+    """Refuse a model whose head cannot produce what the board decodes.
+
+    Returns:
+        A ``(levels, classes)`` pair.
+
+    Raises:
+        RuntimeError: When the head is not a three-level YOLO26 detection head.
+    """
+    head = getattr(net, "model", [None])[-1]
+    for attribute in ("nl", "nc", "cv2", "cv3"):
+        if not hasattr(head, attribute):
+            raise RuntimeError(
+                f"this is not a YOLO detection model: its head is "
+                f"{type(head).__name__}, which has no {attribute}.\n"
+                "  Segmentation and pose models have different heads and a "
+                "different box decoder;\n  only detection is supported here."
+            )
+    if head.nl != len(BBOX_OUTPUTS):
+        raise RuntimeError(
+            f"this head has {head.nl} levels and the board's decoder is built "
+            f"for {len(BBOX_OUTPUTS)}."
+        )
+    reg_max = getattr(head, "reg_max", 1)
+    if reg_max != 1:
+        raise RuntimeError(
+            f"this head has reg_max={reg_max}, so its box branch emits "
+            f"{reg_max * 4} channels of DFL bins\n  rather than 4 coordinates. "
+            "The board's decoder reads 4. That is a YOLOv8-style head,\n"
+            "  not YOLO26."
+        )
+    return head.nl, head.nc
+
+
+def expected_shapes(imgsz: int, classes: int) -> dict[str, tuple[int, ...]]:
+    """What each output should come out as, for checking the export."""
+    shapes = {}
+    for index, stride in enumerate((8, 16, 32)):
+        side = imgsz // stride
+        shapes[BBOX_OUTPUTS[index]] = (1, 4, side, side)
+        shapes[CLASS_OUTPUTS[index]] = (1, classes, side, side)
+    return shapes
+
+
+def export_onnx(weights: Path, out: Path, imgsz: int = DEFAULT_IMGSZ,
+                opset: int = DEFAULT_OPSET) -> dict[str, tuple[int, ...]]:
+    """Write ``weights`` out as a raw-head ONNX at ``out``.
+
+    Args:
+        weights: A trained ``.pt``.
+        out: Where to write the ONNX.
+        imgsz: Square input side. The preprocess contract letterboxes to this.
+        opset: ONNX opset version.
+
+    Returns:
+        The output name to shape mapping actually produced.
+
+    Raises:
+        RuntimeError: When torch or ultralytics is missing, the head is not one
+            this can export, or the shapes come out wrong.
+    """
+    try:
+        import torch
+        from ultralytics import YOLO
+    except ImportError as exc:
+        raise RuntimeError(
+            f"exporting a .pt needs torch and ultralytics, and {exc.name} is "
+            "not installed.\n  pip install ultralytics\n"
+            "  This is a step for your PC, not the DevKit."
+        ) from exc
+
+    net = YOLO(str(weights)).model.eval()
+    levels, classes = check_head(net)
+    wanted = expected_shapes(imgsz, classes)
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    dummy = torch.zeros(1, 3, imgsz, imgsz)
+    with RawHead(net), torch.no_grad():
+        torch.onnx.export(
+            net,
+            dummy,
+            str(out),
+            input_names=[INPUT_NAME],
+            output_names=list(RAW_OUTPUTS),
+            opset_version=opset,
+            do_constant_folding=True,
+            dynamo=False,
+        )
+
+    got = onnx_output_shapes(out)
+    wrong = {
+        name: (wanted[name], got.get(name))
+        for name in RAW_OUTPUTS
+        if got.get(name) != wanted[name]
+    }
+    if wrong:
+        raise RuntimeError(
+            "the export produced shapes the board's decoder cannot read:\n"
+            + "\n".join(f"  {n}: wanted {w}, got {g}" for n, (w, g) in wrong.items())
+        )
+    return got
+
+
+def onnx_output_shapes(path: Path) -> dict[str, tuple[int, ...]]:
+    """Every graph output's name and static shape."""
+    import onnx
+
+    model = onnx.load(str(path))
+    shapes = {}
+    for node in model.graph.output:
+        dims = tuple(d.dim_value for d in node.type.tensor_type.shape.dim)
+        shapes[node.name] = dims
+    return shapes
+
+
+def compile_recipe(pack: Path) -> str:
+    """The compile script a published pack was built with.
+
+    Raises:
+        RuntimeError: When the pack carries no archived script.
+    """
+    with tarfile.open(pack) as tar:
+        names = [n for n in tar.getnames() if Path(n).name.startswith(RECIPE_PREFIX)]
+        if not names:
+            raise RuntimeError(
+                f"{pack} carries no {RECIPE_PREFIX}*.py, so there is no recipe "
+                "to copy.\n  Any of the published packs has one."
+            )
+        handle = tar.extractfile(names[0])
+        return handle.read().decode("utf-8") if handle else ""
+
+
+def model_sdk_present() -> bool:
+    """Whether the SiMa Model SDK can be imported here."""
+    import importlib.util
+
+    return importlib.util.find_spec("afe") is not None
+
+
+def next_steps(onnx_path: Path, recipe_path: Path | None) -> str:
+    """What to do with the ONNX, when this machine cannot finish the job.
+
+    The Model SDK quantizes to bfloat16, tessellates for the MLA and emits the
+    ELF. It lives in the Palette container on x86 and is not installable here,
+    so the honest thing is to hand over the ONNX, the exact recipe, and the two
+    commands -- rather than to fail at the last step with a stack trace.
+    """
+    recipe = (
+        f"  3. Compile, with the recipe written beside it:\n"
+        f"       python {recipe_path.name} --model {onnx_path.name} --build-dir build\n"
+        if recipe_path
+        else "  3. Compile it with the Model SDK.\n"
+    )
+    return (
+        "the Model SDK is not importable here, so the ONNX is as far as this "
+        "machine goes.\n"
+        "  It quantizes to bfloat16, tessellates for the MLA and emits the ELF, "
+        "and it lives\n  in the Palette container on x86 -- not on the DevKit.\n"
+        "\n"
+        f"  1. Start Palette, and mount the directory holding {onnx_path.name}.\n"
+        "  2. Inside it, install what the recipe imports:\n"
+        "       pip install onnx onnxsim numpy\n"
+        f"{recipe}"
+        "  4. The pack lands in build/ as *_mpk.tar.gz. Bring it back and run it:\n"
+        "       sima-vision push my-model.tar.gz\n"
+        "       sima-vision detect --model my-model.tar.gz"
+    )

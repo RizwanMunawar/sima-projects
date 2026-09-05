@@ -124,10 +124,25 @@ No path and no URL: a published name is downloaded into `assets/models` and reus
 
 ### Your own model
 
-1. Compile it for Modalix with the SiMa SDK. The result is a `.tar.gz` pack holding an
-   `.elf` and its preprocess contract.
-2. Get it onto the board: `sima-vision push my-model.tar.gz`
-3. Run it: `sima-vision detect --model my-model.tar.gz`
+Train a YOLO26 detector, then, **on your PC** (not the DevKit):
+
+```bash
+sima-vision compile best.pt
+```
+
+That exports the raw-head ONNX the board's box decoder reads &mdash; six tensors,
+`bbox_0..2` and `class_logit_0..2`, not ultralytics' assembled `[1, 84, 8400]` &mdash; and
+copies the compile recipe out of a published pack beside it. Needs `pip install
+ultralytics`.
+
+The second half, ONNX to `.tar.gz`, is the SiMa Model SDK: bfloat16 quantization, MLA
+tessellation and the ELF. That lives in the Palette container on x86, so `compile` hands
+you the ONNX, the recipe and the two commands rather than failing at the last step. Then:
+
+```bash
+sima-vision push my-model.tar.gz
+sima-vision detect --model my-model.tar.gz
+```
 
 A URL works too, and is cached under `assets/models`:
 
