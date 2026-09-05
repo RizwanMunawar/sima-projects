@@ -135,7 +135,15 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     )
     run.add_argument(
         "--queue-depth", dest="runtime.queue_depth", type=int, metavar="N",
-        help="How far ahead of the sinks the pull loop may run. Default 1.",
+        help="Depth of the Neat runtime's own queues. Every slot can hold a "
+             "decoded frame, so raising this makes a buffer-starved run worse, "
+             "not better. Default 1.",
+    )
+    run.add_argument(
+        "--sink-queue-depth", dest="runtime.sink_queue_depth", type=int, metavar="N",
+        help="How many finished frames may wait for the recorder. Costs host "
+             "memory only, about 6 MB a slot at 1080p, and lets the pull loop "
+             "keep draining the decoder. Default 4.",
     )
     run.add_argument(
         "--profile", dest="runtime.profile", action="store_const", const=True,

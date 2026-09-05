@@ -72,12 +72,11 @@ Nothing is emailed until you pass `--send`; without it a fall is composed and lo
 you can see what would have gone out.
 
 </details>
+<br>
 
 A run finds the Neat runtime, puts the board's numpy and OpenCV on the path, downloads
 whatever is missing, and says what it is doing at every stage. There is no setup command
-and no config to write.
-
-Output lands beside the run, on the board. Bring it back to your PC:
+and no config to write. Output lands beside the run, on the board. Bring it back to your PC:
 
 ```bash
 # Linux, macOS

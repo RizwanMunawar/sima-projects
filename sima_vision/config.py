@@ -491,9 +491,16 @@ class BaseConfig:
         max_detections: Top-K cap per frame.
         frames: Frame limit. 0 runs until interrupted.
         pull_timeout_ms: How long to wait for a frame before giving up.
-        queue_depth: Depth of the runtime's own queues, and of the sink
-            thread's queue. It does not change the ``max-buffers`` and
-            ``num-buffers`` in the printed pipeline, which pyneat fixes at 4.
+        queue_depth: Depth of the Neat runtime's own queues. Every slot can
+            park a decoded frame, so this counts against the decoder's pool
+            along with ``output_buffers``: raise it and a stalling run stalls
+            sooner. It does not change the ``max-buffers`` and ``num-buffers``
+            in the printed pipeline, which pyneat fixes at 4.
+        sink_queue_depth: How many finished frames may wait for the sink
+            thread. These are numpy copies in host memory and hold no decoder
+            buffer, so depth here is the cheap kind: it lets the pull loop keep
+            draining the source instead of blocking on a slow recording. About
+            6 MB per slot at 1080p.
         output_buffers: Buffers each public output may hold. Every one of them
             is a frame checked out of the hardware decoder's pool, that pool is
             small (the boot log prints ``BufferNum=8``), and there are two
@@ -553,6 +560,7 @@ class BaseConfig:
     frames: int = 0
     pull_timeout_ms: int = 20000
     queue_depth: int = 1
+    sink_queue_depth: int = 4
     output_buffers: int = 1
     run_preset: str = "auto"
     overflow_policy: str = "auto"
@@ -680,6 +688,7 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
         frames=_int(runtime, "frames", 0),
         pull_timeout_ms=_int(runtime, "pull_timeout_ms", 20000),
         queue_depth=_int(runtime, "queue_depth", 1),
+        sink_queue_depth=_int(runtime, "sink_queue_depth", 4),
         output_buffers=_int(runtime, "output_buffers", 1),
         run_preset=_str(runtime, "preset", defaults.run_preset).lower(),
         overflow_policy=_str(runtime, "overflow_policy", defaults.overflow_policy).lower(),
@@ -756,6 +765,8 @@ def validate_base(cfg: BaseConfig) -> None:
         raise ValueError("runtime.output_buffers must be >= 1")
     if cfg.queue_depth < 1:
         raise ValueError("runtime.queue_depth must be >= 1")
+    if cfg.sink_queue_depth < 1:
+        raise ValueError("runtime.sink_queue_depth must be >= 1")
     if cfg.pull_timeout_ms <= 0:
         raise ValueError("runtime.pull_timeout_ms must be > 0")
     if cfg.profile_interval <= 0:

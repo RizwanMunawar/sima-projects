@@ -350,6 +350,47 @@ def test_sinks_that_keep_up_are_not_blamed():
     assert "decoder ran out of buffers" in causes[0]
 
 
+def test_the_two_queue_depths_are_separate_knobs():
+    """One setting drove both, and they pull opposite ways.
+
+    `RunOptions.queue_depth` parks decoded frames from the hardware decoder's
+    eight-buffer pool. The sink queue holds numpy copies in host memory and no
+    decoder buffer at all, so depth there is what lets the pull loop keep
+    draining. Raising the single old knob for slack deepened the runtime queues
+    too, making the buffer exhaustion it was meant to relieve slightly worse.
+    """
+    cfg = stall_config(**{"runtime.queue_depth": 1, "runtime.sink_queue_depth": 8})
+    assert cfg.queue_depth == 1
+    assert cfg.sink_queue_depth == 8
+
+
+def test_the_sink_queue_is_the_one_the_worker_gets():
+    """A regression here is invisible: the run works, just with less slack."""
+    import sima_vision.runloop as loop
+
+    seen = {}
+    real = loop.SinkWorker
+
+    class Spy(real):
+        def __init__(self, cfg, pipeline, depth, *args):
+            seen["depth"] = depth
+            super().__init__(cfg, pipeline, depth, *args)
+
+    cfg, pipeline = make(frames=2, **{"runtime.sink_queue_depth": 6})
+    loop.SinkWorker = Spy
+    try:
+        run_pipeline(pipeline, cfg, Stopper(), CountingRuntime())
+    finally:
+        loop.SinkWorker = real
+    assert seen["depth"] == 6, "the sink worker must get the sink depth"
+
+
+def test_the_advice_does_not_point_at_the_knob_that_makes_it_worse():
+    causes = stall_causes(stall_config(), stalled_pipeline(), sink_ms=183.0)
+    assert "--sink-queue-depth" in causes[0]
+    assert "Not --queue-depth" in causes[0]
+
+
 def test_a_setting_already_at_its_floor_is_not_suggested():
     """`output_buffers` bottoms out at 1, which is also the default.
 
