@@ -46,9 +46,13 @@ clip into `./assets` on its first run, then runs. Every run after that reuses th
 
 | App | Fetched for you | Writes |
 |:--|:--|:--|
-| `detect` | `yolo26m-det-bf16-mla_tess-b1.tar.gz` (66 MB) + a 1080p demo clip (13 MB) | `detections.mp4`, `frames/` |
-| `segment` | `yolo26m-seg-bf16-mla_tess-b1.tar.gz` + the same clip | `segmentation.mp4`, `frames/` |
+| `detect` | `yolo26n-det-bf16-mla_tess-b1.tar.gz` (20 MB) + a 1080p demo clip (13 MB) | `detections.mp4`, `frames/` |
+| `segment` | `yolo26n-seg-bf16-mla_tess.tar.gz` (23 MB) + the same clip | `segmentation.mp4`, `frames/` |
 | `fall` | the detection pack again + a shorter clip (1.2 MB) | `falls.mp4`, `frames/`, `alerts/` |
+
+Packs and clips come from one public GitHub release, so no login is involved and
+`sima-cli` is not needed to get them. Each download is checked against its published
+SHA-256 and discarded if it does not match. Each app fetches only what it needs.
 
 ```bash
 sima-vision detect
@@ -100,6 +104,39 @@ sima-vision pull                   # DevKit -> host, whatever the run left
 sima-vision pull --into results/   # ...into a directory of your choosing
 sima-vision push my-clip.h264      # host -> DevKit
 ```
+
+## Use a different model
+
+Two published sizes, fetched by name. Nano is the default; small is more accurate:
+
+| Pack | Size | For |
+|:--|:--|:--|
+| `yolo26n-det-bf16-mla_tess-b1.tar.gz` | 20 MB | `detect`, `fall` &mdash; the default |
+| `yolo26n-seg-bf16-mla_tess.tar.gz` | 23 MB | `segment` &mdash; the default |
+| `yolo26s-det-bf16-mla_tess-b1.tar.gz` | 35 MB | `detect`, `fall` |
+| `yolo26s-seg-bf16-mla_tess.tar.gz` | 39 MB | `segment` |
+
+```bash
+sima-vision detect --model yolo26s-det-bf16-mla_tess-b1.tar.gz
+```
+
+No path and no URL: a published name is downloaded into `assets/models` and reused.
+
+### Your own model
+
+1. Compile it for Modalix with the SiMa SDK. The result is a `.tar.gz` pack holding an
+   `.elf` and its preprocess contract.
+2. Get it onto the board: `sima-vision push my-model.tar.gz`
+3. Run it: `sima-vision detect --model my-model.tar.gz`
+
+A URL works too, and is cached under `assets/models`:
+
+```bash
+sima-vision detect --model https://example.com/my-model.tar.gz
+```
+
+If the head is not YOLO26, say so with `--family`. Get that wrong and the box decoder
+reads the output tensor the wrong way, so every detection is noise rather than an error.
 
 ## Use your own footage
 A path or an `https` URL. Raw H.264 and `.mp4` both work:
