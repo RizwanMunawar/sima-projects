@@ -127,7 +127,7 @@ class Environment:
 
     The distinction that matters is board or not. Missing pyneat on a DevKit is
     a thing to go and fix; missing pyneat on a laptop is simply what a laptop
-    is, and the answer there is `sima-vision watch` rather than an install.
+    is, and the answer there is `--validate` or `push` rather than an install.
     """
 
     on_board: bool
@@ -352,9 +352,9 @@ def missing_pyneat_message(env: Environment, note: str) -> str:
             "pyneat is missing, and this is not a DevKit.\n"
             "It is an aarch64 wheel from the Palette SDK, so inference only runs on "
             "the board.\n"
-            "From here you can still drive one:\n"
-            "  sima-vision watch -- detect        run it there, live video here\n"
-            "  sima-vision detect --validate      check a config, no hardware at all"
+            "From here you can still:\n"
+            "  sima-vision detect --validate      check the settings, no hardware at all\n"
+            "  sima-vision push clip.h264         send a clip over, then run it there"
         )
     return (
         f"pyneat is missing: {note}.\n"

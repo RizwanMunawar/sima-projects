@@ -9,6 +9,9 @@ board's numpy and OpenCV on the path, downloads the model pack and the sample
 clip, and says what it is doing at each step. See
 :mod:`sima_vision.bootstrap`.
 
+The only other commands are ``push`` and ``pull``, which move files to and from
+the board. See :mod:`sima_vision.devkit`.
+
 One subcommand per task, and a task is a plugin -- the built-in three are
 registered exactly the way a fourth one from another package would be. See
 :mod:`sima_vision.tasks`.
@@ -36,14 +39,7 @@ from pathlib import Path
 from . import __version__
 from .bootstrap import detect_environment, ensure_runtime
 from .console import console
-from .devkit import (
-    DEVKIT_ENV,
-    VIDEO_PORT,
-    run_pull,
-    run_push,
-    run_remote,
-    run_watch,
-)
+from .devkit import DEVKIT_ENV, run_pull, run_push
 from .neat import describe_preprocess
 from .runloop import Stopper
 from .runtime import FAMILY_DECODE_TOKENS
@@ -63,10 +59,8 @@ examples:
 without a board:
   sima-vision detect --validate            check the settings, no hardware at all
 
-driving the board from your PC:
+moving files between your PC and the board:
   sima-vision push clip.h264               copy files over
-  sima-vision watch  -- detect             run it there, live video back here
-  sima-vision remote -- detect --frames 200   run it there, output in the terminal
   sima-vision pull                         bring the results back
 
 Everything a run needs is found or downloaded on the way in, once, into
@@ -141,7 +135,15 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     )
     run.add_argument(
         "--queue-depth", dest="runtime.queue_depth", type=int, metavar="N",
-        help="How far ahead of the sinks the pull loop may run. Default 1.",
+        help="Depth of the Neat runtime's own queues. Every slot can hold a "
+             "decoded frame, so raising this makes a buffer-starved run worse, "
+             "not better. Default 1.",
+    )
+    run.add_argument(
+        "--sink-queue-depth", dest="runtime.sink_queue_depth", type=int, metavar="N",
+        help="How many finished frames may wait for the recorder. Costs host "
+             "memory only, about 6 MB a slot at 1080p, and lets the pull loop "
+             "keep draining the decoder. Default 4.",
     )
     run.add_argument(
         "--profile", dest="runtime.profile", action="store_const", const=True,
@@ -239,13 +241,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_push_parser(subparsers)
     add_pull_parser(subparsers)
-    add_watch_parser(subparsers)
-    add_remote_parser(subparsers)
     return parser
 
 
 def add_host_argument(parser: argparse.ArgumentParser) -> None:
-    """Which board. The same flag on all four transfer commands."""
+    """Which board. The same flag on both transfer commands."""
     parser.add_argument(
         "--host", "-H", metavar="USER@ADDR",
         help=f"The DevKit, as ssh takes it. Defaults to ${DEVKIT_ENV} so you "
@@ -301,73 +301,6 @@ def add_pull_parser(subparsers) -> None:
                      help="Names on the board, relative to its home directory.")
     sub.add_argument("--into", type=Path, default=Path("."), metavar="DIR",
                      help="Where to put them here. Default the current directory.")
-    add_host_argument(sub)
-
-
-def add_watch_parser(subparsers) -> None:
-    """``watch`` -- run on the board with the live video sent back here."""
-    sub = subparsers.add_parser(
-        "watch",
-        help="Run a task on the DevKit and watch its live video here",
-        description=(
-            "Run a task on the board with its video feed aimed at this machine. "
-            "These are the real annotated frames the board is producing, not a "
-            "simulation: the same overlay that goes into the recording, encoded "
-            "as H.264 and sent over RTP while the run happens.\n\n"
-            "Nothing is decoded here. An SDP file is written and the exact "
-            "ffplay, GStreamer or VLC command printed, because those already do "
-            "that job properly."
-        ),
-        epilog=(
-            "examples:\n"
-            "  sima-vision watch -- detect\n"
-            "  sima-vision watch -- segment --blur-strength 81\n"
-            "  sima-vision watch -- fall --frames 500\n"
-            "\nEverything after -- is passed to sima-vision on the board, with\n"
-            "--insight and --insight-host added for you.\n"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    sub.add_argument("argv", nargs=argparse.REMAINDER, metavar="-- ARGS",
-                     help="The task to run there, after a literal --.")
-    sub.add_argument(
-        "--to", metavar="ADDR",
-        help="The address the board should send video to. Default: whichever "
-             "of this machine's addresses is on the board's own network, which "
-             "is not the same as the one that reaches the internet.",
-    )
-    sub.add_argument(
-        "--port", type=int, default=VIDEO_PORT, metavar="N",
-        help=f"UDP port to receive video on. Default {VIDEO_PORT}.",
-    )
-    sub.add_argument(
-        "--sdp", type=Path, metavar="PATH",
-        help="Where to write the SDP the player needs. Default ./sima-vision.sdp.",
-    )
-    add_host_argument(sub)
-
-
-def add_remote_parser(subparsers) -> None:
-    """``remote`` -- run a task on the board from here."""
-    sub = subparsers.add_parser(
-        "remote",
-        help="Run a sima-vision command on the DevKit over SSH",
-        description=(
-            "Run `sima-vision <args>` on the board and watch it here. It always "
-            "asks for a pty, so Ctrl-C actually reaches the task and it releases "
-            "the MLA -- without that the next launch fails with a busy device."
-        ),
-        epilog=(
-            "examples:\n"
-            "  sima-vision remote -- detect --frames 200\n"
-            "  sima-vision remote -- segment --blur-strength 81\n"
-            "  sima-vision remote -- detect --validate\n"
-            "\nEverything after -- is passed to sima-vision on the board.\n"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    sub.add_argument("argv", nargs=argparse.REMAINDER, metavar="-- ARGS",
-                     help="The command to run there, after a literal --.")
     add_host_argument(sub)
 
 
@@ -446,16 +379,10 @@ def run_task(args) -> int:
 
 
 def run_devkit_command(args) -> int:
-    """push, pull, watch and remote: the four that talk to a board over ssh."""
+    """push and pull: the two that talk to a board."""
     if args.command == "push":
         return run_push(args.paths, args.host, args.dest)
-    if args.command == "pull":
-        return run_pull(args.names, args.host, args.into)
-    # argparse.REMAINDER keeps the literal `--`; ssh does not want it.
-    argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
-    if args.command == "watch":
-        return run_watch(argv, args.host, args.to, args.port, args.sdp)
-    return run_remote(argv, args.host)
+    return run_pull(args.names, args.host, args.into)
 
 
 def main(argv: list[str] | None = None) -> int:

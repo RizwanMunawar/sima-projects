@@ -204,7 +204,23 @@ def test_an_aarch64_linux_with_dist_packages_is_a_board(monkeypatch):
 def test_the_message_off_board_points_at_the_board():
     message = bootstrap.missing_pyneat_message(LAPTOP, "no pyneat virtualenv found")
     assert "not a DevKit" in message
-    assert "sima-vision watch" in message, "say how to use the board from here"
+    # Advice that does not parse costs a run to discover: `watch` was named
+    # here and no longer exists. Check every command it suggests against the
+    # parser rather than against a name written down twice.
+    from sima_vision.cli import build_parser
+
+    available = {
+        name
+        for action in build_parser()._actions
+        for name in (getattr(action, "choices", None) or ())
+    }
+    named = {
+        line.split()[1]
+        for line in message.splitlines()
+        if line.strip().startswith("sima-vision ")
+    }
+    assert named, "say what can still be done from here"
+    assert named <= available, f"names commands that do not exist: {sorted(named - available)}"
 
 
 def test_the_message_on_board_gives_the_install_command():

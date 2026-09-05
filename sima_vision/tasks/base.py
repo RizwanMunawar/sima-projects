@@ -203,7 +203,7 @@ class Task:
         preset, policy = resolve_flow_control(cfg)
         step.detail(
             f"flow: preset={preset} overflow={policy} queue_depth={cfg.queue_depth} "
-            f"output_buffers={cfg.output_buffers}"
+            f"output_buffers={cfg.output_buffers} sinks={cfg.sink_queue_depth}"
         )
         if policy == "block":
             step.note(

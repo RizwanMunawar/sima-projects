@@ -204,7 +204,7 @@ def pull_frame(pipeline: Pipeline, cfg, sinks: SinkWorker, label: str, processed
     console.warn(
         "the source recovered once the backlog was flushed. That was "
         "back-pressure from this app rather than the end of the clip; lower "
-        "runtime.queue_depth if it keeps happening."
+        "runtime.sink_queue_depth if it keeps happening."
     )
     return sample, True, True
 
@@ -269,16 +269,28 @@ def stall_causes(cfg, pipeline: Pipeline, sink_ms: float) -> list[str]:
             f"     frame against a {interval:.0f} ms frame interval, so the loop was not\n"
             "     asking for frames and decoded ones piled up between the decoder and\n"
             "     this app. Drawing and encoding 1080p in software on the board's CPU\n"
-            "     is the usual reason. --no-video is the cheapest thing to try; a\n"
-            "     larger --queue-depth buys slack but not throughput."
+            "     is the usual reason. --no-video is the cheapest thing to try, and\n"
+            "     --sink-queue-depth buys the loop room to keep draining the decoder.\n"
+            "     Not --queue-depth: that one deepens the runtime's own queues, which\n"
+            "     parks more decoded frames and makes this worse."
         )
 
+    # Only worth suggesting when there is somewhere to lower it to. The floor is
+    # 1 and so is the default, so on a config nobody has touched this used to
+    # read as "turn down the thing that is already all the way down".
+    room = (
+        f"     Then lower runtime.output_buffers, currently {cfg.output_buffers}, "
+        f"which costs\n     two buffers for every one you take off it."
+        if cfg.output_buffers > 1
+        else "     runtime.output_buffers is already 1, its minimum, so the slack has\n"
+             "     to come from somewhere else."
+    )
     causes.append(
         "the hardware decoder ran out of buffers. Its pool is small (the boot log\n"
         "     prints BufferNum), and every element between it and the source appsink\n"
         "     can park one. Count the queues in the first pipeline printed above:\n"
-        "     their max-buffers plus the appsink's must stay under BufferNum. Then\n"
-        "     lower runtime.output_buffers, which costs two more."
+        "     their max-buffers plus the appsink's must stay under BufferNum.\n"
+        f"{room}"
     )
 
     if cfg.insight_enable:
@@ -406,7 +418,7 @@ def run_pipeline(pipeline: Pipeline, cfg, stopper: Stopper, task: TaskRuntime) -
     """Run one task to completion and print the closing report."""
     profile = ProfileWindow(cfg.profile, cfg.profile_interval, task.stage, task.unit)
     sinks = SinkWorker(
-        cfg, pipeline, cfg.queue_depth, task.render, task.stream, task.metadata
+        cfg, pipeline, cfg.sink_queue_depth, task.render, task.stream, task.metadata
     )
     try:
         processed, timeouts, recovered = consume_frames(

@@ -12,12 +12,13 @@ one copy does not.
 2. an ``http(s)`` URL -- downloaded into ``assets/`` once, then reused
 3. nothing at all -- the task's default, downloaded on first run
 
-Case 3 is what makes ``sima-vision detect`` work on its own. The clips are on a
-public GitHub release so they are simply fetched. The model packs are behind a
-`community.sima.ai <https://community.sima.ai>`_ login -- the download URL
-answers a plain GET with a 302 to ``auth.sima.ai`` -- so those go through
-``sima-cli``, which already holds that login, and fall back to printing the
-command when it is not installed.
+Case 3 is what makes ``sima-vision detect`` work on its own, and it is the case
+that matters: nobody should have to look up a model URL before their first run.
+The clips are on a public GitHub release so they are simply fetched. The model
+packs are behind a `community.sima.ai <https://community.sima.ai>`_ login -- the
+download URL answers a plain GET with a 302 to ``auth.sima.ai`` -- so those go
+through ``sima-cli``, which already holds that login, and fall back to printing
+the command when it is not installed.
 
 Nothing here runs at config time. ``--validate`` resolves the same paths and
 never touches the network; only :meth:`Task.run
@@ -126,16 +127,17 @@ def model_url(task: str) -> str:
 def model_command(task: str) -> str:
     """The one line that downloads the right model pack for a task.
 
-    ``sima-cli download`` needs a community.sima.ai login and writes into the
-    working directory, which is why this exists as a printable string as well as
-    something :func:`ensure_model` runs: getting the directory wrong is the
-    single most common way to end up with a pack the config cannot see.
+    A run does this itself; this is the printable copy, for the case where
+    ``sima-cli`` is not on PATH and a run cannot. ``-o`` rather than a ``cd``
+    into ``assets/models``: naming the destination outright is the difference
+    between a pack the config can see and one that landed wherever the shell
+    happened to be.
     """
     models = models_dir().as_posix()
-    # A subshell rather than `cd there && ... && cd back`: the working directory
-    # you started in is where the rest of the commands expect to be, and one
-    # failed step in the middle of that chain would strand you in assets/models.
-    return f"mkdir -p {models} && (cd {models} && sima-cli download {model_url(task)})"
+    return (
+        f"mkdir -p {models} && "
+        f"sima-cli download {model_url(task)} -o {default_model_path(task)}"
+    )
 
 
 def is_url(value: str) -> bool:
@@ -305,8 +307,9 @@ def ensure_model(path: str, task: str, step=None) -> str:
     say(step, f"get   {url}")
     say(step, "      via sima-cli, which holds your community.sima.ai login")
     result = subprocess.run(  # noqa: S603
-        ["sima-cli", "download", url],
-        cwd=target.parent,
+        # -o names the destination, so this does not depend on where sima-cli
+        # would otherwise have put it or on what the working directory is.
+        ["sima-cli", "download", url, "-o", str(target)],
         check=False,
         # Left alone, sima-cli opens with "a newer version is available, update
         # now? [Y/n]" and waits. Nothing is watching that prompt in the middle
