@@ -31,8 +31,8 @@ pip install sima-vision
 sima-vision detect
 
 # Pull results back to Host device for visualization/display/verification
-# export SIMA_VISION_DEVKIT=sima@192.168.137.50     # macOS, Linux
-# $env:SIMA_VISION_DEVKIT = "sima@192.168.137.50"    # PowerShell
+# export SIMA_VISION_DEVKIT=sima@195.210.584.50     # macOS, Linux
+# $env:SIMA_VISION_DEVKIT = "sima@195.210.584.50"    # PowerShell
 sima-vision pull
 ```
 
