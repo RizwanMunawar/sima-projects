@@ -508,6 +508,14 @@ class BaseConfig:
 
             This is the floor. For a file source ``sink_queue_mb`` raises it
             towards holding the whole clip; see :func:`sink_depth_for`.
+        segment_frames: Frames per piece when a clip is too long for one
+            decode. The SiMa decoder stops part-way through a long clip -- 190
+            to 202 frames of a 379 frame one, whatever the sinks, the pool or
+            the container -- and building the decode again gets another run at
+            it, so a long clip is cut at its keyframes and the pieces are
+            decoded one after another into a single recording. 0 disables it
+            and runs the clip whole. A clip whose keyframes are further apart
+            than this cannot be cut usefully and is run whole regardless.
         decoder_buffers: Buffers to ask the hardware decoder for, through
             ``SimaDecodeOptions.num_buffers``. 0 sizes it from the stream: the
             reference frames its SPS declares, the picture being decoded, what
@@ -594,6 +602,7 @@ class BaseConfig:
     sink_queue_mb: int = 1024
     decoder_pool: int = 8
     decoder_buffers: int = 0
+    segment_frames: int = 150
     output_buffers: int = 1
     run_preset: str = "auto"
     overflow_policy: str = "auto"
@@ -725,6 +734,7 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
         sink_queue_mb=_int(runtime, "sink_queue_mb", 1024),
         decoder_pool=_int(runtime, "decoder_pool", 8),
         decoder_buffers=_int(runtime, "decoder_buffers", 0),
+        segment_frames=_int(runtime, "segment_frames", 150),
         output_buffers=_int(runtime, "output_buffers", 1),
         run_preset=_str(runtime, "preset", defaults.run_preset).lower(),
         overflow_policy=_str(runtime, "overflow_policy", defaults.overflow_policy).lower(),
@@ -807,6 +817,8 @@ def validate_base(cfg: BaseConfig) -> None:
         raise ValueError("runtime.sink_queue_mb must be >= 0")
     if cfg.decoder_pool < 1:
         raise ValueError("runtime.decoder_pool must be >= 1")
+    if cfg.segment_frames < 0:
+        raise ValueError("runtime.segment_frames must be >= 0")
     if cfg.pull_timeout_ms <= 0:
         raise ValueError("runtime.pull_timeout_ms must be > 0")
     if cfg.profile_interval <= 0:

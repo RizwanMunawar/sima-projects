@@ -151,6 +151,11 @@ class SourceTiming:
         self.previous_ns = -1
         self.first_id = -1
         self.last_id = -1
+        self._missing = 0
+        self._pulled_before = 0
+        self._span_ns = 0
+        self._intervals = 0
+        self._frames_before = 0
 
     def add(self, stamp: FrameStamp) -> None:
         self.pulled += 1
@@ -177,18 +182,44 @@ class SourceTiming:
         self.previous_ns = pts
         self.last_ns = max(self.last_ns, pts)
 
+    def restart(self) -> None:
+        """Begin a new piece of a cut-up clip.
+
+        Frame ids and timestamps both start again at each piece, so the gap
+        check has to forget the last one or it reads the restart as the whole
+        clip going missing. The counts carry on: they describe the recording,
+        which spans every piece.
+        """
+        self._missing = self.missing()
+        self._pulled_before = self.pulled
+        self._span_ns += max(0, self.last_ns - self.first_ns)
+        self._intervals += max(0, self.frames - self._frames_before - 1)
+        self._frames_before = self.frames
+        self.first_id = -1
+        self.last_id = -1
+        self.first_ns = -1
+        self.last_ns = -1
+        self.previous_ns = -1
+
     def missing(self) -> int:
         """Frames the ids say existed but that never reached the pull loop."""
         if self.first_id < 0 or self.last_id <= self.first_id:
-            return 0
-        return max(0, (self.last_id - self.first_id + 1) - self.pulled)
+            return self._missing
+        seen = self.pulled - self._pulled_before
+        return self._missing + max(0, (self.last_id - self.first_id + 1) - seen)
 
     def fps(self) -> float:
-        """Frame rate implied by the timestamps, or 0.0 when they cannot say."""
-        span = self.last_ns - self.first_ns
-        if self.frames < 2 or span <= 0:
+        """Frame rate implied by the timestamps, or 0.0 when they cannot say.
+
+        Summed over the pieces rather than measured end to end: each piece
+        stamps from zero again, so first-to-last across a cut-up clip spans
+        nothing meaningful.
+        """
+        span = self._span_ns + max(0, self.last_ns - self.first_ns)
+        intervals = self._intervals + max(0, self.frames - self._frames_before - 1)
+        if intervals < 1 or span <= 0:
             return 0.0
-        return (self.frames - 1) * 1_000_000_000.0 / span
+        return intervals * 1_000_000_000.0 / span
 
 
 def timing_report(cfg, pipeline: Pipeline, timing: SourceTiming) -> list[str]:
@@ -516,8 +547,15 @@ def stall_causes(cfg, pipeline: Pipeline, sink_ms: float) -> list[str]:
 
 def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
                    profile: ProfileWindow, task: TaskRuntime,
-                   timing: SourceTiming) -> tuple[int, int, int]:
-    """The pull loop. Returns ``(processed, timeouts, recovered)``."""
+                   timing: SourceTiming, already: int = 0) -> tuple[int, int, int]:
+    """The pull loop. Returns ``(processed, timeouts, recovered)``.
+
+    Args:
+        already: Frames processed by earlier pieces of a cut-up clip. Frame
+            numbers carry on from there, because they name the stills: two
+            pieces both numbering from one would write frame_000001 twice and
+            the second would overwrite the first.
+    """
     processed = 0
     timeouts = 0
     recovered = 0
@@ -525,7 +563,7 @@ def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
     heartbeat_count = 0
     live_fps = float(pipeline.fps or 25)   # HUD value, refreshed each heartbeat
 
-    while not stopper.stop and (cfg.frames <= 0 or processed < cfg.frames):
+    while not stopper.stop and (cfg.frames <= 0 or already + processed < cfg.frames):
         pull_start = time_ms()
         sample, timed_out, came_back = pull_frame(
             pipeline, cfg, sinks, task.output_label, processed
@@ -547,12 +585,16 @@ def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
 
         stamp = FrameStamp.of(sample)
         timing.add(stamp)
-        frame, results, stage_ms = task.decode(pipeline, cfg, sample, processed + 1)
+        frame, results, stage_ms = task.decode(
+            pipeline, cfg, sample, already + processed + 1
+        )
         sample = None
         decode_end = time_ms()
 
         processed += 1
-        sinks.submit(SinkJob(processed, stamp, frame, results, live_fps))
+        sinks.submit(
+            SinkJob(already + processed, stamp, frame, results, live_fps)
+        )
         sink_end = time_ms()
 
         count = len(results)
@@ -571,7 +613,7 @@ def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
             rate = HEARTBEAT_EVERY * 1000.0 / elapsed if elapsed > 0 else 0.0
             live_fps = rate or live_fps
             console.write(
-                f"  {processed:>6}  {rate:.1f} fps, "
+                f"  {already + processed:>6}  {rate:.1f} fps, "
                 f"{heartbeat_count / HEARTBEAT_EVERY:.1f} {task.unit}/frame avg"
             )
             heartbeat_start = time_ms()
@@ -629,18 +671,44 @@ def report_recording(cfg, pipeline: Pipeline, timeouts: int) -> None:
     console.warn(f"the recording is incomplete: {missing}.\n{listed}")
 
 
-def run_pipeline(pipeline: Pipeline, cfg, stopper: Stopper, task: TaskRuntime) -> int:
-    """Run one task to completion and print the closing report."""
+def run_pipeline(pipeline: Pipeline, cfg, stopper: Stopper, task: TaskRuntime,
+                 rebuild=None) -> int:
+    """Run one task to completion and print the closing report.
+
+    Args:
+        pipeline: Live pipeline, already built for the first piece.
+        cfg: Application configuration.
+        stopper: Cooperative stop flag.
+        task: The pull-loop implementation.
+        rebuild: Optional ``() -> bool`` that points ``pipeline.run`` at the
+            next piece of a cut-up clip and reports whether there was one. The
+            recording, the sinks and the model are untouched across the call,
+            so the pieces land in one continuous video. None runs the source
+            once, which is every case but a clip too long for one decode.
+
+    Returns:
+        Frames processed across every piece.
+    """
     profile = ProfileWindow(cfg.profile, cfg.profile_interval, task.stage, task.unit)
     sinks = SinkWorker(
         cfg, pipeline, sink_depth_for(cfg, pipeline), task.render, task.stream,
         task.metadata,
     )
     timing = SourceTiming()
+    processed = timeouts = recovered = 0
     try:
-        processed, timeouts, recovered = consume_frames(
-            pipeline, cfg, stopper, sinks, profile, task, timing
-        )
+        while True:
+            done, timed_out, came_back = consume_frames(
+                pipeline, cfg, stopper, sinks, profile, task, timing, processed
+            )
+            processed += done
+            timeouts += timed_out
+            recovered += came_back
+            if stopper.stop or rebuild is None or not rebuild():
+                break
+            # Each piece numbers its frames from zero again, so the gap check
+            # would read the restart as thousands of missing frames.
+            timing.restart()
     finally:
         # Ordered before anything that reads writer_frames: frames may still be
         # queued, and they belong in the recording. close() re-raises whatever

@@ -147,6 +147,13 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
              "keep draining the decoder. Raise it if a run stalls. Default 12.",
     )
     run.add_argument(
+        "--segment-frames", dest="runtime.segment_frames", type=int, metavar="N",
+        help="Frames per piece when a clip is too long for one decode. The "
+             "decoder stops around 195 frames, so a longer clip is cut at its "
+             "keyframes and decoded piece by piece into one recording. "
+             "0 runs the clip whole. Default 150.",
+    )
+    run.add_argument(
         "--output-buffers", dest="runtime.output_buffers", type=int, metavar="N",
         help="Buffers each public output may hold. Default 1. Every one is a "
              "frame checked out of the decoder's pool, so raising it used to "

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
+from .. import segments
 from ..assets import ensure_assets
 from ..config import (
     BaseConfig,
@@ -216,6 +218,11 @@ class Task:
         if pipeline.source_frames:
             step.detail(f"{pipeline.source_frames} coded pictures in the clip")
 
+        pieces = self.plan_pieces(cfg, pipeline, step)
+        # The graph below is built for the first piece. `cfg` keeps naming the
+        # whole clip so the counts and the reports stay about the clip.
+        cfg = replace(cfg, source_uri=str(pieces[0][0]))
+
         self.prepare(cfg, pipeline, step)
 
         preset, policy = resolve_flow_control(cfg)
@@ -250,6 +257,13 @@ class Task:
         pipeline.graph = graph
         pipeline.run = graph.build(make_run_options(cfg))
 
+        # Pieces two onward, if the clip had to be cut. Nothing here is built
+        # yet: the first piece is already running above, and each later one
+        # replaces only the graph and the Run. The model, the writer and the
+        # sink thread carry across, which is what puts every piece into one
+        # continuous recording.
+        self.pending = list(pieces[1:])
+
         if cfg.insight_enable:
             start_insight(cfg, pipeline, width, height, fps, step)
         if cfg.save_enable:
@@ -275,6 +289,61 @@ class Task:
                 "stalled source."
             )
         step.done(f"{self.graph_name} ready", timed=True)
+
+    def plan_pieces(self, cfg, pipeline: Pipeline, step):
+        """Cut a clip too long for one decode, or hand back the one piece.
+
+        Returns:
+            A list of ``(path, frames)``, always at least one entry long.
+        """
+        whole = [(Path(cfg.source_uri), pipeline.source_frames)]
+        if (cfg.source_type != "video" or not cfg.segment_frames
+                or not is_elementary_h264(cfg.source_uri)):
+            return whole
+        source = Path(cfg.source_uri)
+        if not source.is_file():
+            return whole
+
+        pieces = segments.split(source, source.parent / "parts", cfg.segment_frames)
+        told = segments.describe(pieces, pipeline.source_frames)
+        if told:
+            step.detail(told)
+        elif pipeline.source_frames > cfg.segment_frames:
+            # Worth saying: the run is about to attempt more in one decode than
+            # this board manages, and the reason it was not cut is fixable.
+            console.warn(
+                f"this clip is {pipeline.source_frames} frames and its keyframes are"
+                f" too far apart to cut into {cfg.segment_frames}s,\n"
+                "  so it has to be decoded in one go. The decoder stops around\n"
+                "  195 frames, so expect a short recording. Re-encode with\n"
+                "  keyframes it can be cut on:\n"
+                "    ffmpeg -i clip.mp4 -c:v libx264 -profile:v main -bf 0 -refs 1 \\\n"
+                "      -g 50 -keyint_min 50 -sc_threshold 0 -c:a copy shallow.mp4"
+            )
+        return pieces
+
+    def next_piece(self, cfg, pipeline: Pipeline, geometry) -> bool:
+        """Point the pipeline at the next piece. False when there are none.
+
+        The Run is replaced; the model, the recording and the sink thread are
+        not. Closing the old Run first matters: it holds the MLA, and two live
+        Runs on one board is how the next launch fails with a busy device.
+        """
+        if not getattr(self, "pending", None):
+            return False
+        path, frames = self.pending.pop(0)
+        width, height, fps = geometry
+        console.report(f"decoding the next piece: {path.name} ({frames} frames)")
+
+        if pipeline.run is not None:
+            pipeline.run.close()
+        graph = build_task_graph(
+            replace(cfg, source_uri=str(path)), pipeline.model, width, height, fps,
+            self.graph_name, self.result_label, self.output_label,
+        )
+        pipeline.graph = graph
+        pipeline.run = graph.build(make_run_options(cfg))
+        return True
 
     def build(self, cfg) -> Pipeline:
         """The startup sequence, as three numbered steps. Shared by every task."""
@@ -309,7 +378,11 @@ class Task:
         try:
             pipeline = self.build(cfg)
             console.banner("running", "press Ctrl-C to stop")
-            return run_pipeline(pipeline, cfg, stopper, self.runtime(cfg, pipeline))
+            geometry = (pipeline.frame_w, pipeline.frame_h, pipeline.fps)
+            return run_pipeline(
+                pipeline, cfg, stopper, self.runtime(cfg, pipeline),
+                rebuild=lambda: self.next_piece(cfg, pipeline, geometry),
+            )
         finally:
             if self.pipeline is not None:
                 self.pipeline.close()

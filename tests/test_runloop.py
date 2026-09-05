@@ -361,6 +361,74 @@ def test_the_heartbeat_counts_what_the_task_returns(capsys):
     assert "3.0 things/frame" in out
 
 
+def test_a_cut_up_clip_runs_every_piece_into_one_recording():
+    """The board stops around 195 frames, so a longer clip is decoded in pieces.
+
+    The model, the writer and the sink thread carry across; only the Run is
+    rebuilt. What comes out has to be one continuous recording with every
+    frame in it, not one file per piece.
+    """
+    cfg, pipeline = make(frames=4, source_frames=12)
+    task = CountingRuntime()
+    remaining = [4, 4]
+
+    def rebuild():
+        if not remaining:
+            return False
+        pipeline.run = FakeRun(remaining.pop(0))
+        return True
+
+    processed = run_pipeline(pipeline, cfg, Stopper(), task, rebuild=rebuild)
+
+    assert processed == 12, "every piece has to be pulled"
+    assert pipeline.writer_frames == 12, "and land in the one recording"
+    assert task.rendered == list(range(1, 13)), "in order, across the joins"
+    assert task.decoded == list(range(1, 13)), (
+        "frame numbers must carry on: they name the stills, and two pieces "
+        "both numbering from one would overwrite each other's"
+    )
+
+
+def test_a_stopped_run_does_not_start_the_next_piece():
+    """Ctrl-C means stop, not stop after the remaining pieces."""
+    cfg, pipeline = make(frames=1000, source_frames=2000)
+    stopper = Stopper()
+    stopper.stop = True
+    asked = []
+
+    run_pipeline(pipeline, cfg, stopper, CountingRuntime(),
+                 rebuild=lambda: asked.append(1) or True)
+    assert not asked
+
+
+def test_frame_ids_restarting_at_each_piece_are_not_read_as_losses():
+    """Each piece numbers from zero, and that is not the clip going missing."""
+    from sima_vision.runloop import SourceTiming
+
+    timing = SourceTiming()
+    for n in range(4):
+        timing.add(FrameStamp(frame_id=n))
+    timing.restart()
+    for n in range(4):
+        timing.add(FrameStamp(frame_id=n))
+
+    assert timing.pulled == 8
+    assert timing.missing() == 0, "a restart is not a gap"
+
+
+def test_losses_inside_a_piece_still_count_after_a_restart():
+    from sima_vision.runloop import SourceTiming
+
+    timing = SourceTiming()
+    for n in (0, 2, 4):                      # two missing in piece one
+        timing.add(FrameStamp(frame_id=n))
+    timing.restart()
+    for n in (0, 1, 2):                      # piece two is clean
+        timing.add(FrameStamp(frame_id=n))
+
+    assert timing.missing() == 2
+
+
 # -- what the app says about playback --
 
 
