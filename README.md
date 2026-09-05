@@ -212,22 +212,30 @@ you are in. **On the board:**
 
 ```
   ERROR  pyneat is missing: no pyneat for python3.11 anywhere under ~, /opt, /media/nvme, ...
-         It is installed onto the board from your PC, by the Palette SDK, and there is no
-         copy of it on the board to install from. From the PC that pairs with this board:
-           sima-cli sdk setup --devkit <this board's ip>
+         It comes with the Neat core, which is not on PyPI. Install it here, on the board:
+           sima-cli login
+           sima-cli neat install core@v0.3.0
          Then run this command again. If pyneat is installed but somewhere unusual:
            export SIMA_VISION_PYNEAT=/path/to/the/venv
-```
-
-Pairing is SiMa's procedure and it installs over the network, so it fails quietly when
-there is no route. Confirm the board half actually landed:
-
-```bash
-ssh sima@<devkit-ip> "~/pyneat/bin/python3 -c 'import pyneat; print(pyneat.__version__)'"
+         If `sima-cli` is not on the board either, pairing never finished: run
+         `sima-cli sdk setup --devkit <this board's ip>` from the PC that pairs with it.
 ```
 
 The path `SIMA_VISION_PYNEAT` wants is the virtualenv root, the directory holding `lib/`
 and `bin/`, not the `pyneat` folder inside it.
+
+**A board paired with an older SDK** has `pyneat`, just not one this can drive. That is
+caught while probing the source, before the model load, and says the same thing:
+
+```
+  ERROR  this Neat Library build cannot read a raw H.264 file.
+           installed: pyneat 0.2.2
+           wanted:    pyneat 0.3.0
+           missing:   pyneat.SimaDecodeOptions, pyneat.SimaDecodeType
+         Install the core this is written against, here on the board:
+           sima-cli login
+           sima-cli neat install core@v0.3.0
+```
 
 **On your laptop**, missing `pyneat` is simply what a laptop is. Nothing is wrong, and the
 message says so instead of pretending something can be installed:

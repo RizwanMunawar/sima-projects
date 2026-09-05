@@ -163,7 +163,7 @@ def test_an_old_neat_build_is_refused_while_probing(tmp_path, monkeypatch):
     problem. It has to be caught while probing the source, which is the last
     cheap moment before that load.
     """
-    from sima_vision import media, runtime
+    from sima_vision import bootstrap, media, runtime
 
     clip = tmp_path / "clip.h264"
     clip.write_bytes(bytes([0, 0, 0, 1, 0x67]))
@@ -180,7 +180,11 @@ def test_an_old_neat_build_is_refused_while_probing(tmp_path, monkeypatch):
     message = str(caught.value)
     assert "0.2.2" in message, "say which build is installed"
     assert "pyneat.SimaDecodeOptions" in message, "and exactly what it is missing"
-    assert "sima-cli sdk setup" in message, "and what to do about it"
+    # The fix runs on the board. Sending someone to their PC to re-pair, which
+    # is what this said first, is a much longer way round for a core that one
+    # command installs in place.
+    assert bootstrap.NEAT_INSTALL in message, "and the command that fixes it"
+    assert bootstrap.NEAT_VERSION in message, "and which version it wants"
 
 
 def test_a_capable_build_passes(tmp_path, monkeypatch):

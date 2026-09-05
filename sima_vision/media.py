@@ -14,6 +14,7 @@ from fractions import Fraction
 from pathlib import Path
 
 from . import runtime
+from .bootstrap import NEAT_INSTALL, NEAT_VERSION
 from .console import console
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -573,12 +574,10 @@ def check_source_support(cfg) -> None:
     raise RuntimeError(
         f"this Neat Library build cannot read {SOURCE_NAMES.get(kind, kind)}.\n"
         f"  installed: pyneat {version}\n"
+        f"  wanted:    pyneat {NEAT_VERSION}\n"
         f"  missing:   {', '.join('pyneat.' + name for name in missing)}\n"
-        "sima-vision is written against Neat 0.3.0, which is what Palette SDK "
-        "2.1.2 installs.\n"
-        "Update the SDK on your PC and pair the board again:\n"
-        "  sima-cli install ghcr:sima-neat/sdk\n"
-        "  sima-cli sdk setup --devkit <this board's ip>"
+        "Install the core this is written against, here on the board:\n"
+        f"  sima-cli login\n  {NEAT_INSTALL}"
     )
 
 
