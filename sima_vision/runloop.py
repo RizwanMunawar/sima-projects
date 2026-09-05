@@ -19,15 +19,6 @@ from .sinks import Pipeline, SinkJob, SinkWorker
 
 HEARTBEAT_EVERY = 50
 
-#: How many times a *demonstrably incomplete* clip is fought for before the run
-#: is called off. A stall is the app's own back-pressure -- the pull loop parked
-#: in ``submit`` while the decoder's small pool filled -- and handing the backlog
-#: back is what releases it, so a retry is worth far more than a clean exit. One
-#: retry was not always enough, and giving up left a recording holding a fraction
-#: of a clip whose length the app already knew. See :func:`stall_attempts`.
-STALL_RETRIES = 3
-
-
 class Stopper:
     """Cooperative stop flag driven by SIGINT, SIGTERM and SIGHUP.
 
@@ -130,6 +121,81 @@ class ProfileWindow:
         self.reset()
 
 
+class SourceTiming:
+    """What the frame timestamps say, as opposed to what the SPS claims.
+
+    The recording is written at one constant rate, chosen before a single frame
+    has arrived: ``video_fps``, or the SPS rate, or 25. Nothing afterwards ever
+    checks that guess against the frames themselves, and both ways of being
+    wrong look the same in a player -- like a bad recording.
+
+    * A rate that does not match the source plays the whole clip at the wrong
+      speed. The motion is smooth, it is just too fast or too slow.
+    * Timestamps that go backwards mean frames are arriving in decode order
+      rather than presentation order, which is what a stream with B-frames does
+      when nothing reorders it. Written in arrival order, motion jerks back and
+      forth a frame at a time.
+
+    Attributes:
+        frames: Frames that carried a usable timestamp.
+        out_of_order: Frames whose timestamp went backwards.
+    """
+
+    def __init__(self) -> None:
+        self.frames = 0
+        self.out_of_order = 0
+        self.first_ns = -1
+        self.last_ns = -1
+        self.previous_ns = -1
+
+    def add(self, stamp: FrameStamp) -> None:
+        pts = stamp.pts_ns
+        if pts < 0:                      # a source that stamps nothing
+            return
+        self.frames += 1
+        if self.first_ns < 0:
+            self.first_ns = pts
+        if self.previous_ns >= 0 and pts < self.previous_ns:
+            self.out_of_order += 1
+        self.previous_ns = pts
+        self.last_ns = max(self.last_ns, pts)
+
+    def fps(self) -> float:
+        """Frame rate implied by the timestamps, or 0.0 when they cannot say."""
+        span = self.last_ns - self.first_ns
+        if self.frames < 2 or span <= 0:
+            return 0.0
+        return (self.frames - 1) * 1_000_000_000.0 / span
+
+
+def timing_report(cfg, pipeline: Pipeline, timing: SourceTiming) -> list[str]:
+    """Lines about playback, and only when there is something wrong with it."""
+    lines: list[str] = []
+    if pipeline.writer is None or not pipeline.writer_frames:
+        return lines
+
+    if timing.out_of_order:
+        lines.append(
+            f"playback: {timing.out_of_order} frame(s) arrived with a timestamp"
+            " earlier than the one before, so the source is handing over\n"
+            "  decode order, not presentation order. This clip has B-frames\n"
+            "  and nothing is reordering them. The recording is written in\n"
+            "  arrival order, so motion will jerk back and forth a frame at a time."
+        )
+
+    measured = timing.fps()
+    written = cfg.video_fps or pipeline.fps or 25
+    # 2% covers rounding an SPS rate like 24000/1001 to 24, which is right.
+    if measured and abs(measured - written) / written > 0.02:
+        lines.append(
+            f"playback: the recording is written at {written} fps but the frame"
+            f" timestamps say the source is {measured:.2f} fps, so it plays"
+            f" {written / measured:.2f}x too fast.\n"
+            f"  Re-run with --video-fps {round(measured)} to match the source."
+        )
+    return lines
+
+
 class TaskRuntime:
     """What the pull loop needs from a task.
 
@@ -212,23 +278,25 @@ def stall_attempts(pipeline: Pipeline, processed: int) -> int:
     """How hard to fight a silent source, given what is known about the clip.
 
     The clip's length is counted before the run starts, so silence is not
-    always the same question. Three cases, and they want three different
-    answers:
+    always the same question:
 
     * **Every frame arrived.** This is the end of the file, not a stall. The
       old code still drained and waited a full ``pull_timeout_ms`` here, so a
       perfectly healthy run ended with a scary warning and twenty idle seconds.
-    * **Frames are demonstrably left.** The source did not end, so it stalled,
-      and a stall is nearly always this app's own back-pressure. Retry.
-    * **Length unknown** (a live source, or a container we could not count).
-      One retry, which is what tells a starved pool from a finished clip.
+    * **Anything else.** One retry, which is what tells a starved pool from
+      a finished clip.
+
+    There was briefly a larger budget for a clip with frames demonstrably
+    left, on the theory that draining the sink queue releases the stall.
+    Four runs on a DevKit said otherwise -- ``recovered=0`` every time -- so
+    the extra attempts bought nothing and cost a ``pull_timeout_ms`` each.
+    The stall that was really happening is fixed in :func:`sink_depth_for`
+    instead, by not letting the pull loop park in the first place.
     """
     total = pipeline.source_frames
-    if not total:
-        return 1
-    if processed >= total:
+    if total and processed >= total:
         return 0
-    return STALL_RETRIES
+    return 1
 
 
 def pull_frame(pipeline: Pipeline, cfg, sinks: SinkWorker, label: str, processed: int):
@@ -381,7 +449,8 @@ def stall_causes(cfg, pipeline: Pipeline, sink_ms: float) -> list[str]:
 
 
 def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
-                   profile: ProfileWindow, task: TaskRuntime) -> tuple[int, int, int]:
+                   profile: ProfileWindow, task: TaskRuntime,
+                   timing: SourceTiming) -> tuple[int, int, int]:
     """The pull loop. Returns ``(processed, timeouts, recovered)``."""
     processed = 0
     timeouts = 0
@@ -411,6 +480,7 @@ def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
             continue
 
         stamp = FrameStamp.of(sample)
+        timing.add(stamp)
         frame, results, stage_ms = task.decode(pipeline, cfg, sample, processed + 1)
         sample = None
         decode_end = time_ms()
@@ -500,9 +570,10 @@ def run_pipeline(pipeline: Pipeline, cfg, stopper: Stopper, task: TaskRuntime) -
         cfg, pipeline, sink_depth_for(cfg, pipeline), task.render, task.stream,
         task.metadata,
     )
+    timing = SourceTiming()
     try:
         processed, timeouts, recovered = consume_frames(
-            pipeline, cfg, stopper, sinks, profile, task
+            pipeline, cfg, stopper, sinks, profile, task, timing
         )
     finally:
         # Ordered before anything that reads writer_frames: frames may still be
@@ -526,6 +597,8 @@ def run_pipeline(pipeline: Pipeline, cfg, stopper: Stopper, task: TaskRuntime) -
         )
 
     report_recording(cfg, pipeline, timeouts)
+    for line in timing_report(cfg, pipeline, timing):
+        console.warn(line)
 
     if pipeline.metadata_sender is not None:
         stats = pipeline.metadata_sender.stats()

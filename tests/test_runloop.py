@@ -15,11 +15,13 @@ import numpy as np
 import pytest
 
 from sima_vision.runloop import (
+    FrameStamp,
     Stopper,
     TaskRuntime,
     run_pipeline,
     source_stopped_message,
     stall_causes,
+    timing_report,
 )
 from sima_vision.sinks import Pipeline
 from sima_vision.tasks import TASKS
@@ -219,11 +221,9 @@ def test_a_clip_with_frames_left_is_fought_for_not_abandoned(capsys):
     counted and printed. Draining the sink queue is what releases the stall, so
     the frames the app knows are still coming are worth more than one attempt.
     """
-    from sima_vision.runloop import STALL_RETRIES
-
     cfg, pipeline = make(frames=4, source_frames=100)
-    # Silent for two whole attempts, then the backlog clears and it comes back.
-    pipeline.run.timeouts_at = {4: STALL_RETRIES - 1}
+    # Silent once, then the backlog clears and the source comes back.
+    pipeline.run.timeouts_at = {4: 1}
     pipeline.run.frames = 9
 
     processed = run_pipeline(pipeline, cfg, Stopper(), CountingRuntime())
@@ -252,16 +252,20 @@ def test_the_recovery_advice_points_the_knob_the_right_way(capsys):
     assert "lower runtime.sink_queue_depth" not in out
 
 
-def test_how_hard_a_silent_source_is_fought_depends_on_the_clip():
-    """Three different questions wearing the same silence."""
-    from sima_vision.runloop import STALL_RETRIES, stall_attempts
+def test_a_finished_clip_is_the_only_silence_not_worth_retrying():
+    """Two different questions wearing the same silence.
+
+    A larger retry budget for a clip with frames left was tried and removed:
+    four DevKit runs reported `recovered=0`, so draining and asking again never
+    once helped, and each attempt cost a full `pull_timeout_ms`.
+    """
+    from sima_vision.runloop import stall_attempts
 
     # Every frame arrived: this is the end of the file, not a stall.
     assert stall_attempts(stalled_pipeline(total=379), 379) == 0
     assert stall_attempts(stalled_pipeline(total=379), 400) == 0
-    # Frames demonstrably left: the source stalled, so fight for them.
-    assert stall_attempts(stalled_pipeline(total=379), 28) == STALL_RETRIES
-    # Length unknown: one retry tells a starved pool from a finished clip.
+    # Anything else is worth exactly one retry.
+    assert stall_attempts(stalled_pipeline(total=379), 28) == 1
     assert stall_attempts(stalled_pipeline(total=0), 28) == 1
 
 
@@ -355,6 +359,81 @@ def test_the_heartbeat_counts_what_the_task_returns(capsys):
         runloop.HEARTBEAT_EVERY = monkey
     out = capsys.readouterr().out
     assert "3.0 things/frame" in out
+
+
+# -- what the app says about playback --
+
+
+def stamps(*pts_ms):
+    """A SourceTiming fed the given presentation times, in milliseconds."""
+    from sima_vision.runloop import SourceTiming
+
+    timing = SourceTiming()
+    for ms in pts_ms:
+        timing.add(FrameStamp(pts_ns=int(ms * 1_000_000)))
+    return timing
+
+
+def test_the_rate_comes_from_the_timestamps_not_the_gaps():
+    """Rate is span over intervals, so one long gap does not rewrite it."""
+    assert stamps(0, 40, 80, 120).fps() == pytest.approx(25.0)
+    assert stamps(0, 20, 40, 60, 80).fps() == pytest.approx(50.0)
+    # Fewer than two stamps, or no span, cannot say anything.
+    assert stamps(0).fps() == 0.0
+    assert stamps().fps() == 0.0
+    # A source that stamps nothing is not a source running at zero fps.
+    assert stamps(-1, -1).frames == 0
+
+
+def test_a_recording_written_at_the_wrong_rate_says_so_and_says_what_to_use():
+    """Written at one rate, sourced at another: the whole clip plays wrong.
+
+    Nothing checked the rate guessed before the run against the frames that
+    actually turned up, so the only symptom was a video that played too fast.
+    """
+    cfg, pipeline = make(frames=4, **{"output.video.fps": 30})
+    pipeline.fps, pipeline.writer_frames = 30, 4
+    lines = timing_report(cfg, pipeline, stamps(0, 40, 80, 120))   # a 25 fps source
+
+    assert len(lines) == 1
+    assert "written at 30 fps" in lines[0]
+    assert "source is 25.00 fps" in lines[0]
+    assert "1.20x too fast" in lines[0]
+    assert "--video-fps 25" in lines[0]
+
+
+def test_a_rate_that_only_looks_wrong_to_rounding_is_left_alone():
+    """24000/1001 is 23.976, and an SPS that rounds it to 24 is not a bug."""
+    cfg, pipeline = make(frames=4)
+    pipeline.fps, pipeline.writer_frames = 24, 4
+    assert timing_report(cfg, pipeline, stamps(0, 41.7083, 83.4166, 125.125)) == []
+
+
+def test_timestamps_that_go_backwards_are_named_as_decode_order():
+    """B-frames arriving unreordered, which is what jerky motion looks like."""
+    cfg, pipeline = make(frames=4)
+    pipeline.fps, pipeline.writer_frames = 25, 6
+    lines = timing_report(cfg, pipeline, stamps(0, 80, 40, 120, 200, 160))
+
+    assert any("decode order, not presentation order" in line for line in lines)
+    assert any("2 frame(s) arrived" in line for line in lines)
+
+
+def test_playback_is_silent_when_there_is_no_recording_to_play():
+    """Nothing was written, so there is nothing to be wrong about."""
+    cfg, pipeline = make(frames=4, writer=False)
+    pipeline.fps = 30
+    assert timing_report(cfg, pipeline, stamps(0, 40, 80)) == []
+
+
+def test_the_run_measures_the_source_it_actually_pulled(capsys):
+    """End to end: the loop feeds the stamps and the closing report uses them."""
+    cfg, pipeline = make(frames=6, **{"output.video.fps": 30})
+    run_pipeline(pipeline, cfg, Stopper(), CountingRuntime())
+
+    out = capsys.readouterr().out
+    assert "written at 30 fps" in out, "the run should have measured 25 fps"
+    assert "--video-fps 25" in out
 
 
 # -- what the app says when the source stalls --
