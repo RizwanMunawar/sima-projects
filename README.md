@@ -18,22 +18,28 @@
 
 </div>
 
-## 3 steps workflow on Devkit
+**Live YOLO26 on the MLA of a SiMa.ai Modalix DevKit 3.0.** Object detection, instance
+segmentation and fall detection: three apps, one pipeline, no setup step.
 
-### Install the SiMa.ai Neat Core 0.3.0
+Needs a Modalix DevKit 3.0 and Python 3.10 or later. Everything below runs **on the
+board** unless it says otherwise.
+
+## Quickstart
+
+### 1 &middot; Install the SiMa.ai Neat Core
 
 ```bash
 sima-cli login
 sima-cli neat install core@v0.3.0
 ```
 
-### Install the sima-vision Python package
+### 2 &middot; Install sima-vision
 
 ```bash
 pip install sima-vision
 ```
 
-### Run the inference on DevKit
+### 3 &middot; Run it
 
 **Nothing to download first.** Each app fetches its own pretrained YOLO26 pack and a demo
 clip into `./assets` on its first run, then runs. Every run after that reuses them.
@@ -44,7 +50,6 @@ clip into `./assets` on its first run, then runs. Every run after that reuses th
 | `segment` | `yolo26m-seg-bf16-mla_tess-b1.tar.gz` + the same clip | `segmentation.mp4`, `frames/` |
 | `fall` | the detection pack again + a shorter clip (1.2 MB) | `falls.mp4`, `frames/`, `alerts/` |
 
-#### Object detection
 ```bash
 sima-vision detect
 ```
@@ -72,33 +77,33 @@ Nothing is emailed until you pass `--send`; without it a fall is composed and lo
 you can see what would have gone out.
 
 </details>
-<br>
 
-A run finds the Neat runtime, puts the board's numpy and OpenCV on the path, downloads
-whatever is missing, and says what it is doing at every stage. There is no setup command
-and no config to write. Output lands beside the run, on the board. Bring it back to your PC:
+---
+
+> [!TIP]
+> **That is the whole setup.** No setup command, no config file, nothing to download by
+> hand. A run finds the Neat runtime, puts the board's numpy and OpenCV on the path,
+> fetches whatever is missing, and says what it is doing at every stage.
+>
+> Everything below is optional. Take what you need.
+
+## Moving files between the board and your PC
+
+Output lands beside the run, on the board. Name the board once and neither command needs
+`--host`:
 
 ```bash
-# Linux, macOS
-# export SIMA_VISION_DEVKIT=sima@<devkit-ip> 
-
-# Windows Powershell
-# $env:SIMA_VISION_DEVKIT="sima@<devkit-ip>"
-sima-vision pull
+export SIMA_VISION_DEVKIT=sima@<devkit-ip>      # Linux, macOS
+$env:SIMA_VISION_DEVKIT="sima@<devkit-ip>"      # Windows PowerShell
 ```
 
-### Moving files between Host PC and Devkit
-
-Set `SIMA_VISION_DEVKIT` as above and neither needs `--host`.
-
 ```bash
-sima-vision push my-clip.h264      # host -> DevKit
 sima-vision pull                   # DevKit -> host, whatever the run left
-sima-vision pull --into results/   # DevKit -> host, pull in specific directory
+sima-vision pull --into results/   # ...into a directory of your choosing
+sima-vision push my-clip.h264      # host -> DevKit
 ```
 
-### Your own footage
-
+## Use your own footage
 A path or an `https` URL. It must be raw H.264, never `.mp4`: the board decodes H.264 in
 hardware, and a container hits a demuxer bug in Neat 0.3.0. Convert once, losslessly:
 
@@ -108,9 +113,9 @@ sima-vision push clip.h264
 sima-vision detect --source clip.h264
 ```
 
-### Flags worth knowing
+## Flags worth knowing
 
-`sima-vision <command> --help` lists the rest:
+`sima-vision <command> --help` lists the rest.
 
 | Flag | What it does |
 |:--|:--|
