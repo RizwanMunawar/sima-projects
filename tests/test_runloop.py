@@ -14,7 +14,13 @@ import threading
 import numpy as np
 import pytest
 
-from sima_vision.runloop import Stopper, TaskRuntime, run_pipeline
+from sima_vision.runloop import (
+    Stopper,
+    TaskRuntime,
+    run_pipeline,
+    source_stopped_message,
+    stall_causes,
+)
 from sima_vision.sinks import Pipeline
 from sima_vision.tasks import TASKS
 
@@ -282,3 +288,80 @@ def test_the_heartbeat_counts_what_the_task_returns(capsys):
         runloop.HEARTBEAT_EVERY = monkey
     out = capsys.readouterr().out
     assert "3.0 things/frame" in out
+
+
+# -- what the app says when the source stalls --
+
+
+def stall_config(**settings):
+    base = {"model.path": "m.tar.gz", "source.uri": "c.h264"}
+    return TASKS["detect"]().load(None, {**base, **settings}, use_file=False)
+
+
+def stalled_pipeline(fps: int = 24, total: int = 379) -> Pipeline:
+    pipeline = Pipeline(labels=["person"])
+    pipeline.fps = fps
+    pipeline.source_frames = total
+    return pipeline
+
+
+def test_the_advice_only_names_flags_that_exist():
+    """It told a `detect` user to run `--minimal`, which only `segment` has.
+
+    Advice that does not parse is worse than none: it costs a run to find out.
+    Every flag this message mentions has to be accepted by every task, since
+    one message is shared by all of them.
+    """
+    import re
+
+    from sima_vision.cli import build_parser
+
+    message = source_stopped_message(stall_config(), stalled_pipeline(), 23, sink_ms=183.0)
+    mentioned = set(re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]+)", message))
+    assert mentioned, "the message should suggest something"
+
+    # Compared against the option strings rather than parsed: some of these take
+    # a value, and this is asking whether the flag exists, not how to call it.
+    subparsers = [
+        action.choices
+        for action in build_parser()._actions
+        if isinstance(getattr(action, "choices", None), dict)
+    ][0]
+    for task in TASKS:
+        accepted = {
+            option
+            for action in subparsers[task]._actions
+            for option in action.option_strings
+        }
+        unknown = mentioned - accepted
+        assert not unknown, f"the stall advice tells `{task}` to use {sorted(unknown)}"
+
+
+def test_the_measured_cause_is_ranked_first():
+    """The run timed the sinks. A measurement outranks a hypothesis."""
+    causes = stall_causes(stall_config(), stalled_pipeline(), sink_ms=183.0)
+    assert "sinks cannot keep up" in causes[0]
+    assert "183 ms" in causes[0] and "42 ms" in causes[0]
+
+
+def test_sinks_that_keep_up_are_not_blamed():
+    causes = stall_causes(stall_config(), stalled_pipeline(), sink_ms=2.0)
+    assert not any("cannot keep up" in cause for cause in causes)
+    assert "decoder ran out of buffers" in causes[0]
+
+
+def test_insight_is_only_blamed_when_it_is_on():
+    """It was listed unconditionally, so every user had one more thing to rule out."""
+    off = stall_causes(stall_config(), stalled_pipeline(), sink_ms=0.0)
+    assert not any("insight" in cause for cause in off)
+
+    on = stall_causes(
+        stall_config(**{"output.insight.enable": True}), stalled_pipeline(), sink_ms=0.0
+    )
+    assert any("insight" in cause for cause in on)
+
+
+def test_a_complete_run_is_not_called_a_stall():
+    message = source_stopped_message(stall_config(), stalled_pipeline(total=23), 23)
+    assert "the run is complete" in message
+    assert "In order of likelihood" not in message
