@@ -240,6 +240,17 @@ class Task:
                 f"video: {pipeline.writer_path} codec={cfg.video_codec} "
                 f"fps={cfg.video_fps or fps} hud={cfg.video_hud}"
             )
+        if not (cfg.save_enable or cfg.video_enable or cfg.insight_enable):
+            # Not an error. `stall_causes` tells a stalled run to come back with
+            # `--no-save --no-video`, and for a while the app answered that
+            # advice with "enable at least one of output.save, output.video or
+            # output.insight" -- refusing the one run that separates a slow app
+            # from a stalled graph. Saying what the run does is enough.
+            step.note(
+                "no outputs are enabled, so this run writes nothing and measures "
+                "the graph alone. That is what tells a slow app apart from a "
+                "stalled source."
+            )
         step.done(f"{self.graph_name} ready", timed=True)
 
     def build(self, cfg) -> Pipeline:

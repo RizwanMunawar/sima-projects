@@ -404,6 +404,50 @@ def test_the_advice_only_names_flags_that_exist():
         assert not unknown, f"the stall advice tells `{task}` to use {sorted(unknown)}"
 
 
+def test_the_run_the_advice_asks_for_is_a_run_the_app_accepts():
+    """The stall advice said `--no-save --no-video`; the config rejected it.
+
+    A stalled run was told to come back with every sink off, because that is
+    the one run that separates a slow app from a stalled graph. Doing as it
+    said got you `ERROR enable at least one of output.save, output.video or
+    output.insight` -- the app refusing its own instructions.
+
+    Checking that the flags *exist* was not enough to catch this, so this asks
+    the stronger question: feed the advice's own switches to the parser and
+    make sure the config they produce is one the app will run.
+    """
+    import re
+
+    from sima_vision.cli import build_parser, collect_overrides
+
+    parser = build_parser()
+    message = source_stopped_message(stall_config(), stalled_pipeline(), 36, sink_ms=117.0)
+    mentioned = set(re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]+)", message))
+
+    subparsers = [
+        action.choices
+        for action in parser._actions
+        if isinstance(getattr(action, "choices", None), dict)
+    ][0]
+    # Only the switches: a flag that takes a value cannot be pasted in blind,
+    # and it is the valueless ones the advice actually strings together.
+    switches = sorted(
+        option
+        for action in subparsers["detect"]._actions
+        if action.nargs == 0
+        for option in action.option_strings
+        if option in mentioned
+    )
+    assert switches, "the advice should suggest at least one switch to try"
+
+    args = parser.parse_args(
+        ["detect", *switches, "--model", "m.tar.gz", "--source", "c.h264"]
+    )
+    for task in TASKS:
+        # No raise is the whole assertion: the advice has to be runnable.
+        TASKS[task]().load(None, collect_overrides(args), use_file=False)
+
+
 def test_the_measured_cause_is_ranked_first():
     """The run timed the sinks. A measurement outranks a hypothesis."""
     causes = stall_causes(stall_config(), stalled_pipeline(), sink_ms=183.0)

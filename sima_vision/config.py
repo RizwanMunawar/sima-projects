@@ -812,10 +812,6 @@ def validate_base(cfg: BaseConfig) -> None:
         )
     if not 0.0 <= cfg.draw.mask_alpha <= 1.0:
         raise ValueError("visualization.mask_alpha must be in [0.0, 1.0]")
-    if not (cfg.save_enable or cfg.insight_enable or cfg.video_enable):
-        raise ValueError(
-            "enable at least one of output.save, output.video or output.insight"
-        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
