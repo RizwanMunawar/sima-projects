@@ -301,8 +301,12 @@ class DrawConfig:
         banner_bg_color: Strip fill, BGR.
         banner_text_color: Strip text, BGR.
         hud_text_color: Frame-rate badge text colour, BGR.
-        hud_bg_color: Frame-rate badge fill colour, BGR.
-        hud_text_scale: Badge font scale. 0 follows ``text_scale``.
+        hud_bg_color: Frame-rate badge fill colour, BGR. Purple by default,
+            which reads as an overlay rather than as part of the footage the
+            way a black block did.
+        hud_text_scale: Badge font scale. 0 follows ``text_scale``. Set a
+            little above it by default: the badge is glanced at while the
+            video plays, not read, so it wants to be larger than a caption.
         hud_text_thickness: Badge stroke weight. 0 follows ``text_thickness``.
         hud_padding: Gap between badge text and badge edge, on every side. 0
             follows ``text_padding``. This is what sets the badge size when no
@@ -347,8 +351,8 @@ class DrawConfig:
     banner_text_color: tuple[int, int, int] = (255, 255, 255)
 
     hud_text_color: tuple[int, int, int] = (255, 255, 255)
-    hud_bg_color: tuple[int, int, int] = (0, 0, 0)
-    hud_text_scale: float = 0.0
+    hud_bg_color: tuple[int, int, int] = (128, 0, 128)
+    hud_text_scale: float = 1.3
     hud_text_thickness: int = 0
     hud_padding: int = 0
     hud_padding_x: int = 0
