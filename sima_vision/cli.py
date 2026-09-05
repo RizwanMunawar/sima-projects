@@ -147,6 +147,13 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
              "keep draining the decoder. Raise it if a run stalls. Default 12.",
     )
     run.add_argument(
+        "--output-buffers", dest="runtime.output_buffers", type=int, metavar="N",
+        help="Buffers each public output may hold. Default 1. Every one is a "
+             "frame checked out of the decoder's pool, so raising it used to "
+             "make a starved run worse -- but --decoder-buffers can now pay "
+             "for it. Worth a 2 if frames are being dropped at the join.",
+    )
+    run.add_argument(
         "--decoder-buffers", dest="runtime.decoder_buffers", type=int, metavar="N",
         help="Buffers to ask the hardware decoder for. Default 0, which sizes "
              "it from the stream's own reference frames -- the fix for a run "
