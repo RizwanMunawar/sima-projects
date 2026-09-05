@@ -5,8 +5,9 @@
 [![SiMa.ai](https://img.shields.io/badge/SiMa.ai-Modalix_DevKit_3.0-E63946)](https://sima.ai)
 [![Palette SDK](https://img.shields.io/badge/Palette_SDK-2.1.2-457B9D)](https://docs.sima.ai)
 [![Neat](https://img.shields.io/badge/Neat-0.3.0-2A9D8F)](https://docs.sima.ai)
+
 [![CI](https://github.com/RizwanMunawar/sima-projects/actions/workflows/ci.yml/badge.svg)](https://github.com/RizwanMunawar/sima-projects/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/badge/pip_install-sima--vision-3775A9?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/sima-vision/)
+[![PyPI](https://img.shields.io/badge/pip_install-sima--vision-3775A9&logo=pypi&logoColor=white)](https://pypi.org/project/sima-vision/)
 [![Python](https://img.shields.io/badge/python-3.10+-3776AB&logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-6C757D)](LICENSE)
 [![YOLO26](https://img.shields.io/badge/Ultralytics-YOLO26-FFB703&labelColor=333)](https://github.com/ultralytics/ultralytics)
@@ -15,34 +16,93 @@
 [![Segmentation and blur](https://img.shields.io/badge/Segmentation-blur-FF64DA?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)
 [![Object detection](https://img.shields.io/badge/Object-detection-042AFF?style=flat-square&labelColor=333)](https://github.com/ultralytics/ultralytics)
 
-<h3>Live YOLO26 on the MLA of a SiMa.ai Modalix DevKit 3.0. Three apps, one pipeline, two commands.</h3>
-
 </div>
 
+## Usage
+
 ```bash
-# Install core
+# 1. Install the SiMa.ai Neat Core
 sima-cli login
 sima-cli neat install core@v0.3.0
 
-# Install sima-vision python package
+# 2. Install the sima-vision Python package
 pip install sima-vision
 
-# Object detection
+# 3. Download the YOLO26 detection model
+mkdir -p assets/models
+sima-cli download \
+  https://docs.sima.ai/pkg_downloads/SDK2.1.2/models/modalix/yolo26-detection/yolo26m-det-bf16-mla_tess-b1.tar.gz \
+  -o assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
+
+# 4. Run YOLO26 object detection on the DevKit
 sima-vision detect
 
-# Pull results back to Host device for visualization/display/verification
-# export SIMA_VISION_DEVKIT=sima@195.210.584.50     # macOS, Linux
-# $env:SIMA_VISION_DEVKIT = "sima@195.210.584.50"    # PowerShell
+# 5. Pull inference results back to the host for visualization/verification
+#
+# macOS / Linux:
+# export SIMA_VISION_DEVKIT=sima@<DEVKIT_IP>
+#
+# PowerShell:
+# $env:SIMA_VISION_DEVKIT = "sima@<DEVKIT_IP>"
+#
 sima-vision pull
 ```
 
-There is no third command. No setup step, no init, no fetch, no doctor: the run itself
-finds the Neat runtime, puts the board's numpy and OpenCV on the path, downloads the
-model pack and a sample clip, and tells you what it is doing at every step.
+Steps 1 and 3 are one-time. After them the run is the only command: there is no setup
+step, no init and no doctor, because `sima-vision detect` finds the Neat runtime itself,
+puts the board's numpy and OpenCV on the path, fetches anything still missing, and says
+what it is doing at every stage.
 
 > **Inference runs on the board; you drive it from your PC.** `sima-vision watch -- detect`
 > starts the task on the DevKit and streams the real annotated video back to your screen.
-> Checking settings needs no hardware at all.
+
+## Additional commands
+
+The other two apps, run exactly like `detect` and sharing its clip and settings:
+
+```bash
+# Instance segmentation, with an optional background blur
+sima-vision segment
+sima-vision segment --blur --keep-classes person
+
+# Fall detection, with SMTP alerts. Nothing is emailed until you pass --send
+sima-vision fall
+sima-vision fall --alert-to ops@example.com
+```
+
+Your own footage or your own model, as a path or an `https` URL. Video must be raw
+H.264; [Quickstart](#on-the-devkit) has the one-line `ffmpeg` conversion:
+
+```bash
+sima-vision detect --source my-clip.h264 --model my-model.tar.gz
+sima-vision detect --source https://example.com/my-clip.h264
+```
+
+Driving the board from your PC, once `$SIMA_VISION_DEVKIT` is set as in step 5:
+
+```bash
+sima-vision watch  -- detect                # run it there, live video on your screen
+sima-vision remote -- detect --frames 200   # run it there, output in this terminal
+sima-vision push my-clip.h264               # host -> DevKit
+sima-vision pull --into results/            # DevKit -> host
+```
+
+On a laptop, with no board and no network:
+
+```bash
+sima-vision detect --validate               # resolve and check the settings, then stop
+```
+
+The flags worth knowing before you read [Settings](#settings):
+
+| Flag | What it does |
+|:--|:--|
+| `--frames 200` | Stop after N frames. The quickest way to try something |
+| `--conf 0.5` | Raise the confidence floor. Default `0.30` |
+| `--no-video` / `--no-save` | Skip the recording or the stills. Together they are the cheapest possible run, which is how you tell a slow app apart from a stalled graph |
+| `--quiet` | Warnings, errors and the closing report only |
+| `--profile` | Per-stage timings, when a run is slower than it should be |
+| `--help` | Every flag a command takes |
 
 ## Contents
 

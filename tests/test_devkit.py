@@ -20,10 +20,17 @@ HOST = "sima@192.168.137.50"
 
 
 @pytest.fixture(autouse=True)
-def tools(monkeypatch):
-    """Pretend ssh and scp are installed, and forget any real DevKit address."""
+def tools(monkeypatch, tmp_path):
+    """Pretend ssh and scp are installed, and forget any real DevKit address.
+
+    Also run from a scratch directory. `watch` writes its SDP to
+    ./sima-vision.sdp when it is not told otherwise, and six tests here leave
+    sdp_path as None -- which quietly dropped the file into the repository root
+    on every test run until it turned up in `git status`.
+    """
     monkeypatch.setattr(devkit.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.delenv(devkit.DEVKIT_ENV, raising=False)
+    monkeypatch.chdir(tmp_path)
 
 
 class Calls(list):
