@@ -19,6 +19,7 @@ from .sinks import Pipeline, SinkJob, SinkWorker
 
 HEARTBEAT_EVERY = 50
 
+
 class Stopper:
     """Cooperative stop flag driven by SIGINT, SIGTERM and SIGHUP.
 
@@ -142,13 +143,29 @@ class SourceTiming:
     """
 
     def __init__(self) -> None:
+        self.pulled = 0
         self.frames = 0
         self.out_of_order = 0
         self.first_ns = -1
         self.last_ns = -1
         self.previous_ns = -1
+        self.first_id = -1
+        self.last_id = -1
 
     def add(self, stamp: FrameStamp) -> None:
+        self.pulled += 1
+
+        # Frame ids, when the source sets them, catch the failure timestamps
+        # cannot: frames that never arrived. Ids running 1, 3, 5 mean half the
+        # clip was dropped somewhere below this app, and a recording written
+        # from what did arrive holds every other frame -- so it is half as long
+        # as the clip and plays twice as fast, which is not a rate problem and
+        # no rate setting fixes it.
+        if stamp.frame_id >= 0:
+            if self.first_id < 0:
+                self.first_id = stamp.frame_id
+            self.last_id = max(self.last_id, stamp.frame_id)
+
         pts = stamp.pts_ns
         if pts < 0:                      # a source that stamps nothing
             return
@@ -159,6 +176,12 @@ class SourceTiming:
             self.out_of_order += 1
         self.previous_ns = pts
         self.last_ns = max(self.last_ns, pts)
+
+    def missing(self) -> int:
+        """Frames the ids say existed but that never reached the pull loop."""
+        if self.first_id < 0 or self.last_id <= self.first_id:
+            return 0
+        return max(0, (self.last_id - self.first_id + 1) - self.pulled)
 
     def fps(self) -> float:
         """Frame rate implied by the timestamps, or 0.0 when they cannot say."""
@@ -173,6 +196,49 @@ def timing_report(cfg, pipeline: Pipeline, timing: SourceTiming) -> list[str]:
     lines: list[str] = []
     if pipeline.writer is None or not pipeline.writer_frames:
         return lines
+
+    missing = timing.missing()
+    if missing:
+        span = timing.last_id - timing.first_id + 1
+        lines.append(
+            f"playback: the source numbered {span} frames but only {timing.pulled}"
+            f" arrived, so {missing} were dropped below this app.\n"
+            f"  The recording holds every frame it was given, so it covers"
+            f" {timing.pulled / span:.0%} of the clip and plays {span / timing.pulled:.2f}x"
+            " too fast.\n"
+            "  No frame rate setting fixes that: the frames are not there to slow down."
+        )
+
+    if timing.out_of_order:
+        lines.append(
+            f"playback: {timing.out_of_order} frame(s) arrived with a timestamp"
+            " earlier than the one before, so the source is handing over\n"
+            "  decode order, not presentation order. This clip has B-frames\n"
+            "  and nothing is reordering them. The recording is written in\n"
+            "  arrival order, so motion will jerk back and forth a frame at a time."
+        )
+
+    measured = timing.fps()
+    written = cfg.video_fps or pipeline.fps or 25
+    # 2% covers rounding an SPS rate like 24000/1001 to 24, which is right.
+    if measured and abs(measured - written) / written > 0.02:
+        lines.append(
+            f"playback: the recording is written at {written} fps but the frame"
+            f" timestamps say the source is {measured:.2f} fps, so it plays"
+            f" {written / measured:.2f}x too fast.\n"
+            f"  Re-run with --video-fps {round(measured)} to match the source."
+        )
+
+    # Never silently blind. With neither ids nor timestamps there is no way to
+    # tell a complete recording from one holding every other frame, and saying
+    # so beats saying nothing at all.
+    if not timing.frames and timing.first_id < 0:
+        lines.append(
+            "playback: the source set neither timestamps nor frame ids, so\n"
+            "  nothing here can confirm the recording runs at the right speed\n"
+            "  or holds every frame. Compare its length against the clip by hand."
+        )
+    return lines
 
     if timing.out_of_order:
         lines.append(

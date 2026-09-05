@@ -385,6 +385,73 @@ def test_the_rate_comes_from_the_timestamps_not_the_gaps():
     assert stamps(-1, -1).frames == 0
 
 
+def ids(*frame_ids):
+    """A SourceTiming fed frames carrying these ids and no timestamps."""
+    from sima_vision.runloop import SourceTiming
+
+    timing = SourceTiming()
+    for n in frame_ids:
+        timing.add(FrameStamp(frame_id=n))
+    return timing
+
+
+def test_frames_that_never_arrived_are_counted_from_their_ids():
+    """Timestamps cannot see this: a frame that was dropped has none."""
+    assert ids(0, 1, 2, 3).missing() == 0
+    assert ids(0, 2, 4, 6, 8).missing() == 4        # every other one
+    assert ids(0).missing() == 0                     # too little to say
+    assert ids().missing() == 0
+    # A source that numbers nothing cannot be checked this way.
+    from sima_vision.runloop import SourceTiming
+    blind = SourceTiming()
+    blind.add(FrameStamp(pts_ns=0))
+    assert blind.missing() == 0
+
+
+def test_a_recording_missing_half_the_clip_says_so_and_says_why_it_plays_fast():
+    """The failure a rate setting cannot fix, and kept being mistaken for one.
+
+    Handed every other frame, the app writes every frame it was given at the
+    source's own rate. The result is half as long as the clip and plays twice
+    as fast, and nothing about `--video-fps` helps: the frames are not there
+    to slow down.
+    """
+    cfg, pipeline = make(frames=4)
+    pipeline.fps, pipeline.writer_frames = 25, 171
+    lines = timing_report(cfg, pipeline, ids(*range(0, 341, 2)))
+
+    assert any("were dropped below this app" in line for line in lines)
+    joined = chr(10).join(lines)
+    assert "1.99x" in joined, "341 numbered against 171 arrived"
+    assert "50% of the clip" in joined
+    assert "not there to slow down" in joined
+
+
+def test_a_complete_run_is_not_accused_of_dropping_anything():
+    cfg, pipeline = make(frames=4)
+    pipeline.fps, pipeline.writer_frames = 25, 341
+    assert timing_report(cfg, pipeline, ids(*range(341))) == []
+
+
+def test_a_source_that_says_nothing_at_all_is_admitted_to(capsys):
+    """Silence used to mean "fine". It meant "no idea", which is not the same.
+
+    With neither ids nor timestamps there is no way to tell a complete
+    recording from one holding every other frame, and a report that stays
+    quiet reads as a clean bill of health.
+    """
+    from sima_vision.runloop import SourceTiming
+
+    cfg, pipeline = make(frames=4)
+    pipeline.fps, pipeline.writer_frames = 25, 100
+    blind = SourceTiming()
+    for _ in range(100):
+        blind.add(FrameStamp())              # pts_ns -1, frame_id -1
+
+    lines = timing_report(cfg, pipeline, blind)
+    assert any("neither timestamps nor frame ids" in line for line in lines)
+
+
 def test_a_recording_written_at_the_wrong_rate_says_so_and_says_what_to_use():
     """Written at one rate, sourced at another: the whole clip plays wrong.
 
