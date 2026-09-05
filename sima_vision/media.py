@@ -10,12 +10,13 @@ timeout. The bytes on disk are authoritative, so this module reads them.
 from __future__ import annotations
 
 import subprocess
+from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 
-from . import runtime
+from . import mp4, runtime
 from .bootstrap import NEAT_INSTALL, NEAT_VERSION
-from .console import console
+from .console import console, human_bytes
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Probing
@@ -371,6 +372,64 @@ ELEMENTARY_H264_SUFFIXES = {".h264", ".264", ".bin", ".avc"}
 
 def is_elementary_h264(path: str) -> bool:
     return Path(path).suffix.lower() in ELEMENTARY_H264_SUFFIXES
+
+
+def annex_b_path(source: Path) -> Path:
+    """Where a remuxed container is cached: beside it, and obviously derived."""
+    return source.with_name(f"{source.stem}-annexb.h264")
+
+
+def needs_remux(path: Path) -> bool:
+    """Whether this file is a container that has to be reframed first.
+
+    Decided on content as well as on suffix. An MP4 renamed to ``.h264`` used
+    to be a hard error telling you to go and run ffmpeg; it is the same bytes
+    as any other MP4, so it can simply be remuxed like one.
+    """
+    if not path.is_file():
+        return False                      # check_source_file has better words
+    if mp4.is_container(str(path)):
+        return True
+    with path.open("rb") as handle:
+        return mp4.looks_like_mp4(handle.read(12))
+
+
+def ensure_annex_b(cfg, step=None):
+    """Reframe a container source into a raw stream, and point cfg at it.
+
+    Neat 0.3.0 cannot build a container source at all -- see
+    :func:`make_elementary_h264_source` for the demuxer naming bug -- so the
+    app used to stop and ask for ``ffmpeg``, on a board that does not have it.
+    The container holds the same H.264 the raw path already runs, so reframing
+    it here costs one pass over the file and no quality at all.
+
+    The result is cached beside the source and reused while it is newer, so
+    the cost lands on the first run only.
+
+    Args:
+        cfg: Application configuration.
+        step: Console step to report on, or None to stay quiet.
+
+    Returns:
+        ``cfg``, or a copy of it pointing at the remuxed stream.
+    """
+    if cfg.source_type != "video" or not needs_remux(Path(cfg.source_uri)):
+        return cfg
+
+    source = Path(cfg.source_uri)
+    out = annex_b_path(source)
+    fresh = out.is_file() and out.stat().st_mtime >= source.stat().st_mtime
+    if fresh:
+        if step is not None:
+            step.detail(f"have  {out.name}  (remuxed from {source.name} earlier)")
+    else:
+        frames = mp4.remux(source, out)
+        if step is not None:
+            step.detail(
+                f"remuxed {source.name} -> {out.name}  "
+                f"({frames} frames, {human_bytes(out.stat().st_size)})"
+            )
+    return replace(cfg, source_uri=str(out))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -7,6 +7,8 @@ need no board.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from sima_vision.media import (
@@ -220,3 +222,100 @@ def test_every_source_kind_has_requirements_listed():
     from sima_vision.media import SOURCE_REQUIREMENTS
 
     assert set(SOURCE_REQUIREMENTS) == {"h264", "container", "rtsp", "usb"}
+
+
+# ── containers, reframed rather than refused ──
+
+
+def detect_cfg(**settings):
+    return TASKS["detect"]().load(
+        None, {"model.path": "m.tar.gz", **settings}, use_file=False
+    )
+
+
+def write_mp4(path, frames=None):
+    """A real little MP4 on disk, built by the mp4 tests' own fixture."""
+    from test_mp4 import build_mp4
+
+    frames = frames or [[bytes([0x65]) + b"idr"], [bytes([0x41]) + b"inter"]]
+    path.write_bytes(build_mp4(frames))
+    return path
+
+
+def test_an_mp4_source_is_reframed_and_the_config_points_at_the_result(tmp_path):
+    """Neat 0.3.0 cannot demux, so the app stopped and asked for ffmpeg.
+
+    A DevKit has no ffmpeg, which made "use your own footage" mean "go and find
+    another machine first". The container holds the same H.264 the raw path
+    already runs, so it is reframed here instead.
+    """
+    from sima_vision.media import ensure_annex_b
+
+    clip = write_mp4(tmp_path / "clip.mp4")
+    cfg = ensure_annex_b(detect_cfg(**{"source.uri": str(clip)}))
+
+    out = tmp_path / "clip-annexb.h264"
+    assert cfg.source_uri == str(out)
+    assert out.read_bytes().startswith(b"\x00\x00\x00\x01")
+    # And the result is something the raw path will take.
+    from sima_vision.media import is_elementary_h264
+    assert is_elementary_h264(cfg.source_uri)
+
+
+def test_a_raw_stream_is_left_exactly_as_it_was(tmp_path):
+    from sima_vision.media import ensure_annex_b
+
+    clip = tmp_path / "clip.h264"
+    clip.write_bytes(bytes([0, 0, 0, 1, 0x67, 0x42]))
+    cfg = detect_cfg(**{"source.uri": str(clip)})
+    assert ensure_annex_b(cfg) is cfg
+    assert not (tmp_path / "clip-annexb.h264").exists()
+
+
+def test_an_mp4_renamed_to_h264_is_reframed_instead_of_rejected(tmp_path):
+    """This used to be a hard error telling you to go and run ffmpeg.
+
+    It is the same bytes as any other MP4, so the suffix is not worth failing
+    over. Detected on content, which is how the old error spotted it too.
+    """
+    from sima_vision.media import ensure_annex_b
+
+    clip = write_mp4(tmp_path / "clip.h264")
+    cfg = ensure_annex_b(detect_cfg(**{"source.uri": str(clip)}))
+
+    assert cfg.source_uri == str(tmp_path / "clip-annexb.h264")
+    assert Path(cfg.source_uri).read_bytes().startswith(b"\x00\x00\x00\x01")
+
+
+def test_the_reframed_copy_is_reused_rather_than_rebuilt(tmp_path):
+    """One pass over the file, on the first run only."""
+    from sima_vision.media import ensure_annex_b
+
+    clip = write_mp4(tmp_path / "clip.mp4")
+    first = ensure_annex_b(detect_cfg(**{"source.uri": str(clip)}))
+    out = Path(first.source_uri)
+    out.write_bytes(b"\x00\x00\x00\x01sentinel")   # would be overwritten if rebuilt
+
+    second = ensure_annex_b(detect_cfg(**{"source.uri": str(clip)}))
+    assert second.source_uri == first.source_uri
+    assert out.read_bytes() == b"\x00\x00\x00\x01sentinel"
+
+
+def test_a_stale_copy_is_rebuilt_when_the_source_moves_on(tmp_path):
+    from sima_vision.media import ensure_annex_b
+
+    clip = write_mp4(tmp_path / "clip.mp4")
+    out = tmp_path / "clip-annexb.h264"
+    out.write_bytes(b"old")
+    import os
+    os.utime(out, (0, 0))                          # older than the source
+
+    ensure_annex_b(detect_cfg(**{"source.uri": str(clip)}))
+    assert out.read_bytes().startswith(b"\x00\x00\x00\x01")
+
+
+def test_a_camera_is_never_mistaken_for_a_file(tmp_path):
+    from sima_vision.media import ensure_annex_b
+
+    cfg = detect_cfg(**{"source.type": "usb", "source.uri": "/dev/video0"})
+    assert ensure_annex_b(cfg) is cfg

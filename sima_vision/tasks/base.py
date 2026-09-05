@@ -18,6 +18,7 @@ from ..console import console, human_bytes
 from ..media import (
     check_source_file,
     check_source_support,
+    ensure_annex_b,
     resolve_source_geometry,
     source_frame_count,
 )
@@ -282,6 +283,11 @@ class Task:
         """
         with console.step("assets", "model archive and video source") as step:
             cfg = ensure_assets(cfg, self.name, step)
+            # After the fetch, because the file has to exist to be reframed,
+            # and before build(), because everything downstream -- the SPS
+            # probe, the picture count, the source graph -- is written against
+            # a raw stream.
+            cfg = ensure_annex_b(cfg, step)
             step.done("ready")
         try:
             pipeline = self.build(cfg)

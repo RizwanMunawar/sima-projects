@@ -52,6 +52,7 @@ EPILOG = """\
 examples:
   sima-vision detect                       the sample clip and model, fetched for you
   sima-vision detect  --source clip.h264 --model yolo26m-det.tar.gz
+  sima-vision detect  --source clip.mp4                    reframed for you, once
   sima-vision detect  --source https://example.com/clip.h264
   sima-vision segment --blur --keep-classes person
   sima-vision fall    --source rtsp://cam/live --alert-to ops@example.com

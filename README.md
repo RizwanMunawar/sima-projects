@@ -102,14 +102,20 @@ sima-vision push my-clip.h264      # host -> DevKit
 ```
 
 ## Use your own footage
-A path or an `https` URL. It must be raw H.264, never `.mp4`: the board decodes H.264 in
-hardware, and a container hits a demuxer bug in Neat 0.3.0. Convert once, losslessly:
+A path or an `https` URL. Raw H.264 and `.mp4` both work:
 
 ```bash
-ffmpeg -i clip.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 clip.h264
-sima-vision push clip.h264
-sima-vision detect --source clip.h264
+sima-vision push my-clip.mp4
+sima-vision detect --source my-clip.mp4
 ```
+
+The board decodes H.264 in hardware, and a container hits a demuxer bug in Neat 0.3.0, so
+an `.mp4` is reframed into a raw stream on the first run and the result cached beside it.
+That is a remux, not a re-encode: every coded bit survives, and a 13 MB clip takes about a
+second. No `ffmpeg` needed, which matters because the DevKit has none.
+
+H.264 video only, in either case. A fragmented `.mp4`, or one holding something other than
+H.264, is refused by name rather than failing halfway through a run.
 
 ## Flags worth knowing
 
